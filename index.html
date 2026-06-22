@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WealthLens — Portfolio Health</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --navy:#0e1b2c; --navy2:#142539; --panel:#172c44; --line:#24405e;
+    --ink:#eaf1f8; --muted:#9fb3c8; --gold:#c9a227; --gold2:#e3c25a;
+    --good:#3fb98c; --watch:#e0a93b; --risk:#e0584e;
+    --equity:#4f86c6; --bond:#5bb7a8; --fund:#c9a227; --note:#c97b3a;
+    --deriv:#9b6fc4; --cash:#7f93a6; --alt:#e07b66;
+    --radius:14px; --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:radial-gradient(1200px 600px at 70% -10%, #1b3350 0%, var(--navy) 55%) fixed;
+    color:var(--ink); font-family:"Segoe UI",Inter,system-ui,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased; min-height:100vh;
+  }
+  a{color:var(--gold2)}
+  .wrap{max-width:1240px;margin:0 auto;padding:22px 22px 80px}
+  header.top{display:flex;align-items:center;gap:16px;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:13px}
+  .logo{width:42px;height:42px;border-radius:11px;background:linear-gradient(145deg,var(--gold),#9c7d18);
+    display:flex;align-items:center;justify-content:center;font-weight:800;color:#1a1405;font-size:20px;box-shadow:var(--shadow)}
+  .brand h1{font-size:20px;margin:0;letter-spacing:.3px}
+  .brand .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .ctrls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .seg{display:inline-flex;background:var(--navy2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{background:transparent;border:0;color:var(--muted);padding:8px 13px;cursor:pointer;font-size:13px;font-weight:600}
+  .seg button.on{background:var(--gold);color:#1a1405}
+  .btn{background:var(--gold);color:#1a1405;border:0;border-radius:10px;padding:9px 15px;font-weight:700;cursor:pointer;font-size:13px}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .btn.ghost:hover{border-color:var(--gold)}
+  .btn:disabled{opacity:.45;cursor:default}
+
+  /* landing */
+  .hero{background:linear-gradient(180deg,var(--panel),var(--navy2));border:1px solid var(--line);
+    border-radius:var(--radius);padding:30px;box-shadow:var(--shadow)}
+  .hero h2{margin:0 0 8px;font-size:23px}
+  .hero p{color:var(--muted);margin:0 0 22px;max-width:760px;line-height:1.55}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .src{background:var(--navy);border:1px solid var(--line);border-radius:12px;padding:18px;cursor:pointer;transition:.15s;position:relative}
+  .src:hover{border-color:var(--gold);transform:translateY(-2px)}
+  .src .ic{font-size:24px;margin-bottom:9px}
+  .src h3{margin:0 0 6px;font-size:15px}
+  .src p{font-size:12.5px;color:var(--muted);margin:0;line-height:1.45}
+  .src .tag{position:absolute;top:12px;right:12px;font-size:10px;color:var(--gold2);border:1px solid var(--line);border-radius:20px;padding:2px 8px}
+
+  /* tabs */
+  nav.tabs{display:flex;gap:6px;margin:4px 0 18px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:0}
+  nav.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--muted);
+    padding:11px 15px;cursor:pointer;font-size:13.5px;font-weight:600}
+  nav.tabs button.on{color:var(--ink);border-bottom-color:var(--gold)}
+  nav.tabs button:hover{color:var(--ink)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card .k{color:var(--muted);font-size:12px;letter-spacing:.3px;text-transform:uppercase}
+  .card .v{font-size:26px;font-weight:800;margin-top:6px}
+  .card .v small{font-size:14px;font-weight:600;color:var(--muted)}
+  .card .d{font-size:12px;margin-top:5px;color:var(--muted)}
+
+  .row{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+  @media(max-width:900px){.row{grid-template-columns:1fr}.grid4{grid-template-columns:repeat(2,1fr)}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  .panel h3{margin:0 0 14px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .panel h3 .hint{font-size:11.5px;color:var(--muted);font-weight:500}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;cursor:pointer;user-select:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tbody tr:hover{background:rgba(255,255,255,.025)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}
+  .flag{color:var(--risk);font-weight:700}
+  .legend{display:flex;flex-direction:column;gap:8px}
+  .legend .li{display:flex;align-items:center;justify-content:space-between;font-size:13px}
+  .legend .li .lbl{display:flex;align-items:center;gap:0}
+  .bar{height:9px;border-radius:6px;background:var(--navy);overflow:hidden;margin-top:4px}
+  .bar > i{display:block;height:100%}
+
+  .gauge-wrap{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .score-sub{display:grid;grid-template-columns:1fr;gap:11px;flex:1;min-width:260px}
+  .ssub{}
+  .ssub .top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px}
+  .ssub .top b{font-weight:700}
+
+  .reso{display:flex;gap:13px;padding:14px;border:1px solid var(--line);border-radius:11px;margin-bottom:11px;background:var(--navy)}
+  .reso .lv{width:5px;border-radius:5px;flex:0 0 5px}
+  .reso h4{margin:0 0 5px;font-size:14px}
+  .reso p{margin:0;font-size:13px;color:var(--muted);line-height:1.5}
+  .reso .impact{margin-top:7px;font-size:12px;color:var(--gold2);font-weight:600}
+  .lvtag{font-size:10.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:6px;align-self:flex-start}
+
+  .manual input,.manual select{background:var(--navy);border:1px solid var(--line);color:var(--ink);
+    border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+  .manual label{font-size:11.5px;color:var(--muted);display:block;margin-bottom:4px}
+  .mg{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end}
+  @media(max-width:900px){.mg{grid-template-columns:repeat(2,1fr)}}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .chip{background:var(--navy);border:1px solid var(--line);color:var(--muted);padding:6px 12px;border-radius:20px;font-size:12px;cursor:pointer}
+  .chip.on{background:var(--gold);color:#1a1405;border-color:var(--gold);font-weight:700}
+  .muted{color:var(--muted)}
+  .note-meta{font-size:12px;color:var(--muted);line-height:1.7}
+  .note-meta b{color:var(--ink)}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .src-indicator{font-size:12.5px;color:var(--muted)}
+  .src-indicator b{color:var(--gold2)}
+  .footnote{font-size:11.5px;color:var(--muted);margin-top:10px;line-height:1.5}
+  .empty{color:var(--muted);text-align:center;padding:30px;font-size:14px}
+  .kbar{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+  .err{color:var(--risk);font-size:12.5px;margin-top:8px}
+  #settingsPanel input{background:var(--navy);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+  #settingsPanel label{font-size:11.5px;color:var(--muted);display:block;margin-bottom:4px}
+  .cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.cfg-grid{grid-template-columns:1fr}}
+  #gearBtn{font-size:15px;line-height:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">W</div>
+      <div>
+        <h1>WealthLens</h1>
+        <div class="sub" id="tagline"></div>
+      </div>
+    </div>
+    <div class="ctrls">
+      <div class="seg" id="curSeg"></div>
+      <div class="seg" id="langSeg">
+        <button data-lang="ru">RU</button>
+        <button data-lang="en">EN</button>
+      </div>
+      <button class="btn ghost" id="gearBtn" title="API / data">⚙︎</button>
+      <button class="btn ghost" id="resetBtn" style="display:none"></button>
+    </div>
+  </header>
+  <main id="app"></main>
+</div>
+
+<script>
+/* ============================================================
+   WealthLens — Portfolio Health Check (prototype)
+   Single-file, no build step. RU/EN. Demo / CSV / XLSX / PDF / Manual.
+   ============================================================ */
+
+const FX_EMBED = { USD:1, EUR:1.08, CHF:1.12, GBP:1.27, JPY:0.0064 }; // USD per 1 unit (embedded fallback)
+const FX_DATE_EMBED = "2026-06-01";
+let FX = Object.assign({}, FX_EMBED); // mutated by live refresh (refreshFX)
+const TODAY = new Date(2026, 5, 22); // 2026-06-22
+const BENCH = 0.20; // low-cost indexed benchmark, % p.a.
+
+/* ---------- i18n ---------- */
+const I18N = {
+  ru:{
+    tagline:"Анализ и health-check клиентского портфеля для family office",
+    base:"База", lang:"Язык",
+    heroTitle:"Единый рентген портфеля клиента",
+    heroDesc:"Сведите портфели из разных брокеров в одну картину. Разберём каждый инструмент — структурные ноты, деривативы, фонды, облигации, — посчитаем все комиссии и зашитые издержки и выдадим резолюцию по «здоровью» портфеля с конкретными рекомендациями.",
+    srcDemoT:"Демо-портфель", srcDemoD:"Готовый портфель ≈ $21 млн: 4 брокера, ноты, деривативы, фонды, альтернативы.", srcDemoTag:"быстрый старт",
+    srcFileT:"Загрузить файл", srcFileD:"CSV или Excel-выгрузка позиций из брокера. Авто-распознавание колонок.", srcFileTag:"CSV / XLSX",
+    srcPdfT:"PDF-выписка", srcPdfD:"Извлечение позиций из PDF-выписки брокера (эвристически).", srcPdfTag:"PDF",
+    srcManT:"Ручной ввод", srcManD:"Добавьте позиции вручную — удобно для нот и внебиржевых деривативов.", srcManTag:"вручную",
+    template:"Скачать шаблон CSV",
+    tOverview:"Обзор", tHoldings:"Инструменты", tStruct:"Ноты и деривативы", tFees:"Комиссии", tHealth:"Здоровье",
+    kAum:"Активы под анализом", kBrokers:"Брокеров", kPositions:"Позиций", kFee:"Совокупная комиссия", kDrag:"Fee-drag в год", kScore:"Health Score",
+    perYear:"в год", ofAum:"от активов",
+    allocClass:"Распределение по классам активов", byBroker:"По брокерам", byCcy:"Валютная экспозиция", topHold:"Крупнейшие позиции",
+    instrument:"Инструмент", cls:"Класс", broker:"Брокер", ccy:"Вал.", value:"Стоимость", weight:"Доля", feeY:"Комис./год", flags:"Флаги",
+    filterAll:"Все",
+    structTitle:"Структурные ноты", derivTitle:"Деривативы", noNotes:"Структурных нот не обнаружено.", noDeriv:"Деривативов не обнаружено.",
+    underlying:"Базовый актив", coupon:"Купон", barrier:"Барьер", barrierDist:"До барьера", maturity:"Погашение", capProt:"Защита капитала", embedded:"Зашитая стоимость",
+    notional:"Ном. номинал", type:"Тип", expiry:"Экспирация", delta:"Дельта", premium:"Премия", daysLeft:"дн.",
+    feesTitle:"Структура издержек", feeComp:"Компоненты комиссии (в год)", advisory:"Консультационная", custody:"Кастоди", product:"Продукт (TER/упр.)", entryAmort:"Входная (аморт.)",
+    feeVsBench:"Стоимость vs индексный бенчмарк", yourPort:"Ваш портфель", benchPort:"Индексный бенчмарк",
+    mostExp:"Самые дорогие продукты", proj:"Накопленные издержки за 10 лет", projNote:"Простая оценка: годовые издержки × 10 лет, без эффекта сложного процента на упущенную доходность.",
+    healthTitle:"Health Score портфеля", resos:"Резолюции и рекомендации", breakdown:"Из чего складывается оценка",
+    cDiversification:"Диверсификация", cCost:"Эффективность по издержкам", cCurrency:"Валютная согласованность", cLiquidity:"Ликвидность", cQuality:"Качество продуктов", cCash:"Кэш-менеджмент",
+    ratingGood:"Хорошо", ratingWatch:"Внимание", ratingRisk:"Риск",
+    impact:"Эффект", reset:"Сменить данные", source:"Источник данных", loaded:"Загружено позиций",
+    addPos:"Добавить позицию", analyze:"Анализировать", clearAll:"Очистить", needRows:"Добавьте хотя бы одну позицию.",
+    fBroker:"Брокер", fName:"Название", fClass:"Класс актива", fCcy:"Валюта", fValue:"Стоимость", fFee:"Комис. продукта %",
+    selClass:"— класс —",
+    clsEquity:"Акции", clsBond:"Облигации", clsFund:"Фонды/ETF", clsNote:"Структ. ноты", clsDeriv:"Деривативы", clsCash:"Кэш", clsAlt:"Альтернативы",
+    fileErr:"Не удалось распознать файл. Проверьте формат или используйте шаблон CSV.",
+    pdfHeur:"PDF разбирается эвристически: проверьте корректность распознанных позиций перед выводами.",
+    illiquidShare:"Неликвидная часть", techConc:"Концентрация в секторе",
+    none:"Серьёзных замечаний по этому блоку нет.",
+    weightLbl:"вес",
+    cfgTitle:"Источники данных и API",
+    cfgBackend:"URL бэкенда (Bloomberg)", cfgBackendHint:"Если задан — FX и цены берутся с вашего сервера (Bloomberg). Эндпоинты: GET /fx?base=USD и /quote?symbols=…",
+    cfgFinnhub:"Finnhub API-ключ (цены)", cfgFinnhubHint:"Ваш ключ для котировок акций/ETF. Хранится только в этом браузере и шлётся напрямую в Finnhub (без ключа цены остаются вшитыми).",
+    cfgSave:"Сохранить", cfgPrices:"Цены", cfgClear:"Очистить ключ",
+    cfgSec:"Ключ лежит в localStorage этого браузера — без конфиденциальности, не используйте на чужом ПК. В продакшне ключи Bloomberg держатся на сервере и в браузер не попадают.",
+    cfgSaved:"Сохранено", refreshing:"Обновляю…",
+    bLive:"Live", bStale:"устар.", bOff:"офлайн", fxLbl:"FX", pricesLbl:"Цены", asof:"на"
+  },
+  en:{
+    tagline:"Client portfolio analysis & health-check for family offices",
+    base:"Base", lang:"Lang",
+    heroTitle:"A single X-ray of the client's portfolio",
+    heroDesc:"Consolidate portfolios held across different brokers into one view. We break down every instrument — structured notes, derivatives, funds, bonds — compute all explicit and embedded costs, and issue a portfolio health resolution with concrete recommendations.",
+    srcDemoT:"Demo portfolio", srcDemoD:"Ready ≈ $21M portfolio: 4 brokers, notes, derivatives, funds, alternatives.", srcDemoTag:"quick start",
+    srcFileT:"Upload file", srcFileD:"CSV or Excel position export from a broker. Auto column mapping.", srcFileTag:"CSV / XLSX",
+    srcPdfT:"PDF statement", srcPdfD:"Extract positions from a broker PDF statement (heuristic).", srcPdfTag:"PDF",
+    srcManT:"Manual entry", srcManD:"Add positions by hand — handy for notes and OTC derivatives.", srcManTag:"manual",
+    template:"Download CSV template",
+    tOverview:"Overview", tHoldings:"Holdings", tStruct:"Notes & Derivatives", tFees:"Fees", tHealth:"Health",
+    kAum:"Assets analysed", kBrokers:"Brokers", kPositions:"Positions", kFee:"Blended fee", kDrag:"Annual fee drag", kScore:"Health Score",
+    perYear:"p.a.", ofAum:"of assets",
+    allocClass:"Asset-class allocation", byBroker:"By broker", byCcy:"Currency exposure", topHold:"Largest positions",
+    instrument:"Instrument", cls:"Class", broker:"Broker", ccy:"Ccy", value:"Value", weight:"Weight", feeY:"Fee p.a.", flags:"Flags",
+    filterAll:"All",
+    structTitle:"Structured notes", derivTitle:"Derivatives", noNotes:"No structured notes found.", noDeriv:"No derivatives found.",
+    underlying:"Underlying", coupon:"Coupon", barrier:"Barrier", barrierDist:"To barrier", maturity:"Maturity", capProt:"Capital protection", embedded:"Embedded cost",
+    notional:"Notional", type:"Type", expiry:"Expiry", delta:"Delta", premium:"Premium", daysLeft:"d",
+    feesTitle:"Cost structure", feeComp:"Fee components (annual)", advisory:"Advisory", custody:"Custody", product:"Product (TER/mgmt)", entryAmort:"Entry (amortised)",
+    feeVsBench:"Cost vs indexed benchmark", yourPort:"Your portfolio", benchPort:"Indexed benchmark",
+    mostExp:"Most expensive products", proj:"Cumulative 10-year cost", projNote:"Simple estimate: annual cost × 10 years, excluding compounding of forgone return.",
+    healthTitle:"Portfolio Health Score", resos:"Resolutions & recommendations", breakdown:"Score breakdown",
+    cDiversification:"Diversification", cCost:"Cost efficiency", cCurrency:"Currency alignment", cLiquidity:"Liquidity", cQuality:"Product quality", cCash:"Cash management",
+    ratingGood:"Good", ratingWatch:"Watch", ratingRisk:"Risk",
+    impact:"Impact", reset:"Change data", source:"Data source", loaded:"positions loaded",
+    addPos:"Add position", analyze:"Analyse", clearAll:"Clear", needRows:"Add at least one position.",
+    fBroker:"Broker", fName:"Name", fClass:"Asset class", fCcy:"Currency", fValue:"Value", fFee:"Product fee %",
+    selClass:"— class —",
+    clsEquity:"Equity", clsBond:"Bonds", clsFund:"Funds/ETF", clsNote:"Structured notes", clsDeriv:"Derivatives", clsCash:"Cash", clsAlt:"Alternatives",
+    fileErr:"Could not parse the file. Check the format or use the CSV template.",
+    pdfHeur:"PDF is parsed heuristically: verify the detected positions before drawing conclusions.",
+    illiquidShare:"Illiquid share", techConc:"Sector concentration",
+    none:"No material issues in this area.",
+    weightLbl:"weight",
+    cfgTitle:"Data sources & API",
+    cfgBackend:"Backend URL (Bloomberg)", cfgBackendHint:"If set — FX and prices come from your server (Bloomberg). Endpoints: GET /fx?base=USD and /quote?symbols=…",
+    cfgFinnhub:"Finnhub API key (prices)", cfgFinnhubHint:"Your key for stock/ETF quotes. Stored only in this browser and sent directly to Finnhub (without a key, prices stay embedded).",
+    cfgSave:"Save", cfgPrices:"Prices", cfgClear:"Clear key",
+    cfgSec:"The key lives in this browser's localStorage — no confidentiality, don't use on a shared PC. In production, Bloomberg credentials stay on the server and never reach the browser.",
+    cfgSaved:"Saved", refreshing:"Refreshing…",
+    bLive:"Live", bStale:"stale", bOff:"offline", fxLbl:"FX", pricesLbl:"Prices", asof:"as of"
+  }
+};
+
+/* ---------- asset-class meta ---------- */
+const CLASSES = {
+  equity:{c:"var(--equity)", k:"clsEquity"},
+  bond:{c:"var(--bond)", k:"clsBond"},
+  fund_etf:{c:"var(--fund)", k:"clsFund"},
+  structured_note:{c:"var(--note)", k:"clsNote"},
+  derivative:{c:"var(--deriv)", k:"clsDeriv"},
+  cash:{c:"var(--cash)", k:"clsCash"},
+  alternative:{c:"var(--alt)", k:"clsAlt"}
+};
+const ILLIQUID = new Set(["structured_note","alternative"]);
+
+/* ---------- broker fee profiles (advisory + custody, % p.a.) ---------- */
+const BROKERS = {
+  "UBS":{advisory:0.90, custody:0.25},
+  "Julius Baer":{advisory:1.10, custody:0.30},
+  "Interactive Brokers":{advisory:0.00, custody:0.00},
+  "Pictet":{advisory:0.95, custody:0.28}
+};
+function brokerFees(b){ return BROKERS[b] || {advisory:0.50, custody:0.20}; }
+
+/* ---------- DEMO PORTFOLIO ---------- */
+const DEMO = [
+  // broker, name, cls, ccy, value(in ccy), feeProduct%, sector, extra{...}
+  P("UBS","Apple Inc.","equity","USD",1260000,0,"US Tech",{ticker:"AAPL",qty:6000}),
+  P("UBS","Nestlé SA","equity","CHF",828000,0,"Cons. Staples"),
+  P("UBS","Microsoft Corp.","equity","USD",1075000,0,"US Tech",{ticker:"MSFT",qty:2500}),
+  P("UBS","UBS Strategy Balanced Fund","fund_etf","CHF",1500000,1.45,"Multi-asset"),
+  P("UBS","Phoenix Autocall EuroStoxx 50","structured_note","EUR",1200000,0.60,"Structured",
+    {underlying:"EuroStoxx 50",coupon:7.5,barrier:60,barrierDist:18,capProt:0,maturity:"2027-09-15",entry:2.0,tenorYears:3}),
+
+  P("Julius Baer","Autocall Note S&P 500","structured_note","USD",1000000,0.70,"Structured",
+    {underlying:"S&P 500",coupon:8.2,barrier:65,barrierDist:11,capProt:0,maturity:"2026-12-20",entry:2.5,tenorYears:2}),
+  P("Julius Baer","Roche Holding 1.8% 2029","bond","CHF",700000,0,"Corp. bond",{coupon:1.8}),
+  P("Julius Baer","SPDR Gold Shares (GLD)","fund_etf","USD",600000,0.40,"Commodity",{ticker:"GLD",qty:2727}),
+  P("Julius Baer","JB Multi-Strategy Hedge Fund","alternative","USD",1500000,2.00,"Hedge fund",{perf:20,liquidity:"quarterly"}),
+  P("Julius Baer","Tesla Inc.","equity","USD",800000,0,"US Tech",{ticker:"TSLA",qty:3200}),
+
+  P("Interactive Brokers","NVIDIA Corp.","equity","USD",1400000,0,"US Tech",{ticker:"NVDA",qty:10000}),
+  P("Interactive Brokers","iShares Core S&P 500 (CSPX)","fund_etf","USD",2000000,0.07,"US Equity"),
+  P("Interactive Brokers","SPX Protective Puts","derivative","USD",120000,0,"Hedge",
+    {dtype:"Put option",notional:3000000,delta:-0.35,expiry:"2026-09-19"}),
+  P("Interactive Brokers","Cash USD","cash","USD",1800000,0,"Cash"),
+  P("Interactive Brokers","Cash EUR","cash","EUR",300000,0,"Cash"),
+
+  P("Pictet","Pictet Emerging Markets Equity","fund_etf","USD",900000,1.60,"EM Equity"),
+  P("Pictet","German Bund 2.3% 2030","bond","EUR",1100000,0,"Govt bond",{coupon:2.3}),
+  P("Pictet","Pictet Private Equity 2021","alternative","USD",1300000,2.00,"Private equity",{liquidity:"locked"}),
+  P("Pictet","Pictet EUR Short-Term Govt","fund_etf","EUR",500000,0.15,"Govt bond"),
+  P("Pictet","Amazon.com Inc.","equity","USD",700000,0,"US Tech",{ticker:"AMZN",qty:3500})
+];
+function P(broker,name,cls,ccy,value,feeProduct,sector,extra){
+  return Object.assign({broker,name,cls,ccy,value:+value,feeProduct:+feeProduct||0,sector:sector||""}, extra||{});
+}
+
+/* ---------- state ---------- */
+let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false };
+const t = k => (I18N[STATE.lang][k] ?? k);
+const $ = (s,r=document)=>r.querySelector(s);
+
+/* ---------- helpers ---------- */
+const toBase = p => p.value * (FX[p.ccy]||1) / (FX[STATE.base]||1);
+function fmtMoney(v){
+  const sym = {USD:"$",EUR:"€",CHF:"CHF ",GBP:"£",JPY:"¥"}[STATE.base]||"";
+  const a=Math.abs(v); let s;
+  if(a>=1e6) s=(v/1e6).toFixed(2)+"M";
+  else if(a>=1e3) s=(v/1e3).toFixed(1)+"k";
+  else s=v.toFixed(0);
+  return sym+s;
+}
+function fmtFull(v){
+  const sym = {USD:"$",EUR:"€",CHF:"CHF ",GBP:"£",JPY:"¥"}[STATE.base]||"";
+  return sym+Math.round(v).toLocaleString(STATE.lang==="ru"?"ru-RU":"en-US");
+}
+const pct = (v,d=1)=> v.toFixed(d)+"%";
+const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+function parseDate(s){ if(!s) return null; const d=new Date(s); return isNaN(d)?null:d; }
+
+/* ============================================================
+   ANALYSIS ENGINE
+   ============================================================ */
+function analyze(positions){
+  const rows = positions.map(p=>{
+    const bf = brokerFees(p.broker);
+    const baseValue = toBase(p);
+    const isCash = p.cls==="cash";
+    let entryAmort = 0;
+    if(p.cls==="structured_note" && p.entry){ entryAmort = p.entry/(p.tenorYears||3); }
+    const advisory = isCash ? 0 : bf.advisory;
+    const custody = bf.custody;
+    const product = p.feeProduct||0;
+    const feePct = advisory + custody + product + entryAmort;     // % p.a.
+    const feeAbs = baseValue * feePct/100;
+    return Object.assign({}, p, {baseValue, advisory, custody, product, entryAmort, feePct, feeAbs, isCash});
+  });
+
+  const aum = rows.reduce((s,r)=>s+r.baseValue,0);
+  rows.forEach(r=> r.weight = aum? r.baseValue/aum*100 : 0);
+
+  // group helpers
+  const groupSum = key => {
+    const m={}; rows.forEach(r=>{ const k=r[key]; m[k]=(m[k]||0)+r.baseValue; }); return m;
+  };
+  const byClass = groupSum("cls");
+  const byBroker = groupSum("broker");
+  const byCcy = groupSum("ccy");
+  const bySector = groupSum("sector");
+
+  // fees
+  const feeAbs = rows.reduce((s,r)=>s+r.feeAbs,0);
+  const blendedFee = aum? feeAbs/aum*100 : 0;
+  const dragPct = Math.max(0, blendedFee - BENCH);
+  const dragAbs = aum*dragPct/100;
+  const feeComponents = {
+    advisory: rows.reduce((s,r)=>s+r.baseValue*r.advisory/100,0),
+    custody:  rows.reduce((s,r)=>s+r.baseValue*r.custody/100,0),
+    product:  rows.reduce((s,r)=>s+r.baseValue*r.product/100,0),
+    entryAmort: rows.reduce((s,r)=>s+r.baseValue*r.entryAmort/100,0)
+  };
+
+  // concentration
+  const sorted = [...rows].sort((a,b)=>b.baseValue-a.baseValue);
+  const top1 = sorted[0]? sorted[0].weight : 0;
+  const top5 = sorted.slice(0,5).reduce((s,r)=>s+r.weight,0);
+  const hhi = rows.reduce((s,r)=>s+Math.pow(r.weight,2),0); // 0..10000
+  const techShare = (bySector["US Tech"]||0)/aum*100;
+
+  // currency
+  const nonBase = Object.entries(byCcy).filter(([c])=>c!==STATE.base).map(([c,v])=>({c,pct:v/aum*100}));
+  const largestFx = nonBase.sort((a,b)=>b.pct-a.pct)[0] || {c:null,pct:0};
+
+  // liquidity
+  const illiquid = rows.filter(r=>ILLIQUID.has(r.cls)).reduce((s,r)=>s+r.baseValue,0);
+  const illiquidPct = aum? illiquid/aum*100 : 0;
+
+  // cash
+  const cashPct = (byClass["cash"]||0)/aum*100;
+
+  // structured & derivatives
+  const notes = rows.filter(r=>r.cls==="structured_note");
+  const derivs = rows.filter(r=>r.cls==="derivative");
+  const notionalAbs = derivs.reduce((s,r)=>{ const n=(r.notional||0)*(FX[r.ccy]||1)/(FX[STATE.base]||1); return s+n; },0);
+  const leverage = aum? notionalAbs/aum : 0;
+
+  /* ---------- sub-scores (0..100) ---------- */
+  const sub = {};
+  // Diversification: top1 & HHI
+  sub.diversification = clamp(100 - Math.max(0,(top1-8))*4 - Math.max(0,(hhi-700))*0.03 - Math.max(0,(techShare-20))*1.2);
+  // Cost: blended fee vs benchmark
+  sub.cost = clamp(100 - Math.max(0,(blendedFee-0.30))*55);
+  // Currency: largest non-base FX share
+  sub.currency = clamp(100 - Math.max(0,(largestFx.pct-15))*2.2);
+  // Liquidity
+  sub.liquidity = clamp(100 - Math.max(0,(illiquidPct-15))*2.6);
+  // Product quality: expensive products + risky notes + leverage
+  let pq = 100;
+  notes.forEach(n=>{ if((n.barrierDist??30)<20) pq-=12; if((n.entry/(n.tenorYears||3)+n.product)>1.2) pq-=6; });
+  rows.forEach(r=>{ if(r.product>=1.5) pq-=5; });
+  if(leverage>0.25) pq-= (leverage-0.25)*40;
+  sub.quality = clamp(pq);
+  // Cash management: ideal 2-8%
+  let cs=100; if(cashPct>8) cs-=(cashPct-8)*3.5; if(cashPct<2) cs-=(2-cashPct)*6; sub.cash=clamp(cs);
+
+  const W = {diversification:.25, cost:.25, currency:.10, liquidity:.15, quality:.15, cash:.10};
+  const score = Math.round(Object.keys(W).reduce((s,k)=>s+sub[k]*W[k],0));
+
+  return {
+    rows, sorted, aum, byClass, byBroker, byCcy, bySector,
+    feeAbs, blendedFee, dragPct, dragAbs, feeComponents,
+    top1, top5, hhi, techShare, largestFx, nonBase,
+    illiquid, illiquidPct, cashPct, notes, derivs, notionalAbs, leverage,
+    sub, score, W
+  };
+}
+function clamp(v){ return Math.max(0,Math.min(100,v)); }
+function rating(s){ return s>=75?"good": s>=55?"watch":"risk"; }
+function ratingLabel(s){ return t(s>=75?"ratingGood": s>=55?"ratingWatch":"ratingRisk"); }
+function ratingColor(s){ return s>=75?"var(--good)": s>=55?"var(--watch)":"var(--risk)"; }
+
+/* ---------- resolutions ---------- */
+function resolutions(a){
+  const R=[]; const L=STATE.lang;
+  const add=(level,title,body,impact)=>R.push({level,title,body,impact});
+
+  // concentration
+  if(a.top1>10){
+    const top=a.sorted[0];
+    add("high",
+      L==="ru"?"Высокая концентрация в одной позиции":"High single-position concentration",
+      L==="ru"?`«${top.name}» занимает ${pct(a.top1)} портфеля (комфортный порог ~10%). Рассмотрите частичную фиксацию или хедж.`
+              :`"${top.name}" is ${pct(a.top1)} of the portfolio (comfort threshold ~10%). Consider partial trimming or a hedge.`);
+  }
+  if(a.techShare>20){
+    add("high",
+      L==="ru"?"Секторальная концентрация: US Tech":"Sector concentration: US Tech",
+      L==="ru"?`${pct(a.techShare)} активов в технологическом секторе США (Apple, Microsoft, NVIDIA, Tesla, Amazon). Высокая корреляция позиций — диверсификация по секторам недостаточна.`
+              :`${pct(a.techShare)} of assets sit in US tech (Apple, Microsoft, NVIDIA, Tesla, Amazon). Highly correlated names — sector diversification is thin.`);
+  }
+  // fees
+  if(a.dragPct>0.3){
+    const mult=(a.blendedFee/BENCH).toFixed(1);
+    add(a.blendedFee>1.2?"high":"medium",
+      L==="ru"?"Высокая совокупная стоимость владения":"High total cost of ownership",
+      L==="ru"?`Совокупная комиссия ${pct(a.blendedFee,2)}/год — это ${mult}× от индексного бенчмарка (${pct(BENCH,2)}). Основные драйверы: консультационные сборы, активные фонды и альтернативы.`
+              :`Blended fee ${pct(a.blendedFee,2)} p.a. — ${mult}× the indexed benchmark (${pct(BENCH,2)}). Main drivers: advisory fees, active funds and alternatives.`,
+      L==="ru"?`Потенциальная экономия ≈ ${fmtFull(a.dragAbs)}/год при переходе части портфеля в индексные инструменты.`
+              :`Potential saving ≈ ${fmtFull(a.dragAbs)}/yr by indexing part of the portfolio.`);
+  }
+  // expensive products
+  const exp=a.rows.filter(r=>r.product>=1.5).sort((x,y)=>y.feeAbs-x.feeAbs);
+  exp.slice(0,2).forEach(r=>{
+    add("medium",
+      L==="ru"?`Дорогой продукт: ${r.name}`:`Expensive product: ${r.name}`,
+      L==="ru"?`${pct(r.product,2)}/год${r.perf?` + ${r.perf}% performance fee`:""} (≈ ${fmtFull(r.baseValue*r.product/100)}/год только по продукту). Оцените, оправдывает ли результат стоимость.`
+              :`${pct(r.product,2)} p.a.${r.perf?` + ${r.perf}% performance fee`:""} (≈ ${fmtFull(r.baseValue*r.product/100)}/yr in product fees alone). Assess whether performance justifies the cost.`);
+  });
+  // notes
+  a.notes.forEach(n=>{
+    if((n.barrierDist??30)<20){
+      add(n.barrierDist<13?"high":"medium",
+        L==="ru"?`Нота под риском барьера: ${n.name}`:`Barrier risk: ${n.name}`,
+        L==="ru"?`Базовый актив ${n.underlying} лишь в ${pct(n.barrierDist,0)} от защитного барьера (${n.barrier}%). При пробое барьера капитал-протекции нет — убыток повторяет падение базового актива.`
+                :`${n.underlying} is only ${pct(n.barrierDist,0)} above the protection barrier (${n.barrier}%). No capital protection if breached — losses track the underlying.`);
+    }
+    const emb=(n.entry||0)+ (n.tenorYears||3)*(n.product||0);
+    add("low",
+      L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
+      L==="ru"?`Входная комиссия ${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/год структурной маржи. Купон ${pct(n.coupon||0,1)} частично уходит на издержки эмитента/дистрибьютора.`
+              :`Entry fee ${pct(n.entry||0,1)} + ${pct(n.product||0,1)} p.a. structuring margin. Part of the ${pct(n.coupon||0,1)} coupon funds issuer/distributor costs.`);
+  });
+  // derivatives
+  if(a.leverage>0.10){
+    const lvHigh=a.leverage>0.25;
+    add(lvHigh?"medium":"low",
+      L==="ru"?"Контроль плеча по деривативам":"Derivative leverage check",
+      L==="ru"?`Совокупный условный номинал ≈ ${fmtFull(a.notionalAbs)} = ${a.leverage.toFixed(2)}× капитала. ${lvHigh?"Высокое плечо — нужен маржинальный контроль.":"Преимущественно защитные позиции — приемлемо."}`
+              :`Aggregate notional ≈ ${fmtFull(a.notionalAbs)} = ${a.leverage.toFixed(2)}× equity. ${lvHigh?"Elevated leverage — monitor margin.":"Mostly protective — acceptable."}`);
+  }
+  a.derivs.forEach(d=>{
+    const dt=parseDate(d.expiry); if(dt){ const dl=daysBetween(TODAY,dt); if(dl<120 && dl>=0)
+      add("low",
+        L==="ru"?`Скоро экспирация: ${d.name}`:`Expiring soon: ${d.name}`,
+        L==="ru"?`До экспирации ${dl} дн. — нужно решение: ролл, закрытие или замена хеджа.`
+                :`${dl} days to expiry — decide: roll, close or replace the hedge.`);
+    }
+  });
+  // currency
+  if(a.largestFx.pct>15){
+    add("medium",
+      L==="ru"?"Валютный перекос":"Currency mismatch",
+      L==="ru"?`${pct(a.largestFx.pct)} активов в ${a.largestFx.c} при базовой валюте ${STATE.base}. Несогласованность с базой — рассмотрите частичное хеджирование FX.`
+              :`${pct(a.largestFx.pct)} of assets in ${a.largestFx.c} against ${STATE.base} base. Consider partial FX hedging.`);
+  }
+  // liquidity
+  if(a.illiquidPct>15){
+    add(a.illiquidPct>30?"high":"medium",
+      L==="ru"?"Повышенная неликвидность":"Elevated illiquidity",
+      L==="ru"?`${pct(a.illiquidPct)} в структурных нотах и альтернативах (hedge/PE, частично с локап-периодом). Сверьте с потребностью клиента в ликвидности и обязательствами.`
+              :`${pct(a.illiquidPct)} in structured notes and alternatives (hedge/PE, partly locked-up). Reconcile with the client's liquidity needs and commitments.`);
+  }
+  // cash
+  if(a.cashPct>8){
+    add("medium",
+      L==="ru"?"Избыточный кэш":"Excess cash",
+      L==="ru"?`${pct(a.cashPct)} в денежных средствах (≈ ${fmtFull(a.byClass.cash||0)}). Денежный «drag» на доходность — рассмотрите размещение в money-market или короткие бонды.`
+              :`${pct(a.cashPct)} in cash (≈ ${fmtFull(a.byClass.cash||0)}). Cash drag on returns — consider money-market or short bonds.`);
+  } else if(a.cashPct<2){
+    add("low",
+      L==="ru"?"Низкий буфер ликвидности":"Thin liquidity buffer",
+      L==="ru"?`Кэш ${pct(a.cashPct)} — мало для покрытия неожиданных оттоков/маржи без вынужденных продаж.`
+              :`Cash at ${pct(a.cashPct)} — thin for covering unexpected outflows/margin without forced sales.`);
+  }
+
+  const order={high:0,medium:1,low:2};
+  return R.sort((x,y)=>order[x.level]-order[y.level]);
+}
+
+/* ============================================================
+   SVG widgets
+   ============================================================ */
+function donut(segments, size=190){
+  const total=segments.reduce((s,x)=>s+x.value,0)||1;
+  const r=size/2-14, cx=size/2, cy=size/2, C=2*Math.PI*r; let off=0;
+  const arcs=segments.map(s=>{
+    const frac=s.value/total, len=C*frac;
+    const el=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="22"
+      stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 ${cx} ${cy})"/>`;
+    off+=len; return el;
+  }).join("");
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    ${arcs}
+    <circle cx="${cx}" cy="${cy}" r="${r-13}" fill="var(--panel)"/>
+  </svg>`;
+}
+function gauge(score){
+  const size=170,r=70,cx=size/2,cy=size/2, C=Math.PI*r; // half circle
+  const frac=score/100, col=ratingColor(score);
+  return `<svg width="${size}" height="${size/2+26}" viewBox="0 0 ${size} ${size/2+26}">
+    <path d="M ${cx-r} ${cy} A ${r} ${r} 0 0 1 ${cx+r} ${cy}" fill="none" stroke="var(--navy)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M ${cx-r} ${cy} A ${r} ${r} 0 0 1 ${cx+r} ${cy}" fill="none" stroke="${col}" stroke-width="16" stroke-linecap="round"
+      stroke-dasharray="${C*frac} ${C}"/>
+    <text x="${cx}" y="${cy-6}" text-anchor="middle" font-size="38" font-weight="800" fill="var(--ink)">${score}</text>
+    <text x="${cx}" y="${cy+16}" text-anchor="middle" font-size="12" fill="var(--muted)">/ 100</text>
+  </svg>`;
+}
+
+/* ============================================================
+   LIVE DATA LAYER (FX + prices) — provider abstraction
+   Provider order: backend (Bloomberg) -> free APIs -> cache -> embedded.
+   Verified live 2026-06-22: Frankfurter must use the .dev host (the .app
+   redirect doubles /v1/ -> 404); Finnhub works from the browser ONLY via
+   the ?token= query param (the X-Finnhub-Token header fails CORS preflight).
+   ============================================================ */
+function loadCfg(){ let c={backendUrl:"",finnhubKey:""}; try{ Object.assign(c, JSON.parse(localStorage.getItem("wl_cfg")||"{}")); }catch(e){} return c; }
+function saveCfg(){ try{ localStorage.setItem("wl_cfg", JSON.stringify(DATA.cfg)); }catch(e){} }
+const DATA = {
+  cfg: loadCfg(),
+  fx:{status:"embedded", asOf:FX_DATE_EMBED, source:"embedded"},
+  prices:{status:"embedded", source:"embedded", updated:0, total:0}
+};
+// Effective backend: explicit config, else same-origin when served over http(s) (one-URL mode).
+function backendBase(){
+  if(DATA.cfg.backendUrl) return DATA.cfg.backendUrl.replace(/\/+$/,"");
+  if(location.protocol==="http:"||location.protocol==="https:") return location.origin;
+  return "";
+}
+async function fetchJSON(url, ms=7000){
+  const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(), ms);
+  try{ const r=await fetch(url,{signal:ctl.signal}); if(!r.ok) throw new Error("HTTP "+r.status); return await r.json(); }
+  finally{ clearTimeout(to); }
+}
+function applyFxRates(rates, date, source){
+  const f={USD:1};                                   // Frankfurter gives units-of-CODE per 1 USD; our FX is USD per 1 unit => invert
+  ["EUR","CHF","GBP","JPY"].forEach(s=>{ const v=+rates[s]; f[s]= v>0 ? 1/v : FX_EMBED[s]; });
+  FX=f; DATA.fx={status:"live", asOf:(date||"").toString().slice(0,10), source};
+}
+function cacheFx(){ try{ localStorage.setItem("wl_fx", JSON.stringify({fx:FX, meta:DATA.fx, ts:Date.now()})); }catch(e){} }
+function loadFxCache(){ try{ const c=JSON.parse(localStorage.getItem("wl_fx")||"null"); if(!c||!c.fx) return false;
+  FX=c.fx; DATA.fx=Object.assign({}, c.meta, {status:"stale"}); return true; }catch(e){ return false; } }
+
+async function refreshFX(){
+  const base=backendBase();
+  if(base){ try{ const j=await fetchJSON(base+"/fx?base=USD"); applyFxRates(j.rates||j, j.date, j.source?("backend · "+j.source):"backend"); cacheFx(); return; }catch(e){} }
+  try{ const j=await fetchJSON("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CHF,GBP,JPY"); applyFxRates(j.rates, j.date, "Frankfurter · ECB"); cacheFx(); return; }catch(e){}
+  try{ const j=await fetchJSON("https://open.er-api.com/v6/latest/USD"); if(j.result==="success"){ applyFxRates(j.rates, (j.time_last_update_utc||"").slice(0,16), "open.er-api"); cacheFx(); return; } }catch(e){}
+  try{ const j=await fetchJSON("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"); const u=j.usd||{}; applyFxRates({EUR:u.eur,CHF:u.chf,GBP:u.gbp,JPY:u.jpy}, j.date, "currency-api"); cacheFx(); return; }catch(e){}
+  if(!loadFxCache()){ FX=Object.assign({},FX_EMBED); DATA.fx={status:"embedded", asOf:FX_DATE_EMBED, source:"embedded"}; }
+}
+async function refreshPrices(){
+  if(!STATE.positions) return {updated:0,total:0};
+  const targets=STATE.positions.filter(p=>p.ticker && p.qty>0);
+  let updated=0; const base=backendBase();
+  if(base){
+    try{ const ids=targets.map(p=>p.ticker).join(",");
+      const j=await fetchJSON(base+"/quote?symbols="+encodeURIComponent(ids));
+      targets.forEach(p=>{ const raw=j[p.ticker]; const q=+(raw&&raw.price!=null?raw.price:raw); if(q>0){ p.value=p.qty*q; updated++; } });
+      DATA.prices={status:"live", source:"backend · "+(j._provider||""), updated, total:targets.length}; return {updated,total:targets.length};
+    }catch(e){}
+  }
+  if(DATA.cfg.finnhubKey){
+    for(const p of targets){ try{
+      const j=await fetchJSON("https://finnhub.io/api/v1/quote?symbol="+encodeURIComponent(p.ticker)+"&token="+encodeURIComponent(DATA.cfg.finnhubKey));
+      if(j && +j.c>0){ p.value=p.qty*(+j.c); updated++; }   // c===0 && t===0 => no quote; keep embedded
+    }catch(e){} }
+    DATA.prices={status: updated?"live":"embedded", source:"Finnhub", updated, total:targets.length}; return {updated,total:targets.length};
+  }
+  DATA.prices={status:"embedded", source:"embedded", updated:0, total:targets.length}; return {updated:0,total:targets.length};
+}
+
+/* ---- settings panel + freshness badges ---- */
+function badgePill(label, status, extra){
+  const map={live:["var(--good)",t("bLive")], stale:["var(--watch)",t("bStale")], embedded:["var(--muted)",t("bOff")]};
+  const m=map[status]||map.embedded;
+  return `<span class="pill" style="background:${m[0]}22;color:${m[0]};font-size:10.5px">${label} · ${m[1]}${extra?` ${extra}`:""}</span>`;
+}
+function dataBadges(){
+  const fx=DATA.fx, pr=DATA.prices;
+  const fxExtra=fx.asOf?`${t("asof")} ${fx.asOf}`:"";
+  const prExtra=pr.total?`${pr.updated}/${pr.total}`:"";
+  return `<span style="display:inline-flex;gap:6px;margin-left:8px;vertical-align:middle">${badgePill(t("fxLbl"),fx.status,fxExtra)}${badgePill(t("pricesLbl"),pr.status,prExtra)}</span>`;
+}
+function settingsPanel(){
+  const c=DATA.cfg;
+  return `<div class="panel" id="settingsPanel">
+    <h3>⚙︎ ${t("cfgTitle")}</h3>
+    <div class="cfg-grid">
+      <div><label>${t("cfgBackend")}</label><input id="cfg_backend" placeholder="${esc(backendBase()||"https://your-server/api")}" value="${esc(c.backendUrl||"")}"/>
+        <div class="footnote">${t("cfgBackendHint")}</div></div>
+      <div><label>${t("cfgFinnhub")}</label><input id="cfg_finnhub" type="password" placeholder="finnhub api key" value="${esc(c.finnhubKey||"")}"/>
+        <div class="footnote">${t("cfgFinnhubHint")}</div></div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center">
+      <button class="btn" id="cfg_save">${t("cfgSave")}</button>
+      <button class="btn ghost" id="cfg_fx">↻ FX</button>
+      <button class="btn ghost" id="cfg_prices">↻ ${t("cfgPrices")}</button>
+      <button class="btn ghost" id="cfg_clear">${t("cfgClear")}</button>
+      <span class="muted" id="cfg_status" style="font-size:12.5px"></span>
+    </div>
+    <div class="footnote" style="margin-top:10px">🔒 ${t("cfgSec")}</div>
+  </div>`;
+}
+function bindSettings(){
+  const st=$("#cfg_status"); const say=m=>{ if(st) st.textContent=m; };
+  const readCfg=()=>{ const b=$("#cfg_backend"), f=$("#cfg_finnhub"); if(b) DATA.cfg.backendUrl=b.value.trim(); if(f) DATA.cfg.finnhubKey=f.value.trim(); saveCfg(); };
+  const sv=$("#cfg_save"); if(sv) sv.onclick=()=>{ readCfg(); say(t("cfgSaved")); };
+  const fx=$("#cfg_fx"); if(fx) fx.onclick=async()=>{ readCfg(); say(t("refreshing")); await refreshFX(); render(); };
+  const pr=$("#cfg_prices"); if(pr) pr.onclick=async()=>{ readCfg(); say(t("refreshing")); await refreshPrices(); render(); };
+  const cl=$("#cfg_clear"); if(cl) cl.onclick=()=>{ DATA.cfg.finnhubKey=""; saveCfg(); const i=$("#cfg_finnhub"); if(i) i.value=""; say(t("cfgSaved")); };
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(){
+  document.documentElement.lang = STATE.lang;
+  $("#tagline").textContent = t("tagline");
+  // currency seg
+  $("#curSeg").innerHTML = ["USD","EUR","CHF"].map(c=>`<button data-cur="${c}" class="${STATE.base===c?'on':''}">${c}</button>`).join("");
+  // lang seg
+  [...$("#langSeg").children].forEach(b=> b.classList.toggle("on", b.dataset.lang===STATE.lang));
+  // reset btn
+  const rb=$("#resetBtn"); rb.textContent=t("reset"); rb.style.display = STATE.positions? "inline-block":"none";
+
+  const app=$("#app");
+  const head = STATE.settingsOpen ? settingsPanel() : "";
+  if(!STATE.positions){ app.innerHTML=head+landing(); bindLanding(); if(STATE.settingsOpen) bindSettings(); return; }
+
+  const a = analyze(STATE.positions);
+  app.innerHTML = head + tabsBar() + viewBody(a);
+  bindTabs(); bindView(a); if(STATE.settingsOpen) bindSettings();
+}
+
+function tabsBar(){
+  const tabs=[["overview","tOverview"],["holdings","tHoldings"],["structured","tStruct"],["fees","tFees"],["health","tHealth"]];
+  return `<div class="toolbar">
+      <nav class="tabs">${tabs.map(([k,l])=>`<button data-tab="${k}" class="${STATE.view===k?'on':''}">${t(l)}</button>`).join("")}</nav>
+      <div class="src-indicator">${t("source")}: <b>${esc(STATE.source)}</b> · ${STATE.positions.length} ${t("loaded")} ${dataBadges()}</div>
+    </div>`;
+}
+
+function viewBody(a){
+  switch(STATE.view){
+    case "overview": return vOverview(a);
+    case "holdings": return vHoldings(a);
+    case "structured": return vStructured(a);
+    case "fees": return vFees(a);
+    case "health": return vHealth(a);
+  }
+}
+
+/* ---------- Overview ---------- */
+function vOverview(a){
+  const cards=[
+    card(t("kAum"), fmtMoney(a.aum), `${STATE.base}`),
+    card(t("kBrokers"), Object.keys(a.byBroker).length, ""),
+    card(t("kPositions"), a.rows.length, ""),
+    card(t("kFee"), pct(a.blendedFee,2), t("perYear")),
+    card(t("kDrag"), fmtMoney(a.dragAbs), `+${pct(a.dragPct,2)} ${t("ofAum")}`),
+    cardScore(t("kScore"), a.score)
+  ].join("");
+
+  const classSegs=Object.entries(a.byClass).map(([k,v])=>({label:t(CLASSES[k]?CLASSES[k].k:k),value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value);
+  const brokerSegs=Object.entries(a.byBroker).map(([k,v],i)=>({label:k,value:v,color:palette(i)})).sort((x,y)=>y.value-x.value);
+  const ccySegs=Object.entries(a.byCcy).map(([k,v],i)=>({label:k,value:v,color:palette(i+2)})).sort((x,y)=>y.value-x.value);
+
+  return `<div class="cards">${cards}</div>
+    <div class="row">
+      <div class="panel"><h3>${t("allocClass")}</h3>${donutBlock(classSegs,a.aum)}</div>
+      <div class="panel"><h3>${t("byBroker")}</h3>${legendBars(brokerSegs,a.aum)}</div>
+    </div>
+    <div class="row">
+      <div class="panel"><h3>${t("byCcy")}</h3>${legendBars(ccySegs,a.aum)}</div>
+      <div class="panel"><h3>${t("topHold")}</h3>${topHoldings(a)}</div>
+    </div>`;
+}
+function donutBlock(segs,total){
+  return `<div style="display:flex;gap:22px;align-items:center;flex-wrap:wrap">
+    ${donut(segs)}
+    <div class="legend" style="flex:1;min-width:200px">
+      ${segs.map(s=>`<div class="li"><span class="lbl"><span class="dot" style="background:${s.color}"></span>${esc(s.label)}</span>
+        <span>${fmtMoney(s.value)} · <b>${pct(s.value/total*100)}</b></span></div>`).join("")}
+    </div></div>`;
+}
+function legendBars(segs,total){
+  return `<div class="legend">${segs.map(s=>`
+    <div><div class="li"><span class="lbl">${esc(s.label)}</span><span>${fmtMoney(s.value)} · <b>${pct(s.value/total*100)}</b></span></div>
+    <div class="bar"><i style="width:${s.value/total*100}%;background:${s.color}"></i></div></div>`).join("")}</div>`;
+}
+function topHoldings(a){
+  const rows=a.sorted.slice(0,7);
+  return `<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("weight")}</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td><span class="dot" style="background:${CLASSES[r.cls].c}"></span>${esc(r.name)}</td>
+      <td class="muted">${esc(r.broker)}</td>
+      <td class="num"><b>${pct(r.weight)}</b>${r.weight>10?` <span class="flag">▲</span>`:""}</td></tr>`).join("")}</tbody></table>`;
+}
+
+/* ---------- Holdings ---------- */
+function vHoldings(a){
+  const classesPresent=[...new Set(a.rows.map(r=>r.cls))];
+  const chips=`<div class="filters">
+    <span class="chip ${STATE.holdFilter==='all'?'on':''}" data-f="all">${t("filterAll")}</span>
+    ${classesPresent.map(c=>`<span class="chip ${STATE.holdFilter===c?'on':''}" data-f="${c}">${t(CLASSES[c].k)}</span>`).join("")}</div>`;
+
+  let rows=[...a.rows];
+  if(STATE.holdFilter!=="all") rows=rows.filter(r=>r.cls===STATE.holdFilter);
+  const sk=STATE.holdSort.k, dir=STATE.holdSort.dir;
+  rows.sort((x,y)=>{ const A=x[sk],B=y[sk]; return (typeof A==="number"? A-B : String(A).localeCompare(String(B)))*dir; });
+
+  const head=[["name",t("instrument")],["cls",t("cls")],["broker",t("broker")],["ccy",t("ccy")],
+              ["baseValue",t("value")],["weight",t("weight")],["feePct",t("feeY")],["flags",t("flags")]];
+  return `${chips}<div class="panel">
+    <table><thead><tr>${head.map(([k,l],i)=>`<th class="${i>=4&&i<7?'num':''}" data-sort="${k}">${l}${sk===k?(dir>0?" ▲":" ▼"):""}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r=>holdingRow(r,a)).join("")}</tbody></table>
+    <div class="footnote">${STATE.lang==="ru"?"Комис./год = консультационная + кастоди + продукт + амортизация входной (для нот).":"Fee p.a. = advisory + custody + product + amortised entry (for notes)."}</div>
+  </div>`;
+}
+function holdingRow(r,a){
+  const flags=[];
+  if(r.weight>10) flags.push(STATE.lang==="ru"?"концентрация":"concentration");
+  if(r.product>=1.5) flags.push(STATE.lang==="ru"?"дорогой":"expensive");
+  if(r.cls==="structured_note" && (r.barrierDist??30)<20) flags.push(STATE.lang==="ru"?"барьер":"barrier");
+  if(ILLIQUID.has(r.cls)) flags.push(STATE.lang==="ru"?"неликвид":"illiquid");
+  return `<tr>
+    <td>${esc(r.name)}</td>
+    <td><span class="pill" style="background:${CLASSES[r.cls].c}22;color:${CLASSES[r.cls].c}">${t(CLASSES[r.cls].k)}</span></td>
+    <td class="muted">${esc(r.broker)}</td>
+    <td class="muted">${r.ccy}</td>
+    <td class="num">${fmtMoney(r.baseValue)}</td>
+    <td class="num">${pct(r.weight)}</td>
+    <td class="num">${pct(r.feePct,2)}</td>
+    <td>${flags.map(f=>`<span class="flag" style="font-size:11px;margin-right:6px">${f}</span>`).join("")||'<span class="muted">—</span>'}</td>
+  </tr>`;
+}
+
+/* ---------- Structured & derivatives ---------- */
+function vStructured(a){
+  let html="";
+  // notes
+  html+=`<div class="panel"><h3>${t("structTitle")} <span class="hint">${a.notes.length}</span></h3>`;
+  if(!a.notes.length) html+=`<div class="empty">${t("noNotes")}</div>`;
+  else html+=`<div class="row" style="grid-template-columns:1fr 1fr">${a.notes.map(n=>noteCard(n)).join("")}</div>`;
+  html+=`</div>`;
+  // derivatives
+  html+=`<div class="panel"><h3>${t("derivTitle")} <span class="hint">${a.derivs.length}</span></h3>`;
+  if(!a.derivs.length) html+=`<div class="empty">${t("noDeriv")}</div>`;
+  else html+=`<div class="kbar" style="margin-bottom:12px">
+      <span>${t("notional")}: <b style="color:var(--ink)">${fmtFull(a.notionalAbs)}</b></span>
+      <span>${STATE.lang==="ru"?"Плечо":"Leverage"}: <b style="color:var(--ink)">${a.leverage.toFixed(2)}×</b></span>
+    </div>`+a.derivs.map(d=>derivCard(d)).join("");
+  html+=`</div>`;
+  return html;
+}
+function noteCard(n){
+  const dt=parseDate(n.maturity); const dl=dt?daysBetween(TODAY,dt):null;
+  const emb=((n.entry||0)+(n.tenorYears||3)*(n.product||0)).toFixed(1);
+  const bd=n.barrierDist??null;
+  const bcol=bd==null?"var(--muted)":(bd<13?"var(--risk)":bd<20?"var(--watch)":"var(--good)");
+  return `<div style="border:1px solid var(--line);border-radius:11px;padding:15px;background:var(--navy)">
+    <div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(n.name)}</b><span class="muted">${esc(n.broker)}</span></div>
+    <div style="margin:6px 0 10px;font-size:13px">${fmtFull(n.baseValue)} · ${pct(n.weight)} ${t("weightLbl")}</div>
+    <div class="note-meta">
+      ${t("underlying")}: <b>${esc(n.underlying||"—")}</b><br/>
+      ${t("coupon")}: <b>${pct(n.coupon||0,1)}</b> · ${t("capProt")}: <b>${n.capProt?pct(n.capProt,0):"0%"}</b><br/>
+      ${t("barrier")}: <b>${n.barrier||"—"}%</b> · ${t("barrierDist")}: <b style="color:${bcol}">${bd!=null?pct(bd,0):"—"}</b><br/>
+      ${t("maturity")}: <b>${n.maturity||"—"}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
+      ${t("embedded")}: <b style="color:var(--watch)">≈ ${emb}%</b> <span class="muted">(${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/${STATE.lang==="ru"?"г":"y"}×${n.tenorYears||3})</span>
+    </div>
+  </div>`;
+}
+function derivCard(d){
+  const dt=parseDate(d.expiry); const dl=dt?daysBetween(TODAY,dt):null;
+  return `<div style="border:1px solid var(--line);border-radius:11px;padding:15px;background:var(--navy);margin-bottom:11px">
+    <div style="display:flex;justify-content:space-between"><b>${esc(d.name)}</b><span class="muted">${esc(d.broker)}</span></div>
+    <div class="kbar" style="margin-top:9px">
+      <span>${t("type")}: <b style="color:var(--ink)">${esc(d.dtype||"—")}</b></span>
+      <span>${t("notional")}: <b style="color:var(--ink)">${d.notional?fmtFull(d.notional*(FX[d.ccy]||1)/(FX[STATE.base]||1)):"—"}</b></span>
+      <span>${t("delta")}: <b style="color:var(--ink)">${d.delta??"—"}</b></span>
+      <span>${t("premium")}: <b style="color:var(--ink)">${fmtMoney(d.baseValue)}</b></span>
+      <span>${t("expiry")}: <b style="color:${dl!=null&&dl<120?'var(--watch)':'var(--ink)'}">${d.expiry||"—"}${dl!=null?` (${dl} ${t("daysLeft")})`:""}</b></span>
+    </div></div>`;
+}
+
+/* ---------- Fees ---------- */
+function vFees(a){
+  const comp=a.feeComponents;
+  const compRows=[["advisory",comp.advisory],["custody",comp.custody],["product",comp.product],["entryAmort",comp.entryAmort]];
+  const compMax=Math.max(...compRows.map(c=>c[1]))||1;
+  const exp=[...a.rows].filter(r=>r.feeAbs>0).sort((x,y)=>y.feeAbs-x.feeAbs).slice(0,8);
+  const expMax=exp[0]?exp[0].feeAbs:1;
+  const proj10=a.feeAbs*10, projBench=a.aum*BENCH/100*10;
+
+  return `<div class="cards">
+      ${card(t("kFee"),pct(a.blendedFee,2),t("perYear"))}
+      ${card(STATE.lang==="ru"?"Издержки в год":"Annual cost",fmtMoney(a.feeAbs),STATE.base)}
+      ${card(t("kDrag"),fmtMoney(a.dragAbs),`vs ${pct(BENCH,2)} bench`)}
+      ${card(t("proj"),fmtMoney(proj10),`vs ${fmtMoney(projBench)} bench`)}
+    </div>
+    <div class="row">
+      <div class="panel"><h3>${t("feeComp")}</h3>${a.feeAbs?compRows.map(([k,v])=>`
+        <div><div class="li"><span class="lbl">${t(k)}</span><span>${fmtMoney(v)} · <b>${pct(a.aum?v/a.aum*100:0,2)}</b></span></div>
+        <div class="bar"><i style="width:${v/compMax*100}%;background:var(--gold)"></i></div></div>`).join(""):`<div class="empty">—</div>`}
+        <div class="footnote">${STATE.lang==="ru"?"Бенчмарк — индексный портфель ~0.20%/год. Разница = fee-drag.":"Benchmark — indexed portfolio ~0.20% p.a. The gap = fee drag."}</div>
+      </div>
+      <div class="panel"><h3>${t("feeVsBench")}</h3>
+        ${barCompare(t("yourPort"),a.blendedFee, t("benchPort"),BENCH, Math.max(a.blendedFee,BENCH))}
+        <div class="panel" style="margin-top:14px;background:var(--navy)"><h3 style="margin-bottom:8px">${t("proj")}</h3>
+          ${barCompare(t("yourPort"),proj10, t("benchPort"),projBench, Math.max(proj10,projBench),true)}
+          <div class="footnote">${t("projNote")}</div>
+        </div>
+      </div>
+    </div>
+    <div class="panel"><h3>${t("mostExp")}</h3>
+      <table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("feeY")}</th><th class="num">${STATE.base}/${t("perYear")}</th><th></th></tr></thead>
+      <tbody>${exp.map(r=>`<tr><td>${esc(r.name)}</td><td class="muted">${esc(r.broker)}</td>
+        <td class="num">${pct(r.feePct,2)}</td><td class="num">${fmtMoney(r.feeAbs)}</td>
+        <td style="width:30%"><div class="bar"><i style="width:${r.feeAbs/expMax*100}%;background:var(--note)"></i></div></td></tr>`).join("")}</tbody></table>
+    </div>`;
+}
+function barCompare(l1,v1,l2,v2,max,money){
+  const f=money?fmtMoney:(x)=>pct(x,2);
+  return `<div><div class="li"><span class="lbl">${l1}</span><b>${f(v1)}</b></div>
+      <div class="bar" style="height:13px"><i style="width:${v1/max*100}%;background:var(--risk)"></i></div></div>
+    <div style="margin-top:12px"><div class="li"><span class="lbl">${l2}</span><b>${f(v2)}</b></div>
+      <div class="bar" style="height:13px"><i style="width:${v2/max*100}%;background:var(--good)"></i></div></div>`;
+}
+
+/* ---------- Health ---------- */
+function vHealth(a){
+  const subs=[
+    ["cDiversification",a.sub.diversification,`top-1 ${pct(a.top1)} · ${t("techConc")} ${pct(a.techShare)}`],
+    ["cCost",a.sub.cost,`${pct(a.blendedFee,2)} ${t("perYear")} · drag ${pct(a.dragPct,2)}`],
+    ["cCurrency",a.sub.currency, a.largestFx.c?`${a.largestFx.c} ${pct(a.largestFx.pct)}`:"—"],
+    ["cLiquidity",a.sub.liquidity,`${t("illiquidShare")} ${pct(a.illiquidPct)}`],
+    ["cQuality",a.sub.quality,`${a.notes.length} ${STATE.lang==="ru"?"нот":"notes"} · ${a.leverage.toFixed(2)}× lev`],
+    ["cCash",a.sub.cash,`${pct(a.cashPct)}`]
+  ];
+  const R=resolutions(a);
+  const lvColor={high:"var(--risk)",medium:"var(--watch)",low:"var(--good)"};
+  const lvLabel={high:STATE.lang==="ru"?"Высокий":"High",medium:STATE.lang==="ru"?"Средний":"Medium",low:STATE.lang==="ru"?"Низкий":"Info"};
+
+  return `<div class="panel"><h3>${t("healthTitle")}</h3>
+    <div class="gauge-wrap">
+      <div style="text-align:center">${gauge(a.score)}
+        <div style="margin-top:4px;font-weight:800;color:${ratingColor(a.score)}">${ratingLabel(a.score)}</div></div>
+      <div class="score-sub">
+        ${subs.map(([k,v,d])=>`<div class="ssub">
+          <div class="top"><span>${t(k)} <span class="muted" style="font-size:11.5px">· ${d}</span></span><b style="color:${ratingColor(v)}">${Math.round(v)}</b></div>
+          <div class="bar"><i style="width:${v}%;background:${ratingColor(v)}"></i></div></div>`).join("")}
+      </div>
+    </div>
+    <div class="footnote">${STATE.lang==="ru"
+      ?"Веса: диверсификация 25% · издержки 25% · ликвидность 15% · качество продуктов 15% · валюта 10% · кэш 10%."
+      :"Weights: diversification 25% · cost 25% · liquidity 15% · product quality 15% · currency 10% · cash 10%."}</div>
+    </div>
+    <div class="panel"><h3>${t("resos")} <span class="hint">${R.length}</span></h3>
+      ${R.length?R.map(r=>`<div class="reso">
+        <div class="lv" style="background:${lvColor[r.level]}"></div>
+        <div style="flex:1">
+          <span class="lvtag" style="background:${lvColor[r.level]}22;color:${lvColor[r.level]}">${lvLabel[r.level]}</span>
+          <h4 style="margin-top:6px">${esc(r.title)}</h4>
+          <p>${esc(r.body)}</p>
+          ${r.impact?`<div class="impact">${t("impact")}: ${esc(r.impact)}</div>`:""}
+        </div></div>`).join(""):`<div class="empty">${t("none")}</div>`}
+    </div>`;
+}
+
+/* ---------- cards ---------- */
+function card(k,v,d){ return `<div class="card"><div class="k">${k}</div><div class="v">${v}${d?` <small>${d}</small>`:""}</div></div>`; }
+function cardScore(k,s){ return `<div class="card"><div class="k">${k}</div>
+  <div class="v" style="color:${ratingColor(s)}">${s}<small> /100 · ${ratingLabel(s)}</small></div></div>`; }
+function palette(i){ return ["#4f86c6","#c9a227","#5bb7a8","#c97b3a","#9b6fc4","#e07b66","#7f93a6","#6fae5e"][i%8]; }
+
+/* ============================================================
+   LANDING + INPUT
+   ============================================================ */
+function landing(){
+  return `<div class="hero">
+    <h2>${t("heroTitle")}</h2>
+    <p>${t("heroDesc")}</p>
+    <div class="grid4">
+      <div class="src" data-src="demo"><span class="tag">${t("srcDemoTag")}</span><div class="ic">📊</div><h3>${t("srcDemoT")}</h3><p>${t("srcDemoD")}</p></div>
+      <div class="src" data-src="file"><span class="tag">${t("srcFileTag")}</span><div class="ic">📁</div><h3>${t("srcFileT")}</h3><p>${t("srcFileD")}</p></div>
+      <div class="src" data-src="pdf"><span class="tag">${t("srcPdfTag")}</span><div class="ic">📄</div><h3>${t("srcPdfT")}</h3><p>${t("srcPdfD")}</p></div>
+      <div class="src" data-src="manual"><span class="tag">${t("srcManTag")}</span><div class="ic">✍️</div><h3>${t("srcManT")}</h3><p>${t("srcManD")}</p></div>
+    </div>
+    <div style="margin-top:18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn ghost" id="tplBtn">⬇︎ ${t("template")}</button>
+      <span class="muted" id="landErr" class="err"></span>
+    </div>
+    <input type="file" id="fileInp" accept=".csv,.xlsx,.xls" style="display:none"/>
+    <input type="file" id="pdfInp" accept=".pdf" style="display:none"/>
+    <div id="manualArea"></div>
+  </div>`;
+}
+function bindLanding(){
+  document.querySelectorAll(".src").forEach(el=> el.onclick=()=>{
+    const s=el.dataset.src;
+    if(s==="demo"){ loadPositions(DEMO, STATE.lang==="ru"?"Демо-портфель":"Demo portfolio"); }
+    else if(s==="file"){ $("#fileInp").click(); }
+    else if(s==="pdf"){ $("#pdfInp").click(); }
+    else if(s==="manual"){ showManual(); }
+  });
+  $("#tplBtn").onclick=downloadTemplate;
+  $("#fileInp").onchange=e=> handleFile(e.target.files[0], false);
+  $("#pdfInp").onchange=e=> handleFile(e.target.files[0], true);
+}
+
+function loadPositions(arr, source){
+  if(!arr || !arr.length){ const le=$("#landErr"); if(le){le.textContent=t("needRows");le.className="err";} return; }
+  STATE.positions=arr; STATE.source=source; STATE.view="overview"; render();
+  if(backendBase()){ refreshPrices().then(()=>render()).catch(()=>{}); }   // one-URL mode: pull live prices on load
+}
+
+/* ---------- manual entry ---------- */
+function showManual(){
+  STATE.manual = STATE.manual.length?STATE.manual:[];
+  const area=$("#manualArea");
+  const clsOpts=Object.keys(CLASSES).map(c=>`<option value="${c}">${t(CLASSES[c].k)}</option>`).join("");
+  area.innerHTML=`<div class="panel manual" style="margin-top:18px">
+    <h3>${t("srcManT")}</h3>
+    <div class="mg">
+      <div><label>${t("fBroker")}</label><input id="m_broker" placeholder="UBS"/></div>
+      <div><label>${t("fName")}</label><input id="m_name" placeholder="Apple Inc."/></div>
+      <div><label>${t("fClass")}</label><select id="m_cls"><option value="">${t("selClass")}</option>${clsOpts}</select></div>
+      <div><label>${t("fCcy")}</label><select id="m_ccy">${Object.keys(FX).map(c=>`<option ${c==="USD"?"selected":""}>${c}</option>`).join("")}</select></div>
+      <div><label>${t("fValue")}</label><input id="m_value" type="number" placeholder="1000000"/></div>
+      <div><label>${t("fFee")}</label><input id="m_fee" type="number" step="0.01" placeholder="0"/></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px">
+      <button class="btn" id="m_add">+ ${t("addPos")}</button>
+      <button class="btn ghost" id="m_clear">${t("clearAll")}</button>
+      <button class="btn" id="m_go" style="margin-left:auto">${t("analyze")} →</button>
+    </div>
+    <div id="m_list" style="margin-top:14px"></div>
+    <div class="err" id="m_err"></div>
+  </div>`;
+  renderManualList();
+  $("#m_add").onclick=()=>{
+    const p={broker:$("#m_broker").value||"—", name:$("#m_name").value||"—", cls:$("#m_cls").value,
+      ccy:$("#m_ccy").value, value:+$("#m_value").value||0, feeProduct:+$("#m_fee").value||0, sector:""};
+    if(!p.cls || !p.value){ $("#m_err").textContent=t("selClass"); return; }
+    $("#m_err").textContent="";
+    STATE.manual.push(p);
+    $("#m_name").value=""; $("#m_value").value=""; $("#m_fee").value="";
+    renderManualList();
+  };
+  $("#m_clear").onclick=()=>{ STATE.manual=[]; renderManualList(); };
+  $("#m_go").onclick=()=>{
+    if(!STATE.manual.length){ $("#m_err").textContent=t("needRows"); return; }
+    loadPositions(STATE.manual.slice(), STATE.lang==="ru"?"Ручной ввод":"Manual entry");
+  };
+  area.scrollIntoView({behavior:"smooth"});
+}
+function renderManualList(){
+  const el=$("#m_list"); if(!el) return;
+  if(!STATE.manual.length){ el.innerHTML=`<div class="muted" style="font-size:13px">—</div>`; return; }
+  el.innerHTML=`<table><thead><tr><th>${t("fBroker")}</th><th>${t("fName")}</th><th>${t("fClass")}</th><th>${t("fCcy")}</th><th class="num">${t("fValue")}</th><th class="num">${t("fFee")}</th><th></th></tr></thead>
+    <tbody>${STATE.manual.map((p,i)=>`<tr><td>${esc(p.broker)}</td><td>${esc(p.name)}</td>
+      <td>${t(CLASSES[p.cls].k)}</td><td>${p.ccy}</td><td class="num">${p.value.toLocaleString()}</td><td class="num">${p.feeProduct}</td>
+      <td><button class="chip" data-del="${i}">✕</button></td></tr>`).join("")}</tbody></table>`;
+  el.querySelectorAll("[data-del]").forEach(b=> b.onclick=()=>{ STATE.manual.splice(+b.dataset.del,1); renderManualList(); });
+}
+
+/* ---------- file parsing ---------- */
+const HEADER_MAP = {
+  broker:["broker","брокер","custodian","bank","банк"],
+  name:["name","instrument","security","описание","наименование","название","инструмент","ценная бумага"],
+  cls:["class","asset class","assetclass","type","класс","класс актива","тип"],
+  ccy:["currency","ccy","валюта","cur"],
+  value:["value","market value","amount","стоимость","сумма","рыночная стоимость","mv"],
+  quantity:["quantity","qty","количество","кол-во"],
+  price:["price","цена","last","курс"],
+  feeProduct:["fee","ter","expense","комиссия","комис","fee product","product fee"],
+  ticker:["ticker","symbol","тикер","символ","bbg","bloomberg ticker"],
+  isin:["isin","изин"],
+  sector:["sector","сектор","industry","отрасль"],
+  coupon:["coupon","купон"], barrier:["barrier","барьер"], maturity:["maturity","погашение","maturity date"],
+  underlying:["underlying","базовый","базовый актив"], notional:["notional","номинал"], dtype:["derivative type","тип дерив  атива"]
+};
+const CLASS_MAP = {
+  equity:["equity","equities","stock","акц","акция","акции"],
+  bond:["bond","bonds","fixed income","облиг","бонд"],
+  fund_etf:["fund","etf","mutual","фонд","etf"],
+  structured_note:["structured","note","нота","ноты","структ"],
+  derivative:["derivative","option","future","swap","дериватив","опцион","фьючерс"],
+  cash:["cash","кэш","деньги","money market","нал"],
+  alternative:["alternative","hedge","private equity","альтернатив","хедж","pe"]
+};
+function normClass(s){
+  const x=String(s||"").toLowerCase();
+  for(const [k,list] of Object.entries(CLASS_MAP)) if(list.some(w=>x.includes(w))) return k;
+  return "equity";
+}
+function mapHeaders(headers){
+  const lower=headers.map(h=>String(h||"").trim().toLowerCase());
+  const map={};
+  for(const [field,syn] of Object.entries(HEADER_MAP)){
+    const idx=lower.findIndex(h=> syn.some(s=> h===s || h.includes(s)));
+    if(idx>=0) map[field]=idx;
+  }
+  return map;
+}
+function rowsToPositions(matrix){
+  if(!matrix.length) return [];
+  const headers=matrix[0]; const map=mapHeaders(headers);
+  if(map.name==null && map.value==null && map.quantity==null) return []; // not recognizable
+  const out=[];
+  for(let i=1;i<matrix.length;i++){
+    const r=matrix[i]; if(!r || !r.length || r.every(c=>c===""||c==null)) continue;
+    const g=f=> map[f]!=null? r[map[f]] : undefined;
+    let value=parseNum(g("value"));
+    if(!value && g("quantity")!=null && g("price")!=null) value=parseNum(g("quantity"))*parseNum(g("price"));
+    if(!value) continue;
+    const p={
+      broker: (g("broker")||"—").toString().trim(),
+      name: (g("name")||("Position "+i)).toString().trim(),
+      cls: normClass(g("cls")),
+      ccy: (String(g("ccy")||"USD").toUpperCase().match(/[A-Z]{3}/)||["USD"])[0],
+      value, feeProduct: parseNum(g("feeProduct"))||0, sector:(g("sector")||"").toString()
+    };
+    ["coupon","barrier","maturity","underlying","notional"].forEach(f=>{ const v=g(f); if(v!=null&&v!=="") p[f]=isNaN(+v)?v:+v; });
+    const tk=g("ticker"); if(tk) p.ticker=String(tk).trim().toUpperCase();
+    const isin=g("isin"); if(isin) p.isin=String(isin).trim().toUpperCase();
+    const qn=parseNum(g("quantity")); if(qn) p.qty=qn;
+    if(!FX[p.ccy]) p.ccy="USD";
+    out.push(p);
+  }
+  return out;
+}
+function parseNum(v){ if(v==null) return 0; const n=parseFloat(String(v).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
+
+function handleFile(file, isPdf){
+  if(!file) return;
+  const le=$("#landErr"); if(le) le.textContent="";
+  const reader=new FileReader();
+  if(isPdf){
+    reader.onload=()=> parsePdf(reader.result);
+    reader.readAsArrayBuffer(file);
+  } else if(/\.csv$/i.test(file.name)){
+    reader.onload=()=>{ const m=parseCSV(reader.result); finishFile(rowsToPositions(m), file.name); };
+    reader.readAsText(file);
+  } else {
+    reader.onload=()=>{
+      try{
+        if(!window.XLSX) throw 0;
+        const wb=XLSX.read(new Uint8Array(reader.result),{type:"array"});
+        const sh=wb.Sheets[wb.SheetNames[0]];
+        const m=XLSX.utils.sheet_to_json(sh,{header:1,defval:""});
+        finishFile(rowsToPositions(m), file.name);
+      }catch(e){ showFileErr(); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+function finishFile(positions, name){
+  if(!positions || !positions.length){ showFileErr(); return; }
+  loadPositions(positions, name);
+}
+function showFileErr(){ const le=$("#landErr"); if(le){ le.textContent=t("fileErr"); le.className="err"; } }
+
+function parseCSV(text){
+  const rows=[]; let row=[],cur="",q=false;
+  for(let i=0;i<text.length;i++){ const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
+    else { if(c==='"') q=true; else if(c===","||c===";"){ row.push(cur);cur=""; }
+      else if(c==="\n"){ row.push(cur);rows.push(row);row=[];cur=""; }
+      else if(c==="\r"){} else cur+=c; }
+  }
+  if(cur!==""||row.length){ row.push(cur); rows.push(row); }
+  return rows.filter(r=>r.length>1 || (r.length===1&&r[0]!==""));
+}
+
+async function parsePdf(buf){
+  const le=$("#landErr");
+  try{
+    if(!window.pdfjsLib){ throw 0; }
+    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let lines=[];
+    for(let p=1;p<=pdf.numPages;p++){
+      const page=await pdf.getPage(p); const tc=await page.getTextContent();
+      // group items by approximate y
+      const byY={};
+      tc.items.forEach(it=>{ const y=Math.round(it.transform[5]); (byY[y]=byY[y]||[]).push(it); });
+      Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{
+        const txt=byY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(" ").replace(/\s+/g," ").trim();
+        if(txt) lines.push(txt);
+      });
+    }
+    const positions=pdfLinesToPositions(lines);
+    if(!positions.length){ showFileErr(); return; }
+    if(le){ le.textContent=t("pdfHeur"); le.className="muted"; }
+    loadPositions(positions, "PDF: heuristic");
+  }catch(e){ showFileErr(); }
+}
+// heuristic: detect lines containing a name + a number that looks like a value, optional ccy
+function pdfLinesToPositions(lines){
+  const out=[]; const ccyRe=/\b(USD|EUR|CHF|GBP|JPY)\b/;
+  lines.forEach(ln=>{
+    const nums=ln.match(/[\d][\d.,]{3,}/g);
+    if(!nums) return;
+    const val=parseNum(nums[nums.length-1]);
+    if(val<1000) return; // skip small/price-only
+    const name=ln.replace(/[\d.,%]+/g,"").replace(ccyRe,"").trim();
+    if(name.length<3) return;
+    const ccy=(ln.match(ccyRe)||["USD"])[0];
+    out.push({broker:"PDF", name:name.slice(0,48), cls:normClass(name), ccy, value:val, feeProduct:0, sector:""});
+  });
+  return out.slice(0,40);
+}
+
+function downloadTemplate(){
+  const headers=["broker","name","asset_class","currency","value","quantity","ticker","fee_product","sector","coupon","barrier","maturity","underlying","notional"];
+  const sample=[
+    ["UBS","Apple Inc.","equity","USD","1260000","6000","AAPL","0","US Tech","","","","",""],
+    ["Julius Baer","Autocall Note S&P 500","structured_note","USD","1000000","","","0.7","Structured","8.2","65","2026-12-20","S&P 500",""],
+    ["Interactive Brokers","iShares Core S&P 500","fund_etf","USD","2000000","","","0.07","US Equity","","","","",""],
+    ["Pictet","Pictet Private Equity 2021","alternative","USD","1300000","","","2.0","Private equity","","","","",""]
+  ];
+  const csv=[headers,...sample].map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="wealthlens_template.csv"; a.click();
+}
+
+/* ============================================================
+   bindings
+   ============================================================ */
+function bindTabs(){
+  document.querySelectorAll("nav.tabs button").forEach(b=> b.onclick=()=>{ STATE.view=b.dataset.tab; render(); });
+}
+function bindView(a){
+  if(STATE.view==="holdings"){
+    document.querySelectorAll("th[data-sort]").forEach(th=> th.onclick=()=>{
+      const k=th.dataset.sort;
+      if(STATE.holdSort.k===k) STATE.holdSort.dir*=-1; else STATE.holdSort={k,dir:-1};
+      render();
+    });
+    document.querySelectorAll(".chip[data-f]").forEach(c=> c.onclick=()=>{ STATE.holdFilter=c.dataset.f; render(); });
+  }
+}
+
+/* top controls */
+$("#langSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.lang=b.dataset.lang; render(); });
+$("#curSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.base=b.dataset.cur; render(); });
+$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.view="overview"; render(); };
+$("#gearBtn").onclick=()=>{ STATE.settingsOpen=!STATE.settingsOpen; render(); };
+
+/* init: show cached/embedded immediately, then refresh FX live (keyless) */
+loadFxCache();
+render();
+refreshFX().then(()=>render()).catch(()=>{});
+</script>
+</body>
+</html>
