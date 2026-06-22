@@ -704,6 +704,26 @@ function viewBody(a){
 }
 
 /* ---------- Overview ---------- */
+function dataSourcesPanel(){
+  const ru = STATE.lang==="ru";
+  const rows = ru ? [
+    ["Валютные курсы (FX)","ЕЦБ через Frankfurter — без ключа, обновление раз в сутки.","var(--good)"],
+    ["Цены акций и ETF","Bright Data Web Unlocker → Yahoo Finance, по тикеру. Если котировка недоступна — показываем индикативное (вшитое) значение.","var(--good)"],
+    ["Ноты, деривативы, облигации, альтернативы","Пока демо-данные. В планах — Bloomberg: оценка структурных нот, греки по деривативам, reference-данные и доходности по ISIN.","var(--watch)"],
+    ["Аналитика","Агрегация по брокерам, комиссии и fee-drag, концентрация, ликвидность и health-score считаются на лету в браузере.","var(--equity)"]
+  ] : [
+    ["FX rates","ECB via Frankfurter — keyless, updated daily.","var(--good)"],
+    ["Equity & ETF prices","Bright Data Web Unlocker → Yahoo Finance, by ticker. Indicative (embedded) value shown when a quote is unavailable.","var(--good)"],
+    ["Notes, derivatives, bonds, alternatives","Demo data for now. Planned — Bloomberg: structured-note valuation, derivative greeks, ISIN reference data and yields.","var(--watch)"],
+    ["Analytics","Broker aggregation, fees & fee-drag, concentration, liquidity and the health-score are computed live in the browser.","var(--equity)"]
+  ];
+  return `<div class="panel"><h3>${ru?"Источники данных":"Data sources"} <span class="hint">${ru?"что и откуда мы тянем":"what we pull and from where"}</span></h3>
+    ${rows.map(([k,v,c])=>`<div style="display:flex;gap:11px;padding:8px 0;border-bottom:1px solid var(--line)">
+      <span class="dot" style="background:${c};margin-top:6px;flex:0 0 9px"></span>
+      <div><b style="font-size:13.5px">${esc(k)}</b><div class="muted" style="font-size:12.5px;line-height:1.55;margin-top:2px">${esc(v)}</div></div></div>`).join("")}
+    <div class="footnote">${ru?"Бейджи Live / устар. / офлайн в шапке показывают свежесть FX и цен.":"The Live / stale / offline badges in the header show FX and price freshness."}</div>
+  </div>`;
+}
 function vOverview(a){
   const cards=[
     card(t("kAum"), fmtMoney(a.aum), `${STATE.base}`),
@@ -726,7 +746,7 @@ function vOverview(a){
     <div class="row">
       <div class="panel"><h3>${t("byCcy")}</h3>${legendBars(ccySegs,a.aum)}</div>
       <div class="panel"><h3>${t("topHold")}</h3>${topHoldings(a)}</div>
-    </div>`;
+    </div>` + dataSourcesPanel();
 }
 function donutBlock(segs,total){
   return `<div style="display:flex;gap:22px;align-items:center;flex-wrap:wrap">
