@@ -202,7 +202,7 @@ const I18N = {
     cfgSave:"Сохранить", cfgPrices:"Цены", cfgClear:"Очистить ключ",
     cfgSec:"Ключ лежит в localStorage этого браузера — без конфиденциальности, не используйте на чужом ПК. В продакшне ключи Bloomberg держатся на сервере и в браузер не попадают.",
     cfgSaved:"Сохранено", refreshing:"Обновляю…",
-    bLive:"Live", bStale:"устар.", bOff:"офлайн", fxLbl:"FX", pricesLbl:"Цены", asof:"на"
+    bLive:"Live", bStale:"устар.", bOff:"индикат.", fxLbl:"FX", pricesLbl:"Цены", asof:"на"
   },
   en:{
     tagline:"Client portfolio analysis & health-check for family offices",
@@ -245,7 +245,7 @@ const I18N = {
     cfgSave:"Save", cfgPrices:"Prices", cfgClear:"Clear key",
     cfgSec:"The key lives in this browser's localStorage — no confidentiality, don't use on a shared PC. In production, Bloomberg credentials stay on the server and never reach the browser.",
     cfgSaved:"Saved", refreshing:"Refreshing…",
-    bLive:"Live", bStale:"stale", bOff:"offline", fxLbl:"FX", pricesLbl:"Prices", asof:"as of"
+    bLive:"Live", bStale:"stale", bOff:"indicative", fxLbl:"FX", pricesLbl:"Prices", asof:"as of"
   }
 };
 
@@ -607,7 +607,7 @@ async function refreshPrices(){
   let updated=0; const base=backendBase();
   if(base){
     try{ const ids=targets.map(p=>p.ticker).join(",");
-      const j=await fetchJSON(base+"/quote?symbols="+encodeURIComponent(ids));
+      const j=await fetchJSON(base+"/quote?symbols="+encodeURIComponent(ids), 45000);   // live scraping is slow; allow up to 45s
       targets.forEach(p=>{ const raw=j[p.ticker]; const q=+(raw&&raw.price!=null?raw.price:raw); if(q>0){ p.value=p.qty*q; updated++; } });
       DATA.prices={status:"live", source:"backend · "+(j._provider||""), updated, total:targets.length}; return {updated,total:targets.length};
     }catch(e){}
@@ -624,7 +624,7 @@ async function refreshPrices(){
 
 /* ---- settings panel + freshness badges ---- */
 function badgePill(label, status, extra){
-  const map={live:["var(--good)",t("bLive")], stale:["var(--watch)",t("bStale")], embedded:["var(--muted)",t("bOff")]};
+  const map={live:["var(--good)",t("bLive")], stale:["var(--watch)",t("bStale")], embedded:["var(--muted)",t("bOff")], loading:["var(--gold2)",t("refreshing")]};
   const m=map[status]||map.embedded;
   return `<span class="pill" style="background:${m[0]}22;color:${m[0]};font-size:10.5px">${label} · ${m[1]}${extra?` ${extra}`:""}</span>`;
 }
@@ -689,7 +689,7 @@ function tabsBar(){
   const tabs=[["overview","tOverview"],["holdings","tHoldings"],["structured","tStruct"],["fees","tFees"],["health","tHealth"]];
   return `<div class="toolbar">
       <nav class="tabs">${tabs.map(([k,l])=>`<button data-tab="${k}" class="${STATE.view===k?'on':''}">${t(l)}</button>`).join("")}</nav>
-      <div class="src-indicator">${t("source")}: <b>${esc(STATE.source)}</b> · ${STATE.positions.length} ${t("loaded")} ${dataBadges()}</div>
+      <div class="src-indicator">${t("source")}: <b>${esc(STATE.source)}</b> · ${STATE.positions.length} ${t("loaded")} ${dataBadges()}${backendBase()?` <button class="btn ghost" id="livePricesBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">↻ ${STATE.lang==="ru"?"Цены (live)":"Prices (live)"}</button>`:""}</div>
     </div>`;
 }
 
@@ -982,8 +982,9 @@ function bindLanding(){
 
 function loadPositions(arr, source){
   if(!arr || !arr.length){ const le=$("#landErr"); if(le){le.textContent=t("needRows");le.className="err";} return; }
-  STATE.positions=arr; STATE.source=source; STATE.view="overview"; render();
-  if(backendBase()){ refreshPrices().then(()=>render()).catch(()=>{}); }   // one-URL mode: pull live prices on load
+  STATE.positions=arr; STATE.source=source; STATE.view="overview";
+  DATA.prices={status:"embedded", source:"embedded", updated:0, total:arr.filter(p=>p.ticker&&p.qty>0).length};
+  render();   // instant load with indicative prices; live prices are pulled on demand via the "Prices (live)" button (saves credits)
 }
 
 /* ---------- manual entry ---------- */
@@ -1013,7 +1014,8 @@ function showManual(){
   $("#m_add").onclick=()=>{
     const p={broker:$("#m_broker").value||"—", name:$("#m_name").value||"—", cls:$("#m_cls").value,
       ccy:$("#m_ccy").value, value:+$("#m_value").value||0, feeProduct:+$("#m_fee").value||0, sector:""};
-    if(!p.cls || !p.value){ $("#m_err").textContent=t("selClass"); return; }
+    if(!p.cls){ $("#m_err").textContent=(STATE.lang==="ru"?"Выберите класс актива в списке.":"Select an asset class."); return; }
+    if(!p.value){ $("#m_err").textContent=(STATE.lang==="ru"?"Укажите стоимость (число).":"Enter a value (number)."); return; }
     $("#m_err").textContent="";
     STATE.manual.push(p);
     $("#m_name").value=""; $("#m_value").value=""; $("#m_fee").value="";
@@ -1202,6 +1204,10 @@ function downloadTemplate(){
    ============================================================ */
 function bindTabs(){
   document.querySelectorAll("nav.tabs button").forEach(b=> b.onclick=()=>{ STATE.view=b.dataset.tab; render(); });
+  const lp=$("#livePricesBtn");
+  if(lp) lp.onclick=async()=>{ if(!backendBase()) return;
+    DATA.prices={status:"loading", source:"", updated:0, total:STATE.positions.filter(p=>p.ticker&&p.qty>0).length}; render();
+    try{ await refreshPrices(); }catch(e){} render(); };
 }
 function bindView(a){
   if(STATE.view==="holdings"){
