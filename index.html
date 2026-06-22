@@ -570,11 +570,14 @@ const DATA = {
   fx:{status:"embedded", asOf:FX_DATE_EMBED, source:"embedded"},
   prices:{status:"embedded", source:"embedded", updated:0, total:0}
 };
-// Effective backend: explicit config, else same-origin when served over http(s) (one-URL mode).
+// Hosted backend (Deno Deploy) used by the public demo. Override via ⚙ settings.
+const DEFAULT_BACKEND = "https://hefty-pangolin-5352.aisance-admin.deno.net";
+// Effective backend: explicit ⚙ config > local one-URL server (localhost) > hosted Deno Deploy.
 function backendBase(){
   if(DATA.cfg.backendUrl) return DATA.cfg.backendUrl.replace(/\/+$/,"");
-  if(location.protocol==="http:"||location.protocol==="https:") return location.origin;
-  return "";
+  const h=location.hostname;
+  if(h==="localhost"||h==="127.0.0.1") return location.origin;   // local `python3 server/...` one-URL mode
+  return DEFAULT_BACKEND;                                          // GitHub Pages / file:// -> hosted API
 }
 async function fetchJSON(url, ms=7000){
   const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(), ms);
