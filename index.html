@@ -646,11 +646,16 @@ async function refreshPrices(){
   const targets=STATE.positions.filter(p=>p.ticker && p.qty>0);
   let updated=0; const base=backendBase();
   if(base){
-    try{ const ids=targets.map(p=>p.ticker).join(",");
-      const j=await fetchJSON(base+"/quote?symbols="+encodeURIComponent(ids), 45000);   // live scraping is slow; allow up to 45s
-      targets.forEach(p=>{ const raw=j[p.ticker]; const q=+(raw&&raw.price!=null?raw.price:raw); if(q>0){ p.value=p.qty*q; updated++; } });
-      DATA.prices={status:"live", source:"backend · "+(j._provider||""), updated, total:targets.length}; return {updated,total:targets.length};
-    }catch(e){}
+    const ids=targets.map(p=>p.ticker).join(",");
+    let prov="";
+    for(let attempt=0; attempt<2; attempt++){              // retry once on a transient empty response (cold isolate / throttle)
+      try{
+        const j=await fetchJSON(base+"/quote?symbols="+encodeURIComponent(ids), 45000);   // live scraping is slow; allow up to 45s
+        prov=j._provider||""; updated=0;
+        targets.forEach(p=>{ const raw=j[p.ticker]; const q=+(raw&&raw.price!=null?raw.price:raw); if(q>0){ p.value=p.qty*q; updated++; } });
+        if(updated>0 || attempt===1){ DATA.prices={status:"live", source:"backend · "+prov, updated, total:targets.length}; return {updated,total:targets.length}; }
+      }catch(e){ if(attempt===1){ DATA.prices={status:"embedded", source:"embedded", updated:0, total:targets.length}; return {updated:0,total:targets.length}; } }
+    }
   }
   if(DATA.cfg.finnhubKey){
     for(const p of targets){ try{
