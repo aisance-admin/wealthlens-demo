@@ -168,6 +168,8 @@
     body{background:#fff !important}
     .wrap{display:none !important}
     #reportArea{display:block !important;color:#111;font-family:Arial,Helvetica,sans-serif;padding:8px 4px}
+    #reportArea svg circle:last-of-type{fill:#fff}
+    #reportArea .legend{display:none}
     .rep-h{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #c9a227;padding-bottom:10px;margin-bottom:16px}
     .rep-title{font-size:20px;font-weight:700}
     .rep-sub{color:#555;font-size:13px;margin-top:3px}
@@ -204,6 +206,7 @@
         <button data-lang="ru">RU</button>
         <button data-lang="en">EN</button>
       </div>
+      <button class="btn ghost" id="clientsBtn" title="Clients">👥</button>
       <button class="btn ghost" id="gearBtn" title="API / data">⚙︎</button>
       <button class="btn ghost" id="resetBtn" style="display:none"></button>
     </div>
@@ -371,7 +374,7 @@ function P(broker,name,cls,ccy,value,feeProduct,sector,extra){
 }
 
 /* ---------- state ---------- */
-let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false };
+let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false };
 const t = k => (I18N[STATE.lang][k] ?? k);
 const $ = (s,r=document)=>r.querySelector(s);
 
@@ -460,6 +463,12 @@ function analyze(positions){
   const notionalAbs = derivs.reduce((s,r)=>{ const n=(r.notional||0)*(FX[r.ccy]||1)/(FX[STATE.base]||1); return s+n; },0);
   const leverage = aum? notionalAbs/aum : 0;
 
+  // bonds: rough modified duration & rate sensitivity (Macaulay on a par-ish bond)
+  const bonds = rows.filter(r=>r.cls==="bond");
+  bonds.forEach(b=>{ const y=Math.max(0.005,(b.coupon||2.5)/100); const dt=parseDate(b.maturity); const n=Math.max(0.5, dt? (dt-TODAY)/(365*86400000) : 6); const mac=(1+y)/y*(1-1/Math.pow(1+y,n)); b._dur=mac/(1+y); b._years=n; });
+  const bondVal = bonds.reduce((s,b)=>s+b.baseValue,0);
+  const portDuration = bondVal? bonds.reduce((s,b)=>s+b._dur*b.baseValue,0)/bondVal : 0;
+
   /* ---------- sub-scores (0..100) ---------- */
   const sub = {};
   // Diversification: top1 & HHI
@@ -487,6 +496,7 @@ function analyze(positions){
     feeAbs, blendedFee, dragPct, dragAbs, feeComponents,
     top1, top5, hhi, techShare, largestFx, nonBase,
     illiquid, illiquidPct, cashPct, notes, derivs, notionalAbs, leverage,
+    bonds, bondVal, portDuration,
     sub, score, W
   };
 }
@@ -587,6 +597,14 @@ function resolutions(a){
       L==="ru"?"Низкий буфер ликвидности":"Thin liquidity buffer",
       L==="ru"?`Кэш ${pct(a.cashPct)} — мало для покрытия неожиданных оттоков/маржи без вынужденных продаж.`
               :`Cash at ${pct(a.cashPct)} — thin for covering unexpected outflows/margin without forced sales.`);
+  }
+
+  // bond interest-rate risk
+  if(a.aum && a.bondVal/a.aum>0.10 && a.portDuration>6){
+    add("medium",
+      L==="ru"?"Процентный риск облигаций":"Bond interest-rate risk",
+      L==="ru"?`Дюрация облигационной части ≈ ${a.portDuration.toFixed(1)}: при росте ставок на +1% эта часть портфеля подешевеет примерно на ${a.portDuration.toFixed(1)}%.`
+              :`Bond-sleeve duration ≈ ${a.portDuration.toFixed(1)}: a +1% rate move would cut that sleeve by about ${a.portDuration.toFixed(1)}%.`);
   }
 
   const order={high:0,medium:1,low:2};
@@ -769,18 +787,21 @@ function render(){
   saveAutosave();   // persist current portfolio so a reload restores it
   const app=$("#app");
   const head = STATE.settingsOpen ? settingsPanel() : "";
+  if(STATE.showClients){ app.innerHTML=head+clientsView(); bindClients(); if(STATE.settingsOpen) bindSettings(); return; }
   if(!STATE.positions){ app.innerHTML=head+landing(); bindLanding(); if(STATE.settingsOpen) bindSettings(); return; }
 
   const a = analyze(STATE.positions);
+  if(!STATE.baseline) STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum};
   app.innerHTML = head + tabsBar() + viewBody(a);
   bindTabs(); bindView(a); if(STATE.settingsOpen) bindSettings();
+  const rbb=$("#rebaseBtn"); if(rbb) rbb.onclick=()=>{ STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum}; render(); };
 }
 
 function tabsBar(){
   const tabs=[["overview","tOverview"],["holdings","tHoldings"],["structured","tStruct"],["fees","tFees"],["health","tHealth"]];
   return `<div class="toolbar">
       <nav class="tabs">${tabs.map(([k,l])=>`<button data-tab="${k}" class="${STATE.view===k?'on':''}">${t(l)}</button>`).join("")}</nav>
-      <div class="src-indicator" title="${esc((STATE.sources||[]).join(', '))}">${t("source")}: <b>${esc(STATE.source)}</b> · ${STATE.positions.length} ${t("loaded")} ${dataBadges()} <button class="btn ghost" id="addStmtBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">+ ${STATE.lang==="ru"?"Выписка":"Statement"}</button>${backendBase()?` <button class="btn ghost" id="livePricesBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">↻ ${STATE.lang==="ru"?"Цены (live)":"Prices (live)"}</button>`:""} <button class="btn ghost" id="reportBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">🖨 ${STATE.lang==="ru"?"Отчёт":"Report"}</button></div>
+      <div class="src-indicator" title="${esc((STATE.sources||[]).join(', '))}">${t("source")}: <b>${esc(STATE.source)}</b> · ${STATE.positions.length} ${t("loaded")} ${dataBadges()} <button class="btn ghost" id="addStmtBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">+ ${STATE.lang==="ru"?"Выписка":"Statement"}</button>${backendBase()?` <button class="btn ghost" id="livePricesBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">↻ ${STATE.lang==="ru"?"Цены (live)":"Prices (live)"}</button>`:""} <button class="btn ghost" id="reportBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">🖨 ${STATE.lang==="ru"?"Отчёт":"Report"}</button> <button class="btn ghost" id="csvBtn" style="margin-left:8px;padding:5px 11px;font-size:12px">⬇ CSV</button></div>
     </div>`;
 }
 
@@ -815,6 +836,35 @@ function dataSourcesPanel(){
     <div class="footnote">${ru?"Бейджи Live / устар. / офлайн в шапке показывают свежесть FX и цен.":"The Live / stale / offline badges in the header show FX and price freshness."}</div>
   </div>`;
 }
+function whatIfStrip(a){
+  const b=STATE.baseline; if(!b) return "";
+  const ru=STATE.lang==="ru";
+  const dS=a.score-b.score, dF=a.blendedFee-b.fee, dT=a.top1-b.top1;
+  if(Math.abs(dS)<1 && Math.abs(dF)<0.01 && Math.abs(dT)<0.1 && Math.abs(a.aum-b.aum)<1) return "";
+  const chip=(label,to,d,dec,good)=>{ const col=(d>0)===good?"var(--good)":"var(--risk)"; const s=(d>0?"+":"")+d.toFixed(dec); return `<span style="font-size:13px">${label}: <b>${to}</b> <span style="color:${col}">(${s})</span></span>`; };
+  return `<div class="panel" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:11px 16px;border-color:var(--gold)">
+    <b style="font-size:13px">${ru?"What-if vs база":"What-if vs baseline"}</b>
+    ${chip("Score", a.score, dS, 0, true)}
+    ${chip(ru?"Комиссия %":"Fee %", pct(a.blendedFee,2), dF, 2, false)}
+    ${chip(ru?"Топ-1 %":"Top-1 %", pct(a.top1), dT, 1, false)}
+    <button class="btn ghost" id="rebaseBtn" style="margin-left:auto;padding:6px 12px;font-size:12px">${ru?"Зафиксировать базу":"Set baseline"}</button>
+  </div>`;
+}
+function clientsView(){
+  const ru=STATE.lang==="ru"; const profiles=getProfiles(); const names=Object.keys(profiles);
+  let body;
+  if(!names.length) body=`<div class="empty">${ru?"Нет сохранённых профилей. Загрузите портфель и сохраните его в ⚙ → «Профили клиентов».":"No saved profiles. Load a portfolio and save it in ⚙ → Client profiles."}</div>`;
+  else { const cards=names.map(n=>{ const a=analyze((profiles[n].positions||[])); return {n, aum:a.aum, pos:a.rows.length, brk:Object.keys(a.byBroker).length, fee:a.blendedFee, score:a.score}; }).sort((x,y)=>y.aum-x.aum);
+    body=`<table><thead><tr><th>${ru?"Клиент":"Client"}</th><th class="num">${ru?"Активы":"AUM"}</th><th class="num">${ru?"Поз.":"Pos."}</th><th class="num">${ru?"Брок.":"Brk."}</th><th class="num">${ru?"Комис.":"Fee"}</th><th class="num">Health</th><th></th></tr></thead><tbody>${cards.map(c=>`<tr><td><b>${esc(c.n)}</b></td><td class="num">${fmtMoney(c.aum)}</td><td class="num">${c.pos}</td><td class="num">${c.brk}</td><td class="num">${pct(c.fee,2)}</td><td class="num"><b style="color:${ratingColor(c.score)}">${c.score}</b></td><td><button class="chip" data-openc="${esc(c.n)}">${ru?"Открыть":"Open"}</button></td></tr>`).join("")}</tbody></table>`;
+  }
+  return `<div class="toolbar"><nav class="tabs"><button class="on">${ru?"Клиенты":"Clients"}</button></nav>
+      <button class="btn ghost" id="clientsBack">← ${ru?"Назад":"Back"}</button></div>
+    <div class="panel"><h3>${ru?"Профили клиентов — сравнение":"Client profiles — comparison"} <span class="hint">${names.length}</span></h3>${body}</div>`;
+}
+function bindClients(){
+  const bk=$("#clientsBack"); if(bk) bk.onclick=()=>{ STATE.showClients=false; render(); };
+  document.querySelectorAll("[data-openc]").forEach(b=> b.onclick=()=>{ STATE.showClients=false; loadProfile(b.dataset.openc); });
+}
 function vOverview(a){
   const cards=[
     card(t("kAum"), fmtMoney(a.aum), `${STATE.base}`),
@@ -829,7 +879,7 @@ function vOverview(a){
   const brokerSegs=Object.entries(a.byBroker).map(([k,v],i)=>({label:k,value:v,color:palette(i)})).sort((x,y)=>y.value-x.value);
   const ccySegs=Object.entries(a.byCcy).map(([k,v],i)=>({label:k,value:v,color:palette(i+2)})).sort((x,y)=>y.value-x.value);
 
-  return `<div class="cards">${cards}</div>
+  return `${whatIfStrip(a)}<div class="cards">${cards}</div>
     <div class="row">
       <div class="panel"><h3>${t("allocClass")}</h3>${donutBlock(classSegs,a.aum)}</div>
       <div class="panel"><h3>${t("byBroker")}</h3>${legendBars(brokerSegs,a.aum)}</div>
@@ -946,7 +996,7 @@ function buildReport(a){
       <div><span>Fee-drag</span><b>${fmtMoney(a.dragAbs)}/${ru?"год":"yr"}</b></div>
     </div>
     <div class="rep-cols">
-      <div><h4>${ru?"Распределение по классам":"Asset allocation"}</h4><table>${cls}</table></div>
+      <div><h4>${ru?"Распределение по классам":"Asset allocation"}</h4><div style="text-align:center;margin:2px 0 10px">${donut(Object.entries(a.byClass).map(([k,v])=>({label:k,value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value),150)}</div><table>${cls}</table></div>
       <div><h4>${ru?"По брокерам":"By broker"}</h4><table>${brk}</table></div>
     </div>
     <h4>${ru?"Резолюции и рекомендации":"Resolutions & recommendations"}</h4>
@@ -955,6 +1005,15 @@ function buildReport(a){
   </div>`;
 }
 function openReport(){ if(!STATE.positions) return; const ra=$("#reportArea"); if(ra) ra.innerHTML=buildReport(analyze(STATE.positions)); window.print(); }
+function exportCSV(){
+  if(!STATE.positions) return;
+  const cols=["broker","name","asset_class","currency","value","quantity","ticker","isin","fee_product","coupon","barrier","maturity","underlying","notional"];
+  const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+  const lines=[cols.join(",")];
+  STATE.positions.forEach(p=>{ lines.push([p.broker,p.name,p.cls,p.ccy,p.value,p.qty||"",p.ticker||"",p.isin||"",p.feeProduct||0,p.coupon||"",p.barrier||"",p.maturity||"",p.underlying||"",p.notional||""].map(q).join(",")); });
+  const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=((STATE.client||"wealthlens").replace(/\s+/g,"_"))+"_portfolio.csv"; a.click();
+}
 
 /* ---------- Structured & derivatives ---------- */
 function vStructured(a){
@@ -972,6 +1031,13 @@ function vStructured(a){
       <span>${STATE.lang==="ru"?"Плечо":"Leverage"}: <b style="color:var(--ink)">${a.leverage.toFixed(2)}×</b></span>
     </div>`+a.derivs.map(d=>derivCard(d)).join("");
   html+=`</div>`;
+  // bonds
+  const ru=STATE.lang==="ru";
+  html+=`<div class="panel"><h3>${ru?"Облигации":"Bonds"} <span class="hint">${a.bonds.length}${a.bonds.length?` · ${ru?"дюрация":"duration"} ≈ ${a.portDuration.toFixed(1)}`:""}</span></h3>`;
+  if(!a.bonds.length) html+=`<div class="empty">${ru?"Облигаций не обнаружено.":"No bonds found."}</div>`;
+  else html+=`<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("coupon")}</th><th class="num">${t("maturity")}</th><th class="num">${ru?"Дюрация":"Duration"}</th><th class="num">+1% ${ru?"ставок":"rates"}</th></tr></thead><tbody>${a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td><td class="num">${pct(b.coupon||0,1)}</td><td class="num">${b.maturity||"—"}</td><td class="num">${b._dur.toFixed(1)}</td><td class="num" style="color:var(--risk)">−${b._dur.toFixed(1)}%</td></tr>`).join("")}</tbody></table>
+    <div class="footnote">${ru?"Дюрация и чувствительность — приблизительная оценка по купону и сроку (точную даёт Bloomberg).":"Duration and sensitivity are rough estimates from coupon and maturity (Bloomberg gives exact figures)."}</div>`;
+  html+=`</div>`;
   return html;
 }
 function noteCard(n){
@@ -988,6 +1054,14 @@ function noteCard(n){
       ${t("barrier")}: <b>${n.barrier||"—"}%</b> · ${t("barrierDist")}: <b style="color:${bcol}">${bd!=null?pct(bd,0):"—"}</b><br/>
       ${t("maturity")}: <b>${n.maturity||"—"}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
       ${t("embedded")}: <b style="color:var(--watch)">≈ ${emb}%</b> <span class="muted">(${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/${STATE.lang==="ru"?"г":"y"}×${n.tenorYears||3})</span>
+    </div>
+    <div style="margin-top:9px;border-top:1px solid var(--line);padding-top:8px">
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:5px">${STATE.lang==="ru"?"Сценарии на погашении":"Payoff at maturity"}</div>
+      <div class="note-meta" style="font-size:12px">
+        <span style="color:var(--good)">▲</span> ${STATE.lang==="ru"?`Базовый ≥ старта — купон ${pct(n.coupon||0,1)}, капитал 100%.`:`Underlying ≥ start — coupon ${pct(n.coupon||0,1)}, capital 100%.`}<br/>
+        <span style="color:var(--watch)">◆</span> ${STATE.lang==="ru"?"Между барьером и стартом — купон, капитал 100%.":"Between barrier and start — coupon, capital 100%."}<br/>
+        <span style="color:var(--risk)">▼</span> ${STATE.lang==="ru"?(n.capProt?`Ниже барьера — защита капитала ${pct(n.capProt,0)}.`:"Ниже барьера — защиты нет, убыток повторяет падение базового актива."):(n.capProt?`Below barrier — ${pct(n.capProt,0)} capital protection.`:"Below barrier — no protection, loss tracks the underlying.")}
+      </div>
     </div>
   </div>`;
 }
@@ -1062,7 +1136,7 @@ function vHealth(a){
   const lvColor={high:"var(--risk)",medium:"var(--watch)",low:"var(--good)"};
   const lvLabel={high:STATE.lang==="ru"?"Высокий":"High",medium:STATE.lang==="ru"?"Средний":"Medium",low:STATE.lang==="ru"?"Низкий":"Info"};
 
-  return `<div class="panel"><h3>${t("healthTitle")}</h3>
+  return `${whatIfStrip(a)}<div class="panel"><h3>${t("healthTitle")}</h3>
     <div class="gauge-wrap">
       <div style="text-align:center">${gauge(a.score)}
         <div style="margin-top:4px;font-weight:800;color:${ratingColor(a.score)}">${ratingLabel(a.score)}</div></div>
@@ -1137,7 +1211,7 @@ function setPrices0(){ DATA.prices={status:"embedded", source:"embedded", update
 function loadPositions(arr, source){   // REPLACE the whole portfolio (demo / single source)
   if(!arr || !arr.length){ const le=$("#landErr"); if(le){le.textContent=t("needRows");le.className="err";} return; }
   arr=arr.slice(); tagPositions(arr, source);
-  STATE.positions=arr; STATE.editId=null; recalcSource(); STATE.view="overview";
+  STATE.positions=arr; STATE.editId=null; STATE.baseline=null; recalcSource(); STATE.view="overview";
   setPrices0(); render();
 }
 function addPositions(arr, source){    // APPEND a statement to the consolidated portfolio (multi-broker)
@@ -1162,7 +1236,7 @@ function saveAutosave(){ try{ if(STATE.positions && STATE.positions.length) loca
 function loadAutosave(){ try{ const a=JSON.parse(localStorage.getItem("wl_auto")||"null"); if(a&&a.positions&&a.positions.length){ STATE.positions=a.positions; STATE.client=a.client||""; STATE.positions.forEach(p=>{ if((p._id||0)>PID) PID=p._id; }); recalcSource(); return true; } }catch(e){} return false; }
 function getProfiles(){ try{ return JSON.parse(localStorage.getItem("wl_profiles")||"{}"); }catch(e){ return {}; } }
 function saveProfile(name){ if(!name || !STATE.positions) return; const all=getProfiles(); all[name]={positions:STATE.positions, client:STATE.client||name, savedAt:new Date().toISOString().slice(0,10)}; try{ localStorage.setItem("wl_profiles", JSON.stringify(all)); }catch(e){} }
-function loadProfile(name){ const p=getProfiles()[name]; if(!p) return; STATE.positions=(p.positions||[]).slice(); STATE.client=p.client||name; STATE.editId=null; STATE.positions.forEach(x=>{ if((x._id||0)>PID) PID=x._id; }); recalcSource(); STATE.view="overview"; STATE.settingsOpen=false; setPrices0(); render(); }
+function loadProfile(name){ const p=getProfiles()[name]; if(!p) return; STATE.positions=(p.positions||[]).slice(); STATE.client=p.client||name; STATE.editId=null; STATE.baseline=null; STATE.positions.forEach(x=>{ if((x._id||0)>PID) PID=x._id; }); recalcSource(); STATE.view="overview"; STATE.settingsOpen=false; setPrices0(); render(); }
 function deleteProfile(name){ const all=getProfiles(); delete all[name]; try{ localStorage.setItem("wl_profiles", JSON.stringify(all)); }catch(e){} }
 
 /* ---------- manual entry ---------- */
@@ -1403,6 +1477,7 @@ function bindTabs(){
   document.querySelectorAll("nav.tabs button").forEach(b=> b.onclick=()=>{ STATE.view=b.dataset.tab; render(); });
   const as=$("#addStmtBtn"); if(as) as.onclick=()=>$("#fileInp").click();
   const rp=$("#reportBtn"); if(rp) rp.onclick=openReport;
+  const cv=$("#csvBtn"); if(cv) cv.onclick=exportCSV;
   const lp=$("#livePricesBtn");
   if(lp) lp.onclick=async()=>{ if(!backendBase()) return;
     DATA.prices={status:"loading", source:"", updated:0, total:STATE.positions.filter(p=>p.ticker&&p.qty>0).length}; render();
@@ -1431,8 +1506,9 @@ function bindView(a){
 /* top controls */
 $("#langSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.lang=b.dataset.lang; render(); });
 $("#curSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.base=b.dataset.cur; render(); });
-$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.sources=[]; STATE.source=""; STATE.client=""; STATE.editId=null; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
+$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.sources=[]; STATE.source=""; STATE.client=""; STATE.editId=null; STATE.baseline=null; STATE.showClients=false; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
 $("#gearBtn").onclick=()=>{ STATE.settingsOpen=!STATE.settingsOpen; render(); };
+$("#clientsBtn").onclick=()=>{ STATE.showClients=!STATE.showClients; render(); };
 $("#fileInp").addEventListener("change", e=>{ handleFiles(e.target.files); e.target.value=""; });
 
 /* init: show cached/embedded immediately, then refresh FX live (keyless) */
