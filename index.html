@@ -23,6 +23,9 @@
     -webkit-font-smoothing:antialiased; min-height:100vh;
   }
   a{color:var(--gold2)}
+  /* Подсказка в пустом поле не должна выглядеть как введённое значение —
+     иначе советник примет предположение инструмента за данные из выписки. */
+  input::placeholder{color:var(--muted);opacity:.55;font-style:italic}
   .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;
     max-width:min(520px,92vw);background:var(--panel);border:1px solid var(--line);
     border-left:3px solid var(--good);border-radius:10px;padding:11px 15px;font-size:13px;
@@ -1353,10 +1356,18 @@ function importBanner(){
     <span style="color:${bad?"var(--risk)":"var(--watch)"};font-size:16px;line-height:1.2">${bad?"▲":"i"}</span>
     <div style="flex:1;min-width:220px;font-size:13px;line-height:1.55">
       ${parts.join(" · ")}
-      ${n.checkTotal?(()=>{ const c=n.checkTotal, ok=c.diff<=0.005;
-        return `<div style="font-size:12.5px;margin-top:5px;color:${ok?"var(--good)":"var(--risk)"}">${ru
-          ? `Сверка с итогом выписки: заявлено <b>${c.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}</b>, распознано <b>${c.sum.toLocaleString("ru-RU",{maximumFractionDigits:0})}</b> — ${ok?"сходится":`<b>расхождение ${(c.diff*100).toFixed(1)}%</b>: часть позиций прочитана неверно или не прочитана вовсе`}`
-          : `Reconciled against the statement total: stated <b>${c.stated.toLocaleString("en-US",{maximumFractionDigits:0})}</b>, parsed <b>${c.sum.toLocaleString("en-US",{maximumFractionDigits:0})}</b> — ${ok?"matches":`<b>${(c.diff*100).toFixed(1)}% gap</b>: some positions were misread or missed`}`}</div>`; })():""}
+      ${n.checkTotal?(()=>{ const c=n.checkTotal;
+        const num=v=>v.toLocaleString(ru?"ru-RU":"en-US",{maximumFractionDigits:0});
+        const rows=c.lines.map(l=>{ const ok=l.diff<=0.005;
+          return `<div style="color:${ok?"var(--good)":"var(--risk)"}">${l.ccy?esc(l.ccy)+": ":""}${ru?"заявлено":"stated"} <b>${num(l.stated)}</b>, ${ru?"распознано":"parsed"} <b>${num(l.sum)}</b> — ${ok?(ru?"сходится":"matches"):`<b>${ru?"расхождение":"gap"} ${(l.diff*100).toFixed(1)}%</b>`}</div>`;
+        }).join("");
+        const note = (c.mixed && c.lines.some(l=>!l.ccy))
+          ? `<div class="muted" style="margin-top:3px">${ru
+              ? `Итог дан без валюты, а позиции в разных (${c.ccys.join(", ")}) — сравнение идёт по сумме колонки, не по активам.`
+              : `The total carries no currency while positions span several (${c.ccys.join(", ")}) — the comparison is on the raw column sum, not on assets.`}</div>` : "";
+        return `<div style="font-size:12.5px;margin-top:5px;line-height:1.5">
+          <span class="muted">${ru?"Сверка с итогами выписки":"Reconciliation with statement totals"}:</span>
+          ${rows}${note}</div>`; })():""}
       ${n.pdfHeur?`<div class="muted" style="font-size:12.5px;margin-top:4px">${ru
         ? "PDF разбирается эвристически: колонки восстанавливаются по расположению текста. <b>Сверьте суммы и количество позиций с выпиской</b> прежде чем делать выводы — надёжнее CSV/Excel-экспорт из брокера."
         : "The PDF is parsed heuristically: columns are inferred from text layout. <b>Check the amounts and the number of positions against the statement</b> before drawing conclusions — a CSV/Excel export is the reliable path."}</div>`:""}
@@ -1647,13 +1658,23 @@ function buildReport(a){
     "<b>Сектор не указан</b> ни в одной строке выписки — концентрация по секторам не оценивалась и в скор не входит.",
     "<b>Sector is absent</b> from every statement row — sector concentration was not assessed and is excluded from the score."));
   const ck=(STATE.importNote||{}).checkTotal;
-  if(ck) caveats.push(ck.diff<=0.005
-    ? L(`<b>Сверка с итогом выписки пройдена:</b> заявлено ${ck.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}, распознано столько же.`,
-        `<b>Reconciled with the statement total:</b> stated ${ck.stated.toLocaleString("en-US",{maximumFractionDigits:0})}, parsed the same.`)
-    : L(`<b>Расхождение с итогом выписки ${(ck.diff*100).toFixed(1)}%</b>: заявлено ${ck.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}, распознано ${ck.sum.toLocaleString("ru-RU",{maximumFractionDigits:0})}. Часть позиций прочитана неверно — <b>выводы делать рано</b>.`,
-        `<b>${(ck.diff*100).toFixed(1)}% gap versus the statement total</b>: stated ${ck.stated.toLocaleString("en-US",{maximumFractionDigits:0})}, parsed ${ck.sum.toLocaleString("en-US",{maximumFractionDigits:0})}. Some positions were misread — <b>conclusions are premature</b>.`));
+  if(ck) caveats.push((()=>{
+    const num=v=>v.toLocaleString(ru?"ru-RU":"en-US",{maximumFractionDigits:0});
+    const bad=ck.lines.filter(l=>l.diff>0.005);
+    const head = bad.length
+      ? L(`<b>Расхождение с итогами выписки</b> (${bad.map(l=>l.ccy||"итог").join(", ")}) — часть позиций прочитана неверно, <b>выводы делать рано</b>: `,
+          `<b>Gap versus the statement totals</b> (${bad.map(l=>l.ccy||"total").join(", ")}) — some positions were misread, <b>conclusions are premature</b>: `)
+      : L("<b>Все строки выписки прочитаны</b>, итоги сошлись: ",
+          "<b>Every statement row was read</b>, totals match: ");
+    const body = ck.lines.map(l=>`${l.ccy?l.ccy+" ":""}${num(l.stated)} → ${num(l.sum)}`).join("; ");
+    const tail = (ck.mixed && ck.lines.some(l=>!l.ccy))
+      ? L(` Итог в выписке дан без валюты, а позиции в разных (${ck.ccys.join(", ")}), поэтому сверка идёт по сумме колонки и активами не является: активы ${money(a.aum)} в ${B}.`,
+          ` The statement total carries no currency while positions span several (${ck.ccys.join(", ")}), so the check runs on the raw column sum and is not the asset total: assets are ${money(a.aum)} in ${B}.`)
+      : "";
+    return head+body+"."+tail;
+  })());
 
-  const caveatBox = caveats.length ? `<div class="rep-note${ck&&ck.diff>0.005?" alert":""}">
+  const caveatBox = caveats.length ? `<div class="rep-note${ck&&!ck.ok?" alert":""}">
     <b>${L("Что учтено не полностью","Known gaps")}</b>
     <ul>${caveats.map(c=>`<li>${c}</li>`).join("")}</ul></div>` : "";
 
@@ -1911,8 +1932,77 @@ async function exportCSV(){
 }
 
 /* ---------- Structured & derivatives ---------- */
+/* Что удаётся вычитать из НАЗВАНИЯ ноты. Брокеры часто кодируют параметры
+   прямо в наименовании инструмента: «Autocall Note S&P 500 8% 2028». Это
+   подсказки, а не значения: подставляются только по явному действию советника,
+   иначе получилась бы ровно та выдумка, от которой мы весь день уходим. */
+const UNDERLYING_HINTS = [
+  [/s&?\s?p\s?500|spx\b/i,"S&P 500"], [/euro\s?stoxx\s?50|sx5e\b/i,"EuroStoxx 50"],
+  [/nasdaq|ndx\b/i,"Nasdaq 100"], [/\bdax\b/i,"DAX"], [/ftse\s?100/i,"FTSE 100"],
+  [/nikkei|nky\b/i,"Nikkei 225"], [/smi\b/i,"SMI"], [/hang\s?seng|hsi\b/i,"Hang Seng"],
+  [/msci\s+world/i,"MSCI World"], [/russell\s?2000/i,"Russell 2000"], [/\bcac\s?40/i,"CAC 40"]
+];
+function guessNoteParams(n){
+  const nm=String(n.name||"");
+  const g={};
+  for(const [re,name] of UNDERLYING_HINTS) if(re.test(nm)){ g.underlying=name; break; }
+  const pcts=[...nm.matchAll(/(\d{1,2}(?:[.,]\d{1,2})?)\s*%/g)].map(m=>parseNum(m[1]));
+  if(pcts.length) g.coupon=pcts[0];                       // первый процент — обычно купон
+  if(pcts.length>1) g.barrier=pcts.find(v=>v>=40 && v<=100);
+  const ymd=nm.match(/\b(20\d\d)[-.\/](\d{1,2})[-.\/](\d{1,2})\b/);
+  const year=nm.match(/\b(20[2-9]\d)\b/);
+  if(ymd) g.maturity=`${ymd[1]}-${String(ymd[2]).padStart(2,"0")}-${String(ymd[3]).padStart(2,"0")}`;
+  else if(year) g.maturity=`${year[1]}-12-31`;
+  return g;
+}
+
+/* Рабочее место для нот: все, что движок не может оценить, — одним списком с
+   полями. Пока эти поля пусты, главные числа продукта (справедливый купон,
+   маржа эмитента, вероятность пробоя) не появляются вовсе. */
+function notesWorkbench(a){
+  const pend=a.notes.filter(n=>noteMissing(n).length);
+  if(!pend.length) return "";
+  const ru=STATE.lang==="ru";
+  const noEngine = !backendBase() || STATE.engineDown;
+  const val=pend.reduce((s,n)=>s+n.baseValue,0);
+  const fld=(n,key,ph,attrs="")=>`<input data-nb="${key}" data-id="${n._id}" ${attrs}
+      value="${esc(n[key]??"")}" placeholder="${esc(ph??"")}"
+      style="width:100%;padding:5px 7px;font-size:12px"/>`;
+  const rows=pend.map(n=>{
+    const g=guessNoteParams(n), miss=noteMissing(n);
+    const hasGuess=Object.keys(g).some(k=>g[k]!=null && (n[k]==null||n[k]===""));
+    return `<tr>
+      <td style="min-width:150px"><b style="font-size:12.5px">${esc(n.name)}</b>
+        <div class="muted" style="font-size:11px">${esc(n.broker)} · ${fmtFull(n.baseValue)}</div>
+        <div style="color:var(--watch);font-size:11px;margin-top:2px">${ru?"нет: ":"missing: "}${noteMissingLabel(miss)}</div></td>
+      <td style="width:120px">${fld(n,"underlying",g.underlying||"S&P 500")}</td>
+      <td style="width:72px">${fld(n,"coupon",g.coupon!=null?String(g.coupon):"8.0",'type="number" step="0.1" min="0" max="100"')}</td>
+      <td style="width:72px">${fld(n,"barrier",g.barrier!=null?String(g.barrier):"65",'type="number" step="1" min="1" max="100"')}</td>
+      <td style="width:80px">${fld(n,"capProt","0",'type="number" step="1" min="0" max="100"')}</td>
+      <td style="width:132px">${fld(n,"maturity",g.maturity||"",'type="date"')}</td>
+      <td style="width:74px">${fld(n,"tenorYears","",'type="number" step="0.5" min="0.25" max="30"')}</td>
+      <td style="width:96px">${hasGuess?`<button class="btn ghost" data-nbguess="${n._id}" style="padding:4px 8px;font-size:11px">${ru?"из названия":"from name"}</button>`:""}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="panel" style="border-color:var(--watch)">
+    <h3>${ru?"Ноты ждут параметров":"Notes awaiting parameters"} <span class="hint">${pend.length}</span></h3>
+    <div class="footnote" style="margin-bottom:10px">${ru
+      ? `На ${fmtFull(val)} движок не может посчитать ни справедливый купон, ни маржу эмитента, ни вероятность пробоя барьера — в выписке нет нужных полей. Заполните их здесь: расчёт запустится сам, как только по ноте появятся все четыре. Кнопка «из названия» подставляет то, что удалось вычитать из наименования бумаги — <b>проверьте по проспекту</b>, инструмент не выдумывает эти числа за вас.`
+      : `For ${fmtFull(val)} the engine cannot compute the fair coupon, the issuer margin or the barrier probability — the statement lacks the fields. Enter them here and pricing starts as soon as a note has all four. "From name" fills in what could be read from the instrument name — <b>verify against the term sheet</b>; the tool does not invent these numbers for you.`}</div>
+    ${noEngine?`<div class="footnote" style="color:var(--risk);margin-bottom:10px">${ru
+      ? `<b>Движок сейчас недоступен</b> (${esc(STATE.engineDown||"бэкенд не настроен")}). Даже заполненные параметры не дадут оценки: нужен локальный сервер с расчётным ядром — <code>http://127.0.0.1:8787/</code>.`
+      : `<b>The engine is unavailable</b> (${esc(STATE.engineDown||"no backend configured")}). Filling the fields will not produce a valuation: the local server with the pricing core is required.`}</div>`:""}
+    <div style="overflow-x:auto"><table><thead><tr>
+      <th>${ru?"Нота":"Note"}</th><th>${ru?"Базовый актив":"Underlying"}</th>
+      <th>${ru?"Купон %":"Coupon %"}</th><th>${ru?"Барьер %":"Barrier %"}</th>
+      <th>${ru?"Защита %":"Protection %"}</th><th>${ru?"Погашение":"Maturity"}</th>
+      <th>${ru?"Срок, лет":"Tenor, y"}</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
 function vStructured(a){
-  let html="";
+  let html=notesWorkbench(a);
   // notes
   html+=`<div class="panel"><h3>${t("structTitle")} <span class="hint">${a.notes.length}</span></h3>`;
   if(!a.notes.length) html+=`<div class="empty">${t("noNotes")}</div>`;
@@ -2342,14 +2432,24 @@ function rowsToPositions(matrix){
   // \b в JS опирается на латиницу: после «итого» границы слова НЕ возникает,
   // и строка итога проскакивала в портфель, удваивая его. Границу задаём явно.
   const TOTAL_RE=/^\s*(итого|всего|итоговая|сумма|total|subtotal|sub-?total|grand\s*total|summe|gesamt|totaal)(\s|:|$|[^\wА-Яа-яЁё])/i;
-  let statedTotal=null;
+  const statedTotals=[];
   for(let i=1;i<matrix.length;i++){
     const r=matrix[i]; if(!r || !r.length || r.every(c=>c===""||c==null)) continue;
     const g=f=> map[f]!=null? r[map[f]] : undefined;
     let value=parseNum(g("value"));
     if(!value && g("quantity")!=null && g("price")!=null) value=parseNum(g("quantity"))*parseNum(g("price"));
     const label=String(g("name")||r.find(c=>String(c||"").trim())||"").trim();
-    if(TOTAL_RE.test(label)){ if(value>0 && statedTotal==null) statedTotal=value; continue; }
+    if(TOTAL_RE.test(label)){
+      // Итогов может быть несколько — по одному на валюту, как в настоящей
+      // выписке. Запоминаем все с их валютой: сверка пойдёт по каждой отдельно,
+      // так ошибка разбора локализуется до конкретного блока.
+      if(value>0){
+        const c=(String(g("ccy")||"").toUpperCase().match(/[A-Z]{3}/)||[null])[0]
+             || (String(label).toUpperCase().match(/\b([A-Z]{3})\b/)||[null])[0];
+        statedTotals.push({ccy:c, value});
+      }
+      continue;
+    }
     if(!value) continue;
     const p={
       broker: (g("broker")||"—").toString().trim(),
@@ -2384,7 +2484,7 @@ function rowsToPositions(matrix){
     // оставляем как есть — курса нет, значит сумма в базовой валюте неизвестна.
     out.push(p);
   }
-  out._statedTotal = statedTotal;
+  out._statedTotals = statedTotals;
   return out;
 }
 function parseNum(v){   // handles US (1,234.56), EU (1.234,56) and Swiss (1'234.56) number formats
@@ -2414,21 +2514,30 @@ async function handleFiles(fileList){
         if(!positions.length) pdfText=r.text;
       } else if(/\.csv$/i.test(file.name)){
         positions=rowsToPositions(parseCSV(await file.text()));
-        stated=positions._statedTotal;
+        stated=positions._statedTotals;
       } else {
         if(!window.XLSX) throw 0;
         // cellDates: даты приходят объектами Date, а не серийниками — конвертировать нечего
         const wb=XLSX.read(new Uint8Array(await file.arrayBuffer()),{type:"array",cellDates:true});
         positions=rowsToPositions(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""}));
-        stated=positions._statedTotal;
+        stated=positions._statedTotals;
       }
       if(!positions.length){ failed.push(file.name); continue; }
       const fname=file.name.replace(/\.[^.]+$/,"");
       positions.forEach(p=>{ if(!p.broker || p.broker==="—" || p.broker==="PDF") p.broker=fname; });   // tag by file/bank
-      if(stated>0){
-        const sum=positions.reduce((x,q)=>x+(+q.value||0),0);
-        statedSum=sum;
-        checkTotal={stated, sum, diff:Math.abs(sum-stated)/stated};
+      if(stated && stated.length){
+        // Сверка отвечает на один вопрос: «прочитали ли мы все строки и числа».
+        // Сравниваем в тех же единицах, в каких дан итог: если он помечен
+        // валютой — только с позициями в этой валюте.
+        const lines=stated.map(tot=>{
+          const src = tot.ccy ? positions.filter(q=>q.ccy===tot.ccy) : positions;
+          const sum = src.reduce((x,q)=>x+(+q.value||0),0);
+          return {ccy:tot.ccy, stated:tot.value, sum,
+                  diff: tot.value ? Math.abs(sum-tot.value)/tot.value : 0};
+        });
+        const ccys=[...new Set(positions.map(q=>q.ccy).filter(Boolean))];
+        checkTotal={lines, ccys, mixed:ccys.length>1,
+                    ok: lines.every(l=>l.diff<=0.005)};
         stated=null;
       }
       added+=addPositions(positions, file.name);
@@ -2598,6 +2707,34 @@ function bindView(a){
     };
   });
   if(STATE.view==="structured"){
+    // Рабочее место для нот: поле заполнено -> подпись ноты изменилась ->
+    // ensureNotesPriced() сам отправит её в движок при ближайшем рендере.
+    document.querySelectorAll("[data-nb]").forEach(el=>{
+      el.onchange=()=>{
+        const n=(STATE.positions||[]).find(x=>x._id===+el.dataset.id); if(!n) return;
+        const k=el.dataset.nb, v=el.value.trim();
+        if(v===""){ delete n[k]; render(); return; }
+        if(k==="underlying"||k==="maturity"){ n[k]=v; }
+        else {
+          const lim={coupon:[0,100],barrier:[1,100],capProt:[0,100],tenorYears:[0.25,30]}[k];
+          const x=parseNum(v);
+          if(!isFinite(x) || (lim && (x<lim[0] || x>lim[1]))){ delete n[k]; }
+          else n[k]=x;
+        }
+        render();
+      };
+    });
+    document.querySelectorAll("[data-nbguess]").forEach(b=>{
+      b.onclick=()=>{
+        const n=(STATE.positions||[]).find(x=>x._id===+b.dataset.nbguess); if(!n) return;
+        const g=guessNoteParams(n);
+        Object.keys(g).forEach(k=>{ if(g[k]!=null && (n[k]==null||n[k]==="")) n[k]=g[k]; });
+        toast(STATE.lang==="ru"
+          ? "Параметры подставлены из названия — сверьте с проспектом ноты."
+          : "Parameters taken from the instrument name — verify against the term sheet.");
+        render();
+      };
+    });
     document.querySelectorAll("[data-noteedit]").forEach(b=>{
       b.onclick=()=>{ STATE.editId=+b.dataset.noteedit; STATE.view="holdings"; STATE.holdFilter="all"; render(); };
     });
