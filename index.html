@@ -398,12 +398,15 @@ function P(broker,name,cls,ccy,value,feeProduct,sector,extra){
 }
 
 /* ---------- state ---------- */
-let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false, notePrice:{}, notePricing:{}, engineDown:null, brokerFees:{} };
+let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false, notePrice:{}, notePricing:{}, engineDown:null, brokerFees:{}, importNote:null };
 const t = k => (I18N[STATE.lang][k] ?? k);
 const $ = (s,r=document)=>r.querySelector(s);
 
 /* ---------- helpers ---------- */
-const toBase = p => p.value * (FX[p.ccy]||1) / (FX[STATE.base]||1);
+const fxKnown = p => !!FX[p.ccy];
+// Курса нет — значит сумма в базовой валюте НЕИЗВЕСТНА. Раньше здесь стояло
+// `FX[p.ccy]||1`, то есть неизвестный курс молча принимался за единицу.
+const toBase = p => fxKnown(p) ? p.value * FX[p.ccy] / (FX[STATE.base]||1) : 0;
 function fmtMoney(v){
   const sym = {USD:"$",EUR:"€",CHF:"CHF ",GBP:"£",JPY:"¥"}[STATE.base]||"";
   const a=Math.abs(v); let s;
@@ -416,10 +419,33 @@ function fmtFull(v){
   const sym = {USD:"$",EUR:"€",CHF:"CHF ",GBP:"£",JPY:"¥"}[STATE.base]||"";
   return sym+Math.round(v).toLocaleString(STATE.lang==="ru"?"ru-RU":"en-US");
 }
-const pct = (v,d=1)=> v.toFixed(d)+"%";
+// Форматирование не имеет права ронять интерфейс из-за данных в файле:
+// «2,1» из европейской выписки приходило строкой и роняло вкладку целиком.
+const pct = (v,d=1)=>{ const n=typeof v==="number"?v:parseNum(v); return (isFinite(n)?n:0).toFixed(d)+"%"; };
 const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
-function parseDate(s){ if(!s) return null; const d=new Date(s); return isNaN(d)?null:d; }
+function parseDate(s){
+  if(s==null || s==="") return null;
+  if(s instanceof Date) return isNaN(s) ? null : (s.getFullYear()>=1990 && s.getFullYear()<=2100 ? s : null);
+  // Excel отдаёт дату числом-серийником (15.09.2035 -> 49568). new Date(49568)
+  // молча давала 1970 год: дюрация схлопывалась в 0.5, срок ноты — тоже.
+  if(typeof s==="number" || /^\d{1,6}(\.\d+)?$/.test(String(s).trim())){
+    const n=+s;
+    if(n>=15000 && n<=80000){                       // 1941..2119 в системе Excel
+      const d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+      return isNaN(d)?null:d;
+    }
+    return null;                                    // просто число — это не дата
+  }
+  const t=String(s).trim();
+  // «31.12.2029» и «31/12/2029» Date разбирает как месяц-первым или не разбирает
+  const dmy=t.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
+  let d = dmy ? new Date(+dmy[3], +dmy[2]-1, +dmy[1]) : new Date(t);
+  if(isNaN(d)) return null;
+  const y=d.getFullYear();
+  if(y<1990 || y>2100) return null;                 // вне разумного окна — не дата
+  return d;
+}
 
 /* ============================================================
    ANALYSIS ENGINE
@@ -432,6 +458,7 @@ function analyze(positions, feeMap){
   const rows = positions.map(p=>{
     const bf = brokerFees(p.broker, tariffs);
     const baseValue = toBase(p);
+    const fxOk = fxKnown(p);
     const isCash = p.cls==="cash";
     // Зашитая стоимость ноты. Движок считает её целиком (структурирование,
     // хеджирование, кредитный риск, дистрибуция) на дату выпуска — это и есть
@@ -452,7 +479,7 @@ function analyze(positions, feeMap){
     const product = (embSrc==="engine") ? 0 : (p.feeProduct||0);
     const feePct = advisory + custody + product + entryAmort;     // % p.a.
     const feeAbs = baseValue * feePct/100;
-    return Object.assign({}, p, {baseValue, advisory, custody, product, entryAmort, feePct, feeAbs, isCash, embSrc, eng, tariffKnown:!!bf});
+    return Object.assign({}, p, {baseValue, advisory, custody, product, entryAmort, feePct, feeAbs, isCash, embSrc, eng, tariffKnown:!!bf, fxOk});
   });
 
   const aum = rows.reduce((s,r)=>s+r.baseValue,0);
@@ -475,6 +502,11 @@ function analyze(positions, feeMap){
   // Брокеры портфеля и то, по каким из них тарифы заведены. Разделять важно:
   // «0.64%/год по подтверждённым данным» и «0.64%, потому что остальное принято
   // за ноль» — разные утверждения, и второе продукту говорить нельзя.
+  // Позиции в валютах, курса которых нет: они не участвуют в суммах и должны
+  // быть видны, иначе активы под анализом окажутся тихо занижены.
+  const fxUnknown = rows.filter(r=>!r.fxOk);
+  const fxUnknownCcy = [...new Set(fxUnknown.map(r=>r.ccy))];
+
   const brokersAll = [...new Set(rows.map(r=>r.broker).filter(Boolean))];
   const brokersMissing = brokersAll.filter(b=>!brokerFees(b, tariffs));
   const missingVal = rows.filter(r=>!r.tariffKnown).reduce((s,r)=>s+r.baseValue,0);
@@ -492,7 +524,15 @@ function analyze(positions, feeMap){
   const top1 = sorted[0]? sorted[0].weight : 0;
   const top5 = sorted.slice(0,5).reduce((s,r)=>s+r.weight,0);
   const hhi = rows.reduce((s,r)=>s+Math.pow(r.weight,2),0); // 0..10000
-  const techShare = (bySector["US Tech"]||0)/aum*100;
+  // Сектор раньше сравнивался с буквальной строкой "US Tech" из демо-данных:
+  // на любой реальной выписке концентрация выходила 0.0% и печаталась как
+  // знание, завышая подоценку диверсификации. Считаем по нормализованному
+  // ярлыку, а если сектора в файле нет вовсе — не 0, а «не оценено».
+  const sectorKnown = rows.some(r=>String(r.sector||"").trim());
+  const techNorm = /tech|it\b|информацион|технолог|software|semiconductor|полупровод/i;
+  const techShare = sectorKnown
+    ? rows.filter(r=>techNorm.test(String(r.sector||""))).reduce((s,r)=>s+r.baseValue,0)/(aum||1)*100
+    : null;
 
   // currency
   const nonBase = Object.entries(byCcy).filter(([c])=>c!==STATE.base).map(([c,v])=>({c,pct:v/aum*100}));
@@ -521,14 +561,35 @@ function analyze(positions, feeMap){
 
   // bonds: rough modified duration & rate sensitivity (Macaulay on a par-ish bond)
   const bonds = rows.filter(r=>r.cls==="bond");
-  bonds.forEach(b=>{ const y=Math.max(0.005,(b.coupon||2.5)/100); const dt=parseDate(b.maturity); const n=Math.max(0.5, dt? (dt-TODAY)/(365*86400000) : 6); const mac=(1+y)/y*(1-1/Math.pow(1+y,n)); b._dur=mac/(1+y); b._years=n; });
+  // Дюрация. Раньше при нераспознанных данных подставлялись купон 2.5% и срок
+  // 6 лет — и результат печатался в таблице как знание. Без купона или даты
+  // погашения дюрацию посчитать нельзя, и говорить об этом надо прямо.
+  bonds.forEach(b=>{
+    const dt=parseDate(b.maturity);
+    const miss=[];
+    if(!(+b.coupon>0)) miss.push("coupon");
+    if(!dt) miss.push("maturity");
+    if(miss.length){ b._dur=null; b._years=null; b._durMissing=miss; return; }
+    const y=Math.max(0.005, +b.coupon/100);
+    const n=Math.max(0.5, (dt-TODAY)/(365*86400000));
+    // Приближение: бумага считается торгующейся по номиналу (доходность = купон).
+    const mac=(1+y)/y*(1-1/Math.pow(1+y,n));
+    b._dur=mac/(1+y); b._years=n; b._durMissing=null;
+  });
   const bondVal = bonds.reduce((s,b)=>s+b.baseValue,0);
-  const portDuration = bondVal? bonds.reduce((s,b)=>s+b._dur*b.baseValue,0)/bondVal : 0;
+  // Средневзвешенная дюрация — только по тем облигациям, где её удалось
+  // посчитать, и с явным охватом: «≈4.2 по 3 из 7 бумаг» честнее, чем «≈4.2».
+  const durBonds = bonds.filter(b=>b._dur!=null);
+  const durVal   = durBonds.reduce((s,b)=>s+b.baseValue,0);
+  const portDuration = durVal ? durBonds.reduce((s,b)=>s+b._dur*b.baseValue,0)/durVal : null;
+  const durCoverage  = bondVal ? durVal/bondVal : 0;
+  const durMissing   = bonds.filter(b=>b._dur==null);
 
   /* ---------- sub-scores (0..100) ---------- */
   const sub = {};
   // Diversification: top1 & HHI
-  sub.diversification = clamp(100 - Math.max(0,(top1-8))*4 - Math.max(0,(hhi-700))*0.03 - Math.max(0,(techShare-20))*1.2);
+  sub.diversification = clamp(100 - Math.max(0,(top1-8))*4 - Math.max(0,(hhi-700))*0.03
+    - (techShare!=null ? Math.max(0,(techShare-20))*1.2 : 0));
   // Cost: blended fee vs benchmark
   // Пока тарифы не заведены, издержки не оценены. Занизить скор, посчитав
   // только TER, так же неверно, как завысить: вес перераспределяется.
@@ -563,10 +624,10 @@ function analyze(positions, feeMap){
   return {
     rows, sorted, aum, byClass, byBroker, byCcy, bySector,
     feeAbs, blendedFee, dragPct, dragAbs, feeComponents,
-    brokersAll, brokersMissing, missingVal, feeComplete,
-    top1, top5, hhi, techShare, largestFx, nonBase,
+    brokersAll, brokersMissing, missingVal, feeComplete, fxUnknown, fxUnknownCcy,
+    top1, top5, hhi, techShare, sectorKnown, largestFx, nonBase,
     illiquid, illiquidPct, cashPct, notes, derivs, notionalAbs, leverage,
-    bonds, bondVal, portDuration, enginePending,
+    bonds, bondVal, portDuration, durCoverage, durMissing, durBonds, enginePending,
     sub, score, W
   };
 }
@@ -588,11 +649,13 @@ function resolutions(a){
       L==="ru"?`«${top.name}» занимает ${pct(a.top1)} портфеля (комфортный порог ~10%). Рассмотрите частичную фиксацию или хедж.`
               :`"${top.name}" is ${pct(a.top1)} of the portfolio (comfort threshold ~10%). Consider partial trimming or a hedge.`);
   }
-  if(a.techShare>20){
+  if(a.techShare!=null && a.techShare>20){
     add("high",
       L==="ru"?"Секторальная концентрация: US Tech":"Sector concentration: US Tech",
-      L==="ru"?`${pct(a.techShare)} активов в технологическом секторе США (Apple, Microsoft, NVIDIA, Tesla, Amazon). Высокая корреляция позиций — диверсификация по секторам недостаточна.`
-              :`${pct(a.techShare)} of assets sit in US tech (Apple, Microsoft, NVIDIA, Tesla, Amazon). Highly correlated names — sector diversification is thin.`);
+      (()=>{ const nm=a.rows.filter(r=>/tech|it\b|информацион|технолог|software|semiconductor|полупровод/i.test(String(r.sector||"")))
+               .sort((x,y)=>y.baseValue-x.baseValue).slice(0,5).map(r=>esc(r.name)).join(", ");
+        return L==="ru"?`${pct(a.techShare)} активов в технологическом секторе${nm?` (${nm})`:""}. Высокая корреляция позиций — диверсификация по секторам недостаточна.`
+                       :`${pct(a.techShare)} of assets sit in technology${nm?` (${nm})`:""}. Highly correlated names — sector diversification is thin.`; })());
   }
   // fees
   if(a.dragPct>0.3){
@@ -718,11 +781,21 @@ function resolutions(a){
   }
 
   // bond interest-rate risk
-  if(a.aum && a.bondVal/a.aum>0.10 && a.portDuration>6){
+  // Дюрация могла не посчитаться — тогда о процентном риске мы просто не знаем
+  // и молчать об этом нельзя: облигации в портфеле есть, оценки риска нет.
+  if(a.durMissing.length){
+    const val=a.durMissing.reduce((x,b)=>x+b.baseValue,0);
+    add(a.bondVal && val/a.bondVal>0.5 ? "medium" : "low",
+      L==="ru"?`Дюрация не посчитана по ${a.durMissing.length} облигац${a.durMissing.length===1?"ии":"иям"}`
+              :`Duration not computed for ${a.durMissing.length} bond(s)`,
+      L==="ru"?`Нет купона или даты погашения у: ${a.durMissing.slice(0,4).map(b=>esc(b.name)).join(", ")}${a.durMissing.length>4?" и др.":""} (${fmtFull(val)}). Процентный риск по этим бумагам не оценён и в дюрацию портфеля не входит — допишите купон и погашение в карточке позиции.`
+              :`Coupon or maturity missing for: ${a.durMissing.slice(0,4).map(b=>esc(b.name)).join(", ")}${a.durMissing.length>4?" and others":""} (${fmtFull(val)}). Rate risk on these is not assessed and is excluded from portfolio duration — add coupon and maturity in the position card.`);
+  }
+  if(a.aum && a.portDuration!=null && a.bondVal/a.aum>0.10 && a.portDuration>6){
     add("medium",
       L==="ru"?"Процентный риск облигаций":"Bond interest-rate risk",
-      L==="ru"?`Дюрация облигационной части ≈ ${a.portDuration.toFixed(1)}: при росте ставок на +1% эта часть портфеля подешевеет примерно на ${a.portDuration.toFixed(1)}%.`
-              :`Bond-sleeve duration ≈ ${a.portDuration.toFixed(1)}: a +1% rate move would cut that sleeve by about ${a.portDuration.toFixed(1)}%.`);
+      L==="ru"?`Дюрация облигационной части ≈ ${a.portDuration.toFixed(1)}${a.durCoverage<0.999?` (посчитана по ${pct(a.durCoverage*100,0)} номинала — по остальным бумагам не хватает данных)`:""}: при росте ставок на +1% эта часть портфеля подешевеет примерно на ${a.portDuration.toFixed(1)}%. Расчёт по приближению «бумага торгуется по номиналу».`
+              :`Bond-sleeve duration ≈ ${a.portDuration.toFixed(1)}${a.durCoverage<0.999?` (covering ${pct(a.durCoverage*100,0)} of nominal — the rest lacks data)`:""}: a +1% rate move would cut that sleeve by about ${a.portDuration.toFixed(1)}%. Computed on a par-priced approximation.`);
   }
 
   const order={high:0,medium:1,low:2};
@@ -796,8 +869,17 @@ async function fetchJSON(url, ms=7000){
   finally{ clearTimeout(to); }
 }
 function applyFxRates(rates, date, source){
-  const f={USD:1};                                   // Frankfurter gives units-of-CODE per 1 USD; our FX is USD per 1 unit => invert
-  ["EUR","CHF","GBP","JPY"].forEach(s=>{ const v=+rates[s]; f[s]= v>0 ? 1/v : FX_EMBED[s]; });
+  // Берём ВСЕ валюты, что прислал источник, а не заранее выбранную четвёрку:
+  // у семейного офиса в портфеле легко окажется SEK, HKD или CAD, и раньше
+  // такая позиция оставалась без курса просто потому, что её здесь не ждали.
+  // Источник даёт единиц валюты за 1 USD, у нас FX — доллары за единицу.
+  const f={USD:1};
+  Object.keys(rates||{}).forEach(k=>{
+    const code=String(k).toUpperCase(); if(code==="USD") return;
+    const v=+rates[k]; if(v>0) f[code]=1/v;
+  });
+  // Вшитые курсы — только как запасной вариант для валют, которых не было в ответе.
+  Object.keys(FX_EMBED).forEach(k=>{ if(f[k]==null) f[k]=FX_EMBED[k]; });
   FX=f; DATA.fx={status:"live", asOf:(date||"").toString().slice(0,10), source};
 }
 function cacheFx(){ try{ localStorage.setItem("wl_fx", JSON.stringify({fx:FX, meta:DATA.fx, ts:Date.now()})); }catch(e){} }
@@ -807,9 +889,9 @@ function loadFxCache(){ try{ const c=JSON.parse(localStorage.getItem("wl_fx")||"
 async function refreshFX(){
   const base=backendBase();
   if(base){ try{ const j=await fetchJSON(base+"/fx?base=USD"); applyFxRates(j.rates||j, j.date, j.source?("backend · "+j.source):"backend"); cacheFx(); return; }catch(e){} }
-  try{ const j=await fetchJSON("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR,CHF,GBP,JPY"); applyFxRates(j.rates, j.date, "Frankfurter · ECB"); cacheFx(); return; }catch(e){}
+  try{ const j=await fetchJSON("https://api.frankfurter.dev/v1/latest?base=USD"); applyFxRates(j.rates, j.date, "Frankfurter · ECB"); cacheFx(); return; }catch(e){}
   try{ const j=await fetchJSON("https://open.er-api.com/v6/latest/USD"); if(j.result==="success"){ applyFxRates(j.rates, (j.time_last_update_utc||"").slice(0,16), "open.er-api"); cacheFx(); return; } }catch(e){}
-  try{ const j=await fetchJSON("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"); const u=j.usd||{}; applyFxRates({EUR:u.eur,CHF:u.chf,GBP:u.gbp,JPY:u.jpy}, j.date, "currency-api"); cacheFx(); return; }catch(e){}
+  try{ const j=await fetchJSON("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"); const u=j.usd||{}; const up={}; Object.keys(u).forEach(k=>{ up[k.toUpperCase()]=u[k]; }); applyFxRates(up, j.date, "currency-api"); cacheFx(); return; }catch(e){}
   if(!loadFxCache()){ FX=Object.assign({},FX_EMBED); DATA.fx={status:"embedded", asOf:FX_DATE_EMBED, source:"embedded"}; }
 }
 async function refreshPrices(){
@@ -1154,14 +1236,16 @@ function render(){
   const app=$("#app");
   const head = STATE.settingsOpen ? settingsPanel() : "";
   if(STATE.showClients){ app.innerHTML=head+clientsView(); bindClients(); if(STATE.settingsOpen) bindSettings(); return; }
-  if(!STATE.positions){ app.innerHTML=head+landing(); bindLanding(); if(STATE.settingsOpen) bindSettings(); return; }
+  if(!STATE.positions){ app.innerHTML=head+importBanner()+landing(); bindLanding();
+    const ic0=$("#importNoteClose"); if(ic0) ic0.onclick=()=>{ STATE.importNote=null; render(); };
+    if(STATE.settingsOpen) bindSettings(); return; }
 
   const a = analyze(STATE.positions);
   // Базовый срез фиксируем только когда ноты уже оценены движком, иначе первый
   // же результат оценки покажется «изменением портфеля», которого не было.
   if(!STATE.baseline && !a.enginePending)
     STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum};
-  app.innerHTML = head + tabsBar() + unclassifiedBanner() + viewBody(a);
+  app.innerHTML = head + tabsBar() + importBanner() + fxUnknownBanner(a) + unclassifiedBanner() + viewBody(a);
   bindTabs(); bindView(a); if(STATE.settingsOpen) bindSettings();
   const rbb=$("#rebaseBtn"); if(rbb) rbb.onclick=()=>{ STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum}; render(); };
   ensureNotesPriced();   // сам себя останавливает, когда всё оценено
@@ -1183,6 +1267,57 @@ function viewBody(a){
     case "fees": return vFees(a);
     case "health": return vHealth(a);
   }
+}
+
+/* Итог последней загрузки файла — постоянной плашкой, пока её не закроют.
+   Показывает и успех, и то, чего разбор НЕ смог: иначе дашборд выглядит
+   разбором вашей выписки независимо от того, что из неё удалось прочитать. */
+function importBanner(){
+  const n=STATE.importNote; if(!n) return "";
+  const ru=STATE.lang==="ru";
+  const bad=!n.added;
+  const parts=[];
+  if(n.added) parts.push(ru?`Добавлено позиций: <b>${n.added}</b>`:`Added <b>${n.added}</b> positions`);
+  if(n.failed.length) parts.push(ru?`не распознаны файлы: <b>${n.failed.map(esc).join(", ")}</b>`
+                                   :`files not parsed: <b>${n.failed.map(esc).join(", ")}</b>`);
+  if(n.skipped) parts.push(ru?`пропущено строк без суммы: <b>${n.skipped}</b>`
+                             :`rows skipped without a value: <b>${n.skipped}</b>`);
+  if(!n.added) parts.push(ru?"<b>ни одной позиции прочитать не удалось — на экране прежние данные</b>"
+                            :"<b>no positions could be read — the screen still shows the previous data</b>");
+  return `<div class="panel" style="display:flex;align-items:flex-start;gap:13px;flex-wrap:wrap;
+      padding:12px 16px;border-color:${bad?"var(--risk)":"var(--watch)"};background:var(--navy)">
+    <span style="color:${bad?"var(--risk)":"var(--watch)"};font-size:16px;line-height:1.2">${bad?"▲":"i"}</span>
+    <div style="flex:1;min-width:220px;font-size:13px;line-height:1.55">
+      ${parts.join(" · ")}
+      ${n.checkTotal?(()=>{ const c=n.checkTotal, ok=c.diff<=0.005;
+        return `<div style="font-size:12.5px;margin-top:5px;color:${ok?"var(--good)":"var(--risk)"}">${ru
+          ? `Сверка с итогом выписки: заявлено <b>${c.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}</b>, распознано <b>${c.sum.toLocaleString("ru-RU",{maximumFractionDigits:0})}</b> — ${ok?"сходится":`<b>расхождение ${(c.diff*100).toFixed(1)}%</b>: часть позиций прочитана неверно или не прочитана вовсе`}`
+          : `Reconciled against the statement total: stated <b>${c.stated.toLocaleString("en-US",{maximumFractionDigits:0})}</b>, parsed <b>${c.sum.toLocaleString("en-US",{maximumFractionDigits:0})}</b> — ${ok?"matches":`<b>${(c.diff*100).toFixed(1)}% gap</b>: some positions were misread or missed`}`}</div>`; })():""}
+      ${n.pdfHeur?`<div class="muted" style="font-size:12.5px;margin-top:4px">${ru
+        ? "PDF разбирается эвристически: колонки восстанавливаются по расположению текста. <b>Сверьте суммы и количество позиций с выпиской</b> прежде чем делать выводы — надёжнее CSV/Excel-экспорт из брокера."
+        : "The PDF is parsed heuristically: columns are inferred from text layout. <b>Check the amounts and the number of positions against the statement</b> before drawing conclusions — a CSV/Excel export is the reliable path."}</div>`:""}
+    </div>
+    <button class="btn ghost" id="importNoteClose" style="padding:4px 10px;font-size:11.5px">${ru?"Понятно":"Got it"}</button>
+  </div>`;
+}
+
+function fxUnknownBanner(a){
+  if(!a || !a.fxUnknown.length) return "";
+  const ru=STATE.lang==="ru";
+  const byCcy=a.fxUnknownCcy.map(c=>{
+    const v=a.fxUnknown.filter(r=>r.ccy===c).reduce((s,r)=>s+r.value,0);
+    return `${v.toLocaleString(ru?"ru-RU":"en-US",{maximumFractionDigits:0})} ${esc(c)}`;
+  }).join(" · ");
+  return `<div class="panel" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+      padding:12px 16px;border-color:var(--risk);background:var(--navy)">
+    <span style="color:var(--risk);font-size:16px">▲</span>
+    <div style="flex:1;min-width:220px">
+      <b style="font-size:13.5px">${a.fxUnknown.length} ${ru?"позиц"+(a.fxUnknown.length===1?"ия":"ий")+" в валюте без курса":"position(s) in a currency with no rate"}: ${byCcy}</b>
+      <div class="muted" style="font-size:12.5px;line-height:1.5;margin-top:2px">${ru
+        ? "Курс этих валют получить не удалось, поэтому суммы в базовой валюте неизвестны — эти позиции <b>не входят</b> в активы под анализом, распределение и комиссии. Приложение не переводит их по курсу 1:1."
+        : "No rate was available for these currencies, so their base-currency value is unknown — they are <b>excluded</b> from assets under analysis, allocation and fees. The app does not convert them at 1:1."}</div>
+    </div>
+  </div>`;
 }
 
 function unclassifiedBanner(){
@@ -1340,7 +1475,8 @@ function holdingRow(r,a){
     <td><span class="pill" style="background:${CLASSES[r.cls].c}22;color:${CLASSES[r.cls].c}">${t(CLASSES[r.cls].k)}</span></td>
     <td class="muted">${esc(r.broker)}</td>
     <td class="muted">${r.ccy}</td>
-    <td class="num">${fmtMoney(r.baseValue)}</td>
+    <td class="num">${r.fxOk ? fmtMoney(r.baseValue)
+      : `<span style="color:var(--risk)" title="${STATE.lang==="ru"?"курс валюты неизвестен — в суммы не включено":"currency rate unknown — excluded from totals"}">${(r.value||0).toLocaleString(STATE.lang==="ru"?"ru-RU":"en-US",{maximumFractionDigits:0})} ${esc(r.ccy)}</span>`}</td>
     <td class="num">${pct(r.weight)}</td>
     <td class="num">${pct(r.feePct,2)}</td>
     <td>${flags.map(f=>`<span class="flag" style="font-size:11px;margin-right:6px">${f}</span>`).join("")||'<span class="muted">—</span>'}</td>
@@ -1385,11 +1521,21 @@ function editPanel(){
     </div>
   </div>`;
 }
+/* Всё, что принадлежит КЛИЕНТУ, а не приложению. Когда портфель убран целиком,
+   это должно уйти вместе с ним: иначе договорные тарифы предыдущего клиента
+   молча применятся к следующему и будут выглядеть подтверждёнными, а оценки
+   нот и базовый срез перетекут между людьми. */
+function clearClientState(){
+  STATE.positions=null; STATE.sources=[]; STATE.source=""; STATE.editId=null;
+  STATE.brokerFees={}; STATE.notePrice={}; STATE.notePricing={};
+  STATE.engineDown=null; STATE.baseline=null; STATE.client="";
+  STATE.holdFilter="all"; STATE.importNote=null;
+}
 function delPosition(id){
   if(!STATE.positions) return;
   STATE.positions=STATE.positions.filter(p=>p._id!==id);
   if(STATE.editId===id) STATE.editId=null;
-  if(!STATE.positions.length){ STATE.positions=null; STATE.sources=[]; STATE.source=""; STATE.editId=null; }
+  if(!STATE.positions.length) clearClientState();
   else recalcSource();
   render();
 }
@@ -1506,9 +1652,9 @@ function vStructured(a){
   html+=`</div>`;
   // bonds
   const ru=STATE.lang==="ru";
-  html+=`<div class="panel"><h3>${ru?"Облигации":"Bonds"} <span class="hint">${a.bonds.length}${a.bonds.length?` · ${ru?"дюрация":"duration"} ≈ ${a.portDuration.toFixed(1)}`:""}</span></h3>`;
+  html+=`<div class="panel"><h3>${ru?"Облигации":"Bonds"} <span class="hint">${a.bonds.length}${a.bonds.length?` · ${ru?"дюрация":"duration"} ${a.portDuration!=null?`≈ ${a.portDuration.toFixed(1)}${a.durCoverage<0.999?` (${ru?"по":"of"} ${pct(a.durCoverage*100,0)} ${ru?"номинала":"nominal"})`:""}`:(ru?"н/д":"n/a")}`:""}</span></h3>`;
   if(!a.bonds.length) html+=`<div class="empty">${ru?"Облигаций не обнаружено.":"No bonds found."}</div>`;
-  else html+=`<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("coupon")}</th><th class="num">${t("maturity")}</th><th class="num">${ru?"Дюрация":"Duration"}</th><th class="num">+1% ${ru?"ставок":"rates"}</th></tr></thead><tbody>${a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td><td class="num">${pct(b.coupon||0,1)}</td><td class="num">${b.maturity||"—"}</td><td class="num">${b._dur.toFixed(1)}</td><td class="num" style="color:var(--risk)">−${b._dur.toFixed(1)}%</td></tr>`).join("")}</tbody></table>
+  else html+=`<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("coupon")}</th><th class="num">${t("maturity")}</th><th class="num">${ru?"Дюрация":"Duration"}</th><th class="num">+1% ${ru?"ставок":"rates"}</th></tr></thead><tbody>${a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td><td class="num">${b.coupon?pct(b.coupon,1):"—"}</td><td class="num">${b.maturity||"—"}</td><td class="num">${b._dur!=null?b._dur.toFixed(1):`<span class="muted" title="${ru?"не хватает: ":"missing: "}${(b._durMissing||[]).join(", ")}">—</span>`}</td><td class="num" style="color:${b._dur!=null?"var(--risk)":"var(--muted)"}">${b._dur!=null?`−${b._dur.toFixed(1)}%`:"—"}</td></tr>`).join("")}</tbody></table>
     <div class="footnote">${ru?"Дюрация и чувствительность — приблизительная оценка по купону и сроку (точную даёт Bloomberg).":"Duration and sensitivity are rough estimates from coupon and maturity (Bloomberg gives exact figures)."}</div>`;
   html+=`</div>`;
   return html;
@@ -1651,7 +1797,7 @@ function barCompare(l1,v1,l2,v2,max,money){
 /* ---------- Health ---------- */
 function vHealth(a){
   const subs=[
-    ["cDiversification",a.sub.diversification,`top-1 ${pct(a.top1)} · ${t("techConc")} ${pct(a.techShare)}`],
+    ["cDiversification",a.sub.diversification,`top-1 ${pct(a.top1)} · HHI ${Math.round(a.hhi)} · ${t("techConc")} ${a.techShare!=null?pct(a.techShare):(STATE.lang==="ru"?"сектор не указан":"sector not given")}`],
     ["cCost",a.sub.cost, a.feeComplete
        ? `${pct(a.blendedFee,2)} ${t("perYear")} · drag ${pct(a.dragPct,2)}`
        : (STATE.lang==="ru"?`не заведены тарифы по ${a.brokersMissing.length} брокер${a.brokersMissing.length===1?"у":"ам"}`
@@ -1760,7 +1906,7 @@ function addPositions(arr, source){    // APPEND a statement to the consolidated
 function removeSource(src){            // remove a single loaded statement
   if(!STATE.positions) return;
   STATE.positions=STATE.positions.filter(p=>(p._src||"—")!==src);
-  if(!STATE.positions.length){ STATE.positions=null; STATE.sources=[]; STATE.source=""; STATE.editId=null; }
+  if(!STATE.positions.length) clearClientState();
   else recalcSource();
   render();
 }
@@ -1856,7 +2002,7 @@ const DERIV_HINTS = ["option","опцион","put","call ","warrant","future","�
 const ETF_HINTS = ["ishares","spdr","vanguard","xtrackers","lyxor","amundi","invesco","etf","бпиф"];
 // Юридические формы — надёжный признак акции. Со границами слова, чтобы
 // "sa" не срабатывало внутри других слов.
-const EQUITY_PATTERN = /\b(inc|corp|corporation|co|ltd|plc|ag|sa|nv|oyj|spa|holdings?|group)\b\.?/;
+const EQUITY_PATTERN = /\b(inc|corp|corporation|co|ltd|limited|plc|ag|sa|nv|bv|ab|asa|oyj|oy|gmbh|kgaa|sas|srl|spa|pjsc|aps|holdings?|group|company)\b\.?|\ba\/s\b/;
 // Кириллические формы отдельно: \b в JS работает по ASCII и на «ао» не срабатывает
 const EQUITY_PATTERN_RU = /(^|[\s(])(ао|ап|пао|оао|зао)([\s).,]|$)/;
 
@@ -1899,11 +2045,18 @@ function rowsToPositions(matrix){
   const headers=matrix[0]; const map=mapHeaders(headers);
   if(map.name==null && map.value==null && map.quantity==null) return []; // not recognizable
   const out=[];
+  // Итоговая строка выписки — не позиция. Если её импортировать, портфель
+  // удвоится: сумма всех бумаг войдёт в него ещё раз отдельной строкой.
+  // Запоминаем её отдельно и потом сверяем с суммой распознанного.
+  const TOTAL_RE=/^\s*(итого|всего|total|subtotal|sub-?total|grand\s*total|summe|gesamt|totaal|итоговая)\b/i;
+  let statedTotal=null;
   for(let i=1;i<matrix.length;i++){
     const r=matrix[i]; if(!r || !r.length || r.every(c=>c===""||c==null)) continue;
     const g=f=> map[f]!=null? r[map[f]] : undefined;
     let value=parseNum(g("value"));
     if(!value && g("quantity")!=null && g("price")!=null) value=parseNum(g("quantity"))*parseNum(g("price"));
+    const label=String(g("name")||r.find(c=>String(c||"").trim())||"").trim();
+    if(TOTAL_RE.test(label)){ if(value>0 && statedTotal==null) statedTotal=value; continue; }
     if(!value) continue;
     const p={
       broker: (g("broker")||"—").toString().trim(),
@@ -1915,16 +2068,30 @@ function rowsToPositions(matrix){
       cls: (()=>{ const byCol=normClass(g("cls"));
         return byCol!=="unknown" ? byCol
              : normClass([g("name"), g("ticker"), g("sector")].filter(Boolean).join(" ")); })(),
-      ccy: (String(g("ccy")||"USD").toUpperCase().match(/[A-Z]{3}/)||["USD"])[0],
+      // Валюта НЕ подставляется. Если колонки нет или код не распознан, позиция
+      // уходит тем же путём, что и валюта без курса: видна, помечена, но в суммы
+      // не входит. Раньше здесь молча появлялся USD — и 5 млн рублей считались
+      // пятью миллионами долларов.
+      ccy: (String(g("ccy")||"").toUpperCase().match(/[A-Z]{3}/)||["?"])[0],
       value, feeProduct: parseNum(g("feeProduct"))||0, sector:(g("sector")||"").toString()
     };
-    ["coupon","barrier","maturity","underlying","notional"].forEach(f=>{ const v=g(f); if(v!=null&&v!=="") p[f]=isNaN(+v)?v:+v; });
+    // Числовые поля разбираем тем же парсером, что и суммы: в европейской
+    // выписке купон приходит как «2,1», а `+"2,1"` — это NaN, после которого
+    // строка доезжала до pct() и роняла вкладку.
+    ["coupon","barrier","notional","capProt","entry","tenorYears"].forEach(f=>{
+      const v=g(f); if(v==null||v==="") return;
+      const n=parseNum(v); if(n||n===0) p[f]=n;
+    });
+    ["maturity","underlying"].forEach(f=>{ const v=g(f); if(v!=null&&v!=="") p[f]=v; });
     const tk=g("ticker"); if(tk) p.ticker=String(tk).trim().toUpperCase();
     const isin=g("isin"); if(isin) p.isin=String(isin).trim().toUpperCase();
     const qn=parseNum(g("quantity")); if(qn) p.qty=qn;
-    if(!FX[p.ccy]) p.ccy="USD";
+    // Раньше здесь незнакомая валюта молча становилась USD: миллион шведских
+    // крон превращался в миллион долларов, и об этом никто не узнавал. Валюту
+    // оставляем как есть — курса нет, значит сумма в базовой валюте неизвестна.
     out.push(p);
   }
+  out._statedTotal = statedTotal;
   return out;
 }
 function parseNum(v){   // handles US (1,234.56), EU (1.234,56) and Swiss (1'234.56) number formats
@@ -1940,44 +2107,78 @@ function parseNum(v){   // handles US (1,234.56), EU (1.234,56) and Swiss (1'234
 // Accepts MULTIPLE files (CSV / Excel / PDF) and ACCUMULATES them into one consolidated portfolio.
 async function handleFiles(fileList){
   const files=Array.from(fileList||[]); if(!files.length) return;
-  const le=$("#landErr"); if(le){ le.textContent=""; le.className="muted"; }
-  let added=0; const failed=[]; let pdfHeur=false, pdfText="";
+  STATE.importNote=null;
+  let added=0; const failed=[]; let pdfHeur=false, pdfText=""; let skipped=0;
+  // Итог, заявленный в самой выписке. Сверка с ним ловит ошибки разбора так,
+  // как это сделал бы бухгалтер: сумма позиций обязана сойтись с итогом.
+  let stated=null, statedSum=0, checkTotal=null;
   for(const file of files){
     try{
       let positions=[];
       if(/\.pdf$/i.test(file.name)){
-        const r=await parsePdfFile(file); positions=r.positions; pdfHeur=true; if(!positions.length) pdfText=r.text;
+        const r=await parsePdfFile(file); positions=r.positions; pdfHeur=true;
+        skipped += (positions._skipped||[]).length;
+        if(!positions.length) pdfText=r.text;
       } else if(/\.csv$/i.test(file.name)){
         positions=rowsToPositions(parseCSV(await file.text()));
+        stated=positions._statedTotal;
       } else {
         if(!window.XLSX) throw 0;
-        const wb=XLSX.read(new Uint8Array(await file.arrayBuffer()),{type:"array"});
+        // cellDates: даты приходят объектами Date, а не серийниками — конвертировать нечего
+        const wb=XLSX.read(new Uint8Array(await file.arrayBuffer()),{type:"array",cellDates:true});
         positions=rowsToPositions(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""}));
+        stated=positions._statedTotal;
       }
       if(!positions.length){ failed.push(file.name); continue; }
       const fname=file.name.replace(/\.[^.]+$/,"");
       positions.forEach(p=>{ if(!p.broker || p.broker==="—" || p.broker==="PDF") p.broker=fname; });   // tag by file/bank
+      if(stated>0){
+        const sum=positions.reduce((x,q)=>x+(+q.value||0),0);
+        statedSum=sum;
+        checkTotal={stated, sum, diff:Math.abs(sum-stated)/stated};
+        stated=null;
+      }
       added+=addPositions(positions, file.name);
     }catch(e){ failed.push(file.name); }
   }
-  if(le){
-    const ru=STATE.lang==="ru";
-    if(added>0){ le.className="muted";
-      le.textContent=(ru?`Добавлено позиций: ${added}.`:`Added ${added} positions.`)
-        +(failed.length?(ru?` Не распознаны: ${failed.join(", ")}.`:` Not parsed: ${failed.join(", ")}.`):"")
-        +(pdfHeur?` ${t("pdfHeur")}`:""); }
-    else { le.className="err";
-      le.textContent=ru?"Не удалось распознать файл(ы). Надёжнее — CSV/Excel-экспорт из брокера (кнопка «Скачать шаблон»).":"Could not parse the file(s). A CSV/Excel export from the broker (Download template) is the reliable path.";
-      if(pdfText) console.log("[WealthLens] extracted PDF text:\n"+pdfText); }
-  }
+  // Итог импорта живёт в состоянии, а не в узле DOM. Раньше он писался в
+  // #landErr, который render() к этому моменту уже уничтожил: предупреждение
+  // «PDF разбирается эвристически» не показывалось ни секунды, а полный провал
+  // импорта на дашборде проходил вообще молча — пользователь видел прежние
+  // цифры и считал их разбором своего файла.
+  STATE.importNote={added, failed, pdfHeur, skipped, checkTotal, files:files.map(f=>f.name)};
+  if(!added && pdfText) console.log("[WealthLens] extracted PDF text:\n"+pdfText);
+  if(!added) toast(STATE.lang==="ru"
+    ? "Не удалось распознать ни одной позиции — данные на экране не изменились."
+    : "No positions could be parsed — nothing on screen has changed.", true);
+  render();
 }
 function showFileErr(){ const le=$("#landErr"); if(le){ le.textContent=t("fileErr"); le.className="err"; } }
 
+function csvDelimiter(text){
+  // Разделитель определяется ОДИН раз по строке заголовка. Раньше резали сразу
+  // и по запятой, и по точке с запятой: европейская выписка (разделитель «;»,
+  // десятичная запятая внутри чисел) рассыпалась по колонкам — позиция на
+  // 1 473 000 EUR попадала в портфель со стоимостью 50, и никакой ошибки.
+  const head=(String(text||"").split(/\r?\n/)[0]||"");
+  const countOutsideQuotes=ch=>{
+    let n=0,q=false;
+    for(let i=0;i<head.length;i++){ const c=head[i];
+      if(c==='"'){ if(q && head[i+1]==='"') i++; else q=!q; }
+      else if(!q && c===ch) n++;
+    }
+    return n;
+  };
+  const cand=[[";",countOutsideQuotes(";")],["\t",countOutsideQuotes("\t")],[",",countOutsideQuotes(",")]];
+  cand.sort((a,b)=>b[1]-a[1]);
+  return cand[0][1]>0 ? cand[0][0] : ",";
+}
 function parseCSV(text){
+  const DELIM=csvDelimiter(text);
   const rows=[]; let row=[],cur="",q=false;
   for(let i=0;i<text.length;i++){ const c=text[i];
     if(q){ if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
-    else { if(c==='"') q=true; else if(c===","||c===";"){ row.push(cur);cur=""; }
+    else { if(c==='"') q=true; else if(c===DELIM){ row.push(cur);cur=""; }
       else if(c==="\n"){ row.push(cur);rows.push(row);row=[];cur=""; }
       else if(c==="\r"){} else cur+=c; }
   }
@@ -1986,6 +2187,7 @@ function parseCSV(text){
 }
 
 // Extract text from a PDF and return {positions, text}. Best-effort — CSV/Excel is the reliable path.
+const PDF_CELL="\u0001";   // граница колонки, восстановленная по разрывам в строке
 async function parsePdfFile(file){
   if(!window.pdfjsLib) return {positions:[], text:""};
   pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -1996,7 +2198,21 @@ async function parsePdfFile(file){
     const byY={};
     tc.items.forEach(it=>{ const y=Math.round(it.transform[5]); (byY[y]=byY[y]||[]).push(it); });
     Object.keys(byY).sort((a,b)=>b-a).forEach(y=>{
-      const txt=byY[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str).join(" ").replace(/\s+/g," ").trim();
+      // Границы колонок восстанавливаем по горизонтальным разрывам. Раньше всё
+      // склеивалось пробелом, и «1 473 000,00» было не отличить от двух соседних
+      // колонок: число рвалось на куски, а стоимостью позиции становился обрывок.
+      const items=byY[y].sort((a,b)=>a.transform[4]-b.transform[4]);
+      let txt="", prevEnd=null;
+      items.forEach(it=>{
+        const x=it.transform[4], w=it.width||0, h=Math.abs(it.height||8);
+        if(prevEnd!=null){
+          const gap=x-prevEnd;
+          txt += gap > Math.max(5, h*0.55) ? PDF_CELL : (gap > 0.6 ? " " : "");
+        }
+        txt += it.str;
+        prevEnd = x + w;
+      });
+      txt=txt.replace(/[ \t]+/g," ").replace(new RegExp(PDF_CELL+"+","g"),PDF_CELL).trim();
       if(txt) lines.push(txt);
     });
   }
@@ -2004,27 +2220,41 @@ async function parsePdfFile(file){
 }
 // Heuristic row detection: a line with a name + amounts (+ optional ISIN/currency). Best-effort.
 function pdfLinesToPositions(lines){
-  const out=[];
-  const ccyRe=/\b(USD|EUR|CHF|GBP|JPY|CAD|AUD|SEK|NOK|DKK|HKD|SGD|CNY)\b/;
+  const out=[], skipped=[];
+  const ccyRe=/\b(USD|EUR|CHF|GBP|JPY|CAD|AUD|SEK|NOK|DKK|HKD|SGD|CNY|PLN|CZK|RUB)\b/;
   const isinRe=/\b([A-Z]{2}[A-Z0-9]{9}\d)\b/;
   const skipRe=/\b(total|subtotal|sub-total|page|statement|portfolio|valuation|balance|summary|as of|account|grand|итого|всего|страниц|выписк|оценк|баланс|сч[её]т|дата)\b/i;
-  lines.forEach(ln=>{
-    if(ln.length<4 || skipRe.test(ln)) return;
-    const isin=(ln.match(isinRe)||[])[1];
-    const body=ln.replace(isinRe," ");                   // drop ISIN first so its digits aren't read as a value
-    const toks=body.match(/-?\d[\d.,'’]*\d|\b\d\b/g);
-    if(!toks) return;
-    const vals=toks.map(parseNum).filter(v=>v>0);
-    if(!vals.length) return;
-    const val=Math.max.apply(null, vals);
-    if(val<100) return;                                  // skip page numbers / tiny figures
-    const ccy=(body.match(ccyRe)||["USD"])[0];
-    let name=body.replace(ccyRe," ").replace(/-?\d[\d.,'’%]*/g," ").replace(/\s+/g," ").trim();
-    if(name.length<2) return;
-    const p={broker:"PDF", name:name.slice(0,60), cls:normClass(name), ccy, value:val, feeProduct:0, sector:""};
+  // Ячейка считается числовой, только если ВСЯ она — число: так «1 473 000,00»
+  // остаётся одним значением, а не тремя обрывками.
+  const numCellRe=/^[-+(]?[\d][\d.,'’\s\u00a0\u202f]*\)?%?$/;
+  lines.forEach(raw=>{
+    const cells=String(raw).split(PDF_CELL).map(c=>c.replace(/\s+/g," ").trim()).filter(Boolean);
+    const flat=cells.join(" ");
+    if(flat.length<4 || skipRe.test(flat)) return;
+    const isin=(flat.match(isinRe)||[])[1];
+    const vals=[];
+    cells.forEach(c=>{
+      if(isin && c.indexOf(isin)>=0) return;
+      if(!numCellRe.test(c) || !/\d/.test(c)) return;
+      if(/%$/.test(c)) return;                    // проценты — не сумма позиции
+      const neg=/^\(.*\)$/.test(c);              // (1 200) — отрицательное
+      const n=parseNum(c);
+      if(n>0) vals.push(neg?-n:n);
+    });
+    if(!vals.length){ skipped.push(flat.slice(0,60)); return; }
+    const val=Math.max.apply(null, vals.map(Math.abs));
+    if(val<100){ skipped.push(flat.slice(0,60)); return; }
+    const ccy=(flat.match(ccyRe)||[null])[0];      // не подставляем USD — см. rowsToPositions
+    const nameCells=cells.filter(c=>!numCellRe.test(c));
+    let name=(nameCells.join(" ")||flat).replace(isinRe," ").replace(ccyRe," ")
+      .replace(/-?\d[\d.,'’%]*/g," ").replace(/\s+/g," ").trim();
+    if(name.length<2){ skipped.push(flat.slice(0,60)); return; }
+    const p={broker:"PDF", name:name.slice(0,60), cls:normClass(name), value:val, feeProduct:0, sector:""};
+    if(ccy) p.ccy=ccy;
     if(isin) p.isin=isin;
     out.push(p);
   });
+  out._skipped = skipped;
   return out.slice(0,100);
 }
 
@@ -2047,6 +2277,7 @@ function bindTabs(){
   document.querySelectorAll("nav.tabs button").forEach(b=> b.onclick=()=>{ STATE.view=b.dataset.tab; render(); });
   const as=$("#addStmtBtn"); if(as) as.onclick=()=>$("#fileInp").click();
   const rp=$("#reportBtn"); if(rp) rp.onclick=openReport;
+  const ic=$("#importNoteClose"); if(ic) ic.onclick=()=>{ STATE.importNote=null; render(); };
   const fc=$("#fixClsBtn"); if(fc) fc.onclick=()=>{ STATE.view="holdings"; STATE.holdFilter="unknown"; render(); };
   const cv=$("#csvBtn"); if(cv) cv.onclick=exportCSV;
   const lp=$("#livePricesBtn");
@@ -2063,7 +2294,9 @@ function bindView(a){
       STATE.brokerFees[b]=STATE.brokerFees[b]||{};
       if(v==="") delete STATE.brokerFees[b][k]; else STATE.brokerFees[b][k]=+v;
       if(STATE.brokerFees[b].advisory==null && STATE.brokerFees[b].custody==null) delete STATE.brokerFees[b];
-      if(STATE.client) saveProfile(STATE.client);
+      // Профиль НЕ перезаписывается по побочному действию: если после загрузки
+      // выписки нового клиента ввести тариф, старый профиль молча заместился бы
+      // объединённым портфелем двух семей. Сохранение — только явной кнопкой.
       render();
     };
   });
@@ -2124,7 +2357,7 @@ function bindView(a){
 /* top controls */
 $("#langSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.lang=b.dataset.lang; render(); });
 $("#curSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.base=b.dataset.cur; render(); });
-$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.brokerFees={}; STATE.notePrice={}; STATE.engineDown=null; STATE.sources=[]; STATE.source=""; STATE.client=""; STATE.editId=null; STATE.baseline=null; STATE.showClients=false; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
+$("#resetBtn").onclick=()=>{ clearClientState(); STATE.manual=[]; STATE.showClients=false; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
 $("#gearBtn").onclick=()=>{ STATE.settingsOpen=!STATE.settingsOpen; render(); };
 $("#clientsBtn").onclick=()=>{ STATE.showClients=!STATE.showClients; render(); };
 $("#fileInp").addEventListener("change", e=>{ handleFiles(e.target.files); e.target.value=""; });
