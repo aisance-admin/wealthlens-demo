@@ -23,6 +23,11 @@
     -webkit-font-smoothing:antialiased; min-height:100vh;
   }
   a{color:var(--gold2)}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;
+    max-width:min(520px,92vw);background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--good);border-radius:10px;padding:11px 15px;font-size:13px;
+    color:var(--ink);box-shadow:var(--shadow);transition:opacity .35s;line-height:1.45}
+  .toast.bad{border-left-color:var(--risk)}
   .wrap{max-width:1240px;margin:0 auto;padding:22px 22px 80px}
   header.top{display:flex;align-items:center;gap:16px;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap}
   .brand{display:flex;align-items:center;gap:13px}
@@ -1419,14 +1424,68 @@ function buildReport(a){
   </div>`;
 }
 function openReport(){ if(!STATE.positions) return; const ra=$("#reportArea"); if(ra) ra.innerHTML=buildReport(analyze(STATE.positions)); window.print(); }
-function exportCSV(){
+/* ---------- сохранение файла ------------------------------------------
+   На обычном хосте файл отдаёт ссылка с download. В просмотрщике артефакта
+   страница отдавать файлы напрямую не может: там сохранение идёт штатным
+   механизмом с подтверждением от пользователя. Поддерживаем оба пути —
+   иначе на одном из хостов кнопка молча не делает ничего.               */
+const HOSTED_FRAME = typeof window.claude==="object" && window.claude!==null
+                  && typeof window.claude.use==="function";
+let _dlCap;        // undefined — ещё не спрашивали; null — недоступно
+async function downloadsCap(){
+  if(!HOSTED_FRAME) return null;
+  if(_dlCap===undefined){ try{ _dlCap=await window.claude.use("downloads"); }catch(e){ _dlCap=null; } }
+  return _dlCap;
+}
+function toast(msg, bad){
+  const el=document.createElement("div");
+  el.className="toast"+(bad?" bad":"");
+  el.textContent=msg;
+  document.body.appendChild(el);
+  setTimeout(()=>{ el.style.opacity="0"; setTimeout(()=>el.remove(),400); }, bad?5200:2800);
+}
+async function saveFile(filename, text, mime){
+  const ru=STATE.lang==="ru";
+  const cap=await downloadsCap();
+  if(cap){
+    const attempt=name=>cap.save({filename:name, data:text});
+    try{ await attempt(filename); return true; }
+    catch(e){
+      const c=e&&e.code;
+      if(c==="declined") return false;                       // отказ — не ошибка
+      // csv входит в расширенный набор расширений и может быть не разрешён.
+      // Тот же текст уходит как .txt: Excel и Numbers открывают его так же.
+      if(c==="extension_not_enabled" && /\.csv$/i.test(filename)){
+        try{ await attempt(filename.replace(/\.csv$/i,".txt")); return true; }
+        catch(e2){ if(e2&&e2.code==="declined") return false; }
+      }
+      if(c==="rate_limited"){
+        toast(ru?"Уже открыт запрос на сохранение — подтвердите его.":"A save prompt is already open — confirm it.");
+        return false;
+      }
+      toast((ru?"Не удалось сохранить файл: ":"Could not save the file: ")+((e&&e.message)||c||"?"), true);
+      return false;
+    }
+  }
+  if(HOSTED_FRAME){
+    toast(ru?"Сохранение файлов в этом окне недоступно.":"Saving files is unavailable in this view.", true);
+    return false;
+  }
+  const url=URL.createObjectURL(new Blob([text],{type:mime||"text/plain;charset=utf-8"}));
+  const a=document.createElement("a");
+  a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+  return true;
+}
+
+async function exportCSV(){
   if(!STATE.positions) return;
   const cols=["broker","name","asset_class","currency","value","quantity","ticker","isin","fee_product","coupon","barrier","maturity","underlying","notional"];
   const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
   const lines=[cols.join(",")];
   STATE.positions.forEach(p=>{ lines.push([p.broker,p.name,p.cls,p.ccy,p.value,p.qty||"",p.ticker||"",p.isin||"",p.feeProduct||0,p.coupon||"",p.barrier||"",p.maturity||"",p.underlying||"",p.notional||""].map(q).join(",")); });
-  const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=((STATE.client||"wealthlens").replace(/\s+/g,"_"))+"_portfolio.csv"; a.click();
+  await saveFile(((STATE.client||"wealthlens").replace(/\s+/g,"_"))+"_portfolio.csv",
+                 lines.join("\n"), "text/csv;charset=utf-8");
 }
 
 /* ---------- Structured & derivatives ---------- */
@@ -1849,7 +1908,13 @@ function rowsToPositions(matrix){
     const p={
       broker: (g("broker")||"—").toString().trim(),
       name: (g("name")||("Position "+i)).toString().trim(),
-      cls: normClass(g("cls")),
+      // Класс берём из колонки, а если её нет или ячейка пуста — из названия.
+      // Брокеры сплошь и рядом не проставляют класс, но «US Treasury Bond 2.1%
+      // 2031» распознаётся по имени, и объявлять такую бумагу нераспознанной,
+      // имея достаточно данных, — та же неправда, что и выдумывать за неё класс.
+      cls: (()=>{ const byCol=normClass(g("cls"));
+        return byCol!=="unknown" ? byCol
+             : normClass([g("name"), g("ticker"), g("sector")].filter(Boolean).join(" ")); })(),
       ccy: (String(g("ccy")||"USD").toUpperCase().match(/[A-Z]{3}/)||["USD"])[0],
       value, feeProduct: parseNum(g("feeProduct"))||0, sector:(g("sector")||"").toString()
     };
@@ -1963,7 +2028,7 @@ function pdfLinesToPositions(lines){
   return out.slice(0,100);
 }
 
-function downloadTemplate(){
+async function downloadTemplate(){
   const headers=["broker","name","asset_class","currency","value","quantity","ticker","fee_product","sector","coupon","barrier","maturity","underlying","notional"];
   const sample=[
     ["UBS","Apple Inc.","equity","USD","1260000","6000","AAPL","0","US Tech","","","","",""],
@@ -1972,8 +2037,7 @@ function downloadTemplate(){
     ["Pictet","Pictet Private Equity 2021","alternative","USD","1300000","","","2.0","Private equity","","","","",""]
   ];
   const csv=[headers,...sample].map(r=>r.map(c=>`"${c}"`).join(",")).join("\n");
-  const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="wealthlens_template.csv"; a.click();
+  await saveFile("wealthlens_template.csv", csv, "text/csv;charset=utf-8");
 }
 
 /* ============================================================
