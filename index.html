@@ -186,7 +186,8 @@
     .rep td{padding:3px 0;border-bottom:1px solid #f2f2f2}
     .rep-res{padding-left:18px}
     .rep-res li{font-size:12px;margin-bottom:7px;line-height:1.45}
-    .rep-foot{margin-top:18px;color:#999;font-size:11px;text-align:right;border-top:1px solid #eee;padding-top:8px}
+    .rep-note{font-size:10.5px;line-height:1.5;color:#7c6f4e;background:#fdfaf0;border-left:3px solid #d9c07a;padding:7px 10px;margin:10px 0 0}
+  .rep-foot{margin-top:18px;color:#999;font-size:11px;text-align:right;border-top:1px solid #eee;padding-top:8px}
   }
 </style>
 </head>
@@ -225,7 +226,10 @@
 const FX_EMBED = { USD:1, EUR:1.08, CHF:1.12, GBP:1.27, JPY:0.0064 }; // USD per 1 unit (embedded fallback)
 const FX_DATE_EMBED = "2026-06-01";
 let FX = Object.assign({}, FX_EMBED); // mutated by live refresh (refreshFX)
-const TODAY = new Date(2026, 5, 22); // 2026-06-22
+// Дата расчёта. Была захардкожена на 2026-06-22 — все сроки до экспирации,
+// остаточные сроки нот и дюрация считались от давно прошедшего дня. Полночь,
+// чтобы счёт дней не плавал в зависимости от времени открытия.
+const TODAY = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
 const BENCH = 0.20; // low-cost indexed benchmark, % p.a.
 
 /* ---------- i18n ---------- */
@@ -249,7 +253,7 @@ const I18N = {
     structTitle:"Структурные ноты", derivTitle:"Деривативы", noNotes:"Структурных нот не обнаружено.", noDeriv:"Деривативов не обнаружено.",
     underlying:"Базовый актив", coupon:"Купон", barrier:"Барьер", barrierDist:"До барьера", maturity:"Погашение", capProt:"Защита капитала", embedded:"Зашитая стоимость",
     notional:"Ном. номинал", type:"Тип", expiry:"Экспирация", delta:"Дельта", premium:"Премия", daysLeft:"дн.",
-    feesTitle:"Структура издержек", feeComp:"Компоненты комиссии (в год)", advisory:"Консультационная", custody:"Кастоди", product:"Продукт (TER/упр.)", entryAmort:"Входная (аморт.)",
+    feesTitle:"Структура издержек", feeComp:"Компоненты комиссии (в год)", advisory:"Консультационная", custody:"Кастоди", product:"Продукт (TER/упр.)", entryAmort:"Ноты: зашитая маржа (аморт.)",
     feeVsBench:"Стоимость vs индексный бенчмарк", yourPort:"Ваш портфель", benchPort:"Индексный бенчмарк",
     mostExp:"Самые дорогие продукты", proj:"Накопленные издержки за 10 лет", projNote:"Простая оценка: годовые издержки × 10 лет, без эффекта сложного процента на упущенную доходность.",
     healthTitle:"Health Score портфеля", resos:"Резолюции и рекомендации", breakdown:"Из чего складывается оценка",
@@ -259,7 +263,7 @@ const I18N = {
     addPos:"Добавить позицию", analyze:"Анализировать", clearAll:"Очистить", needRows:"Добавьте хотя бы одну позицию.",
     fBroker:"Брокер", fName:"Название", fClass:"Класс актива", fCcy:"Валюта", fValue:"Стоимость", fFee:"Комис. продукта %",
     selClass:"— класс —",
-    clsEquity:"Акции", clsBond:"Облигации", clsFund:"Фонды/ETF", clsNote:"Структ. ноты", clsDeriv:"Деривативы", clsCash:"Кэш", clsAlt:"Альтернативы",
+    clsEquity:"Акции", clsBond:"Облигации", clsFund:"Фонды/ETF", clsNote:"Структ. ноты", clsDeriv:"Деривативы", clsCash:"Кэш", clsAlt:"Альтернативы", clsUnknown:"Не распознано",
     fileErr:"Не удалось распознать файл. Проверьте формат или используйте шаблон CSV.",
     pdfHeur:"PDF разбирается эвристически: проверьте корректность распознанных позиций перед выводами.",
     illiquidShare:"Неликвидная часть", techConc:"Концентрация в секторе",
@@ -292,7 +296,7 @@ const I18N = {
     structTitle:"Structured notes", derivTitle:"Derivatives", noNotes:"No structured notes found.", noDeriv:"No derivatives found.",
     underlying:"Underlying", coupon:"Coupon", barrier:"Barrier", barrierDist:"To barrier", maturity:"Maturity", capProt:"Capital protection", embedded:"Embedded cost",
     notional:"Notional", type:"Type", expiry:"Expiry", delta:"Delta", premium:"Premium", daysLeft:"d",
-    feesTitle:"Cost structure", feeComp:"Fee components (annual)", advisory:"Advisory", custody:"Custody", product:"Product (TER/mgmt)", entryAmort:"Entry (amortised)",
+    feesTitle:"Cost structure", feeComp:"Fee components (annual)", advisory:"Advisory", custody:"Custody", product:"Product (TER/mgmt)", entryAmort:"Notes: embedded margin (amortised)",
     feeVsBench:"Cost vs indexed benchmark", yourPort:"Your portfolio", benchPort:"Indexed benchmark",
     mostExp:"Most expensive products", proj:"Cumulative 10-year cost", projNote:"Simple estimate: annual cost × 10 years, excluding compounding of forgone return.",
     healthTitle:"Portfolio Health Score", resos:"Resolutions & recommendations", breakdown:"Score breakdown",
@@ -302,7 +306,7 @@ const I18N = {
     addPos:"Add position", analyze:"Analyse", clearAll:"Clear", needRows:"Add at least one position.",
     fBroker:"Broker", fName:"Name", fClass:"Asset class", fCcy:"Currency", fValue:"Value", fFee:"Product fee %",
     selClass:"— class —",
-    clsEquity:"Equity", clsBond:"Bonds", clsFund:"Funds/ETF", clsNote:"Structured notes", clsDeriv:"Derivatives", clsCash:"Cash", clsAlt:"Alternatives",
+    clsEquity:"Equity", clsBond:"Bonds", clsFund:"Funds/ETF", clsNote:"Structured notes", clsDeriv:"Derivatives", clsCash:"Cash", clsAlt:"Alternatives", clsUnknown:"Unclassified",
     fileErr:"Could not parse the file. Check the format or use the CSV template.",
     pdfHeur:"PDF is parsed heuristically: verify the detected positions before drawing conclusions.",
     illiquidShare:"Illiquid share", techConc:"Sector concentration",
@@ -326,18 +330,33 @@ const CLASSES = {
   structured_note:{c:"var(--note)", k:"clsNote"},
   derivative:{c:"var(--deriv)", k:"clsDeriv"},
   cash:{c:"var(--cash)", k:"clsCash"},
-  alternative:{c:"var(--alt)", k:"clsAlt"}
+  alternative:{c:"var(--alt)", k:"clsAlt"},
+  unknown:{c:"var(--muted)", k:"clsUnknown"}
 };
 const ILLIQUID = new Set(["structured_note","alternative"]);
 
-/* ---------- broker fee profiles (advisory + custody, % p.a.) ---------- */
-const BROKERS = {
-  "UBS":{advisory:0.90, custody:0.25},
-  "Julius Baer":{advisory:1.10, custody:0.30},
-  "Interactive Brokers":{advisory:0.00, custody:0.00},
-  "Pictet":{advisory:0.95, custody:0.28}
-};
-function brokerFees(b){ return BROKERS[b] || {advisory:0.50, custody:0.20}; }
+/* ---------- broker tariffs (advisory + custody, % p.a.) ----------------
+   Раньше здесь стояла таблица тарифов четырёх банков и молчаливый дефолт
+   0.50/0.20 для всех остальных. Это были назначенные числа: на демо-портфеле
+   они давали около двух третей fee-drag и двигали итоговый скор примерно на
+   12 баллов — через границу рейтинга. Договорная сетка есть только у советника,
+   поэтому она вводится руками и хранится в профиле клиента. Не введено —
+   значит не посчитано, а не «примерно столько».                            */
+function brokerFees(b, map){
+  const f=(map||STATE.brokerFees||{})[b];
+  if(!f) return null;
+  // Заполнена только половина сетки — это не сетка. Раньше вторая половина
+  // молча становилась 0.00% и брокер помечался «учтён»: тот же самый тихий
+  // дефолт, ради устранения которого таблица тарифов и появилась.
+  if(f.advisory==null || f.custody==null) return null;
+  return {advisory:+f.advisory||0, custody:+f.custody||0};
+}
+function brokerTariffState(b, map){
+  const f=(map||STATE.brokerFees||{})[b];
+  const n=f?[f.advisory,f.custody].filter(v=>v!=null).length:0;
+  return n===2?"full" : n===1?"partial" : "empty";
+}
+const TARIFF_HINT = {advisory:"0.00–1.20", custody:"0.00–0.35"};
 
 /* ---------- DEMO PORTFOLIO ---------- */
 const DEMO = [
@@ -347,10 +366,10 @@ const DEMO = [
   P("UBS","Microsoft Corp.","equity","USD",1075000,0,"US Tech",{ticker:"MSFT",qty:2500}),
   P("UBS","UBS Strategy Balanced Fund","fund_etf","CHF",1500000,1.45,"Multi-asset"),
   P("UBS","Phoenix Autocall EuroStoxx 50","structured_note","EUR",1200000,0.60,"Structured",
-    {underlying:"EuroStoxx 50",coupon:7.5,barrier:60,barrierDist:18,capProt:0,maturity:"2027-09-15",entry:2.0,tenorYears:3}),
+    {underlying:"EuroStoxx 50",coupon:3.2,barrier:60,barrierDist:18,capProt:0,maturity:"2027-09-15",entry:2.0,tenorYears:3}),
 
   P("Julius Baer","Autocall Note S&P 500","structured_note","USD",1000000,0.70,"Structured",
-    {underlying:"S&P 500",coupon:8.2,barrier:65,barrierDist:11,capProt:0,maturity:"2026-12-20",entry:2.5,tenorYears:2}),
+    {underlying:"S&P 500",coupon:3.2,barrier:65,barrierDist:11,capProt:0,maturity:"2026-12-20",entry:2.5,tenorYears:2}),
   P("Julius Baer","Roche Holding 1.8% 2029","bond","CHF",700000,0,"Corp. bond",{coupon:1.8}),
   P("Julius Baer","SPDR Gold Shares (GLD)","fund_etf","USD",600000,0.40,"Commodity",{ticker:"GLD",qty:2727}),
   P("Julius Baer","JB Multi-Strategy Hedge Fund","alternative","USD",1500000,2.00,"Hedge fund",{perf:20,liquidity:"quarterly"}),
@@ -374,7 +393,7 @@ function P(broker,name,cls,ccy,value,feeProduct,sector,extra){
 }
 
 /* ---------- state ---------- */
-let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false };
+let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false, notePrice:{}, notePricing:{}, engineDown:null, brokerFees:{} };
 const t = k => (I18N[STATE.lang][k] ?? k);
 const $ = (s,r=document)=>r.querySelector(s);
 
@@ -400,19 +419,35 @@ function parseDate(s){ if(!s) return null; const d=new Date(s); return isNaN(d)?
 /* ============================================================
    ANALYSIS ENGINE
    ============================================================ */
-function analyze(positions){
+function analyze(positions, feeMap){
+  // Сетка тарифов принадлежит КЛИЕНТУ, а не приложению. В сравнении клиентов
+  // analyze() вызывается для чужих профилей — без явного параметра каждый
+  // считался бы по тарифам того клиента, что сейчас открыт.
+  const tariffs = feeMap || STATE.brokerFees || {};
   const rows = positions.map(p=>{
-    const bf = brokerFees(p.broker);
+    const bf = brokerFees(p.broker, tariffs);
     const baseValue = toBase(p);
     const isCash = p.cls==="cash";
-    let entryAmort = 0;
-    if(p.cls==="structured_note" && p.entry){ entryAmort = p.entry/(p.tenorYears||3); }
-    const advisory = isCash ? 0 : bf.advisory;
-    const custody = bf.custody;
-    const product = p.feeProduct||0;
+    // Зашитая стоимость ноты. Движок считает её целиком (структурирование,
+    // хеджирование, кредитный риск, дистрибуция) на дату выпуска — это и есть
+    // ответ, а входная комиссия из файла лишь его грубая замена.
+    let entryAmort = 0, embSrc = null;
+    const eng = p.cls==="structured_note" ? engineFor(p) : null;
+    if(eng && eng.bank_margin && eng.bank_margin.total_pct!=null){
+      entryAmort = Math.max(0, eng.bank_margin.total_pct)/noteYears(p);
+      embSrc = "engine";
+    }else if(p.cls==="structured_note" && p.entry){
+      entryAmort = p.entry/(p.tenorYears||3);
+      embSrc = "input";
+    }
+    const advisory = (bf && !isCash) ? bf.advisory : 0;
+    const custody  = bf ? bf.custody : 0;
+    // Маржа движка уже включает структурную составляющую — складывать её с
+    // продуктовой комиссией из файла значило бы посчитать одно и то же дважды.
+    const product = (embSrc==="engine") ? 0 : (p.feeProduct||0);
     const feePct = advisory + custody + product + entryAmort;     // % p.a.
     const feeAbs = baseValue * feePct/100;
-    return Object.assign({}, p, {baseValue, advisory, custody, product, entryAmort, feePct, feeAbs, isCash});
+    return Object.assign({}, p, {baseValue, advisory, custody, product, entryAmort, feePct, feeAbs, isCash, embSrc, eng, tariffKnown:!!bf});
   });
 
   const aum = rows.reduce((s,r)=>s+r.baseValue,0);
@@ -432,6 +467,14 @@ function analyze(positions){
   const blendedFee = aum? feeAbs/aum*100 : 0;
   const dragPct = Math.max(0, blendedFee - BENCH);
   const dragAbs = aum*dragPct/100;
+  // Брокеры портфеля и то, по каким из них тарифы заведены. Разделять важно:
+  // «0.64%/год по подтверждённым данным» и «0.64%, потому что остальное принято
+  // за ноль» — разные утверждения, и второе продукту говорить нельзя.
+  const brokersAll = [...new Set(rows.map(r=>r.broker).filter(Boolean))];
+  const brokersMissing = brokersAll.filter(b=>!brokerFees(b, tariffs));
+  const missingVal = rows.filter(r=>!r.tariffKnown).reduce((s,r)=>s+r.baseValue,0);
+  const feeComplete = brokersMissing.length===0;
+
   const feeComponents = {
     advisory: rows.reduce((s,r)=>s+r.baseValue*r.advisory/100,0),
     custody:  rows.reduce((s,r)=>s+r.baseValue*r.custody/100,0),
@@ -459,6 +502,14 @@ function analyze(positions){
 
   // structured & derivatives
   const notes = rows.filter(r=>r.cls==="structured_note");
+  // Ноты, которые движок ещё не оценил, но оценит: до этого момента комиссии и
+  // скор неполные, и интерфейс обязан об этом сказать, а не показывать цифру.
+  // «Ещё считается» — только про ноты, по которым ответа для текущих параметров
+  // ЕЩЁ НЕТ. Нота, по которой пришла ошибка, уже отвечена: если считать её
+  // ожидающей, базовый срез не зафиксируется никогда.
+  const enginePending = !!backendBase() && !STATE.engineDown &&
+    notes.some(n=>!n.eng && !noteMissing(n).length
+                  && (STATE.notePrice[n._id]||{}).sig!==noteSig(n));
   const derivs = rows.filter(r=>r.cls==="derivative");
   const notionalAbs = derivs.reduce((s,r)=>{ const n=(r.notional||0)*(FX[r.ccy]||1)/(FX[STATE.base]||1); return s+n; },0);
   const leverage = aum? notionalAbs/aum : 0;
@@ -474,14 +525,25 @@ function analyze(positions){
   // Diversification: top1 & HHI
   sub.diversification = clamp(100 - Math.max(0,(top1-8))*4 - Math.max(0,(hhi-700))*0.03 - Math.max(0,(techShare-20))*1.2);
   // Cost: blended fee vs benchmark
-  sub.cost = clamp(100 - Math.max(0,(blendedFee-0.30))*55);
+  // Пока тарифы не заведены, издержки не оценены. Занизить скор, посчитав
+  // только TER, так же неверно, как завысить: вес перераспределяется.
+  sub.cost = feeComplete ? clamp(100 - Math.max(0,(blendedFee-0.30))*55) : null;
   // Currency: largest non-base FX share
   sub.currency = clamp(100 - Math.max(0,(largestFx.pct-15))*2.2);
   // Liquidity
   sub.liquidity = clamp(100 - Math.max(0,(illiquidPct-15))*2.6);
   // Product quality: expensive products + risky notes + leverage
   let pq = 100;
-  notes.forEach(n=>{ if((n.barrierDist??30)<20) pq-=12; if((n.entry/(n.tenorYears||3)+n.product)>1.2) pq-=6; });
+  notes.forEach(n=>{
+    const br=barrierRisk(n);
+    // Штраф — по худшему из двух сигналов. Раньше здесь стояло расстояние до
+    // барьера с молчаливым дефолтом 30%; заменить его вероятностью «от выпуска»
+    // было бы такой же ошибкой — нота у самого барьера перестала бы штрафоваться.
+    const pProb = br.prob!=null ? (br.prob>=25?14 : br.prob>=12?8 : br.prob>=6?3 : 0) : 0;
+    const pDist = br.dist!=null ? (br.dist<13?14 : br.dist<20?12 : 0) : 0;
+    pq -= Math.max(pProb, pDist);
+    if((n.entryAmort+n.product)>1.2) pq-=6;
+  });
   rows.forEach(r=>{ if(r.product>=1.5) pq-=5; });
   if(leverage>0.25) pq-= (leverage-0.25)*40;
   sub.quality = clamp(pq);
@@ -489,14 +551,17 @@ function analyze(positions){
   let cs=100; if(cashPct>8) cs-=(cashPct-8)*3.5; if(cashPct<2) cs-=(2-cashPct)*6; sub.cash=clamp(cs);
 
   const W = {diversification:.25, cost:.25, currency:.10, liquidity:.15, quality:.15, cash:.10};
-  const score = Math.round(Object.keys(W).reduce((s,k)=>s+sub[k]*W[k],0));
+  const scored = Object.keys(W).filter(k=>sub[k]!=null);
+  const wsum = scored.reduce((s,k)=>s+W[k],0) || 1;
+  const score = Math.round(scored.reduce((s,k)=>s+sub[k]*W[k]/wsum,0));
 
   return {
     rows, sorted, aum, byClass, byBroker, byCcy, bySector,
     feeAbs, blendedFee, dragPct, dragAbs, feeComponents,
+    brokersAll, brokersMissing, missingVal, feeComplete,
     top1, top5, hhi, techShare, largestFx, nonBase,
     illiquid, illiquidPct, cashPct, notes, derivs, notionalAbs, leverage,
-    bonds, bondVal, portDuration,
+    bonds, bondVal, portDuration, enginePending,
     sub, score, W
   };
 }
@@ -544,17 +609,65 @@ function resolutions(a){
   });
   // notes
   a.notes.forEach(n=>{
-    if((n.barrierDist??30)<20){
-      add(n.barrierDist<13?"high":"medium",
+    const br=barrierRisk(n), lvl=barrierLevel(br);
+    if(lvl){
+      add(lvl,
         L==="ru"?`Нота под риском барьера: ${n.name}`:`Barrier risk: ${n.name}`,
-        L==="ru"?`Базовый актив ${n.underlying} лишь в ${pct(n.barrierDist,0)} от защитного барьера (${n.barrier}%). При пробое барьера капитал-протекции нет — убыток повторяет падение базового актива.`
-                :`${n.underlying} is only ${pct(n.barrierDist,0)} above the protection barrier (${n.barrier}%). No capital protection if breached — losses track the underlying.`);
+        [ br.dist!=null ? (L==="ru"?`Базовый актив ${n.underlying} сейчас лишь в ${pct(br.dist,0)} от защитного барьера (${n.barrier}%).`
+                                   :`${n.underlying} is currently only ${pct(br.dist,0)} above the ${n.barrier}% protection barrier.`) : "",
+          br.prob!=null ? (L==="ru"?`Вероятность пробоя за весь срок, посчитанная от даты выпуска, — ${pct(br.prob,1)} (Монте-Карло на указанных допущениях; это не остаточный риск на сегодня).`
+                                   :`Probability of a breach over the full term, measured from issue, is ${pct(br.prob,1)} (Monte-Carlo, stated assumptions; this is not the remaining risk as of today).`) : "",
+          (L==="ru"?`При пробое капитал-протекции нет — убыток повторяет падение базового актива, под риском ≈ ${fmtFull(n.baseValue)}.`
+                   :`No capital protection if breached — losses track the underlying, ≈ ${fmtFull(n.baseValue)} at risk.`)
+        ].filter(Boolean).join(" "));
     }
-    const emb=(n.entry||0)+ (n.tenorYears||3)*(n.product||0);
-    add("low",
-      L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
-      L==="ru"?`Входная комиссия ${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/год структурной маржи. Купон ${pct(n.coupon||0,1)} частично уходит на издержки эмитента/дистрибьютора.`
-              :`Entry fee ${pct(n.entry||0,1)} + ${pct(n.product||0,1)} p.a. structuring margin. Part of the ${pct(n.coupon||0,1)} coupon funds issuer/distributor costs.`);
+    const miss=noteMissing(n);
+    if(miss.length){
+      add("medium",
+        L==="ru"?`Нота не оценена — не хватает данных: ${n.name}`:`Note not valued — data missing: ${n.name}`,
+        L==="ru"?`В выписке нет: ${noteMissingLabel(miss)}. На ${fmtFull(n.baseValue)} нельзя посчитать ни маржу банка, ни вероятность пробоя барьера, ни справедливый купон — эти суммы не участвуют в скоре. Допишите параметры в карточке позиции.`
+                :`The statement lacks: ${noteMissingLabel(miss)}. For ${fmtFull(n.baseValue)} neither issuer margin, barrier probability nor fair coupon can be computed — these are excluded from the score. Complete the note in the position card.`);
+    }else if(br.src===null){
+      // Ни вероятности, ни расстояния до барьера. Раньше здесь подставлялось 30%
+      // и нота молча считалась безопасной.
+      add("low",
+        L==="ru"?`Барьерный риск не оценён: ${n.name}`:`Barrier risk not assessed: ${n.name}`,
+        L==="ru"?`Параметры ноты есть, но движок оценку не вернул. Риск на ${fmtFull(n.baseValue)} сейчас не учтён в скоре.`
+                :`The note's parameters are present but the engine returned no valuation. The risk on ${fmtFull(n.baseValue)} is not reflected in the score.`);
+    }
+
+    // Недоплаченный купон — главное число продукта: разница между купоном,
+    // при котором нота стоила бы номинал, и тем, что дал банк.
+    const f=(n.eng||{}).fair_coupon||{};
+    if(f.shortfall_pp>0.25){
+      const yrs=noteYears(n);
+      const perYear=n.baseValue*f.shortfall_pp/100, total=perYear*yrs;
+      add(f.shortfall_pp>=1.5?"high":"medium",
+        L==="ru"?`Купон ниже справедливого: ${n.name}`:`Coupon below fair value: ${n.name}`,
+        L==="ru"?`Справедливый купон ${pct(f.fair_coupon_pct,2)} против предложенных ${pct(f.offered_coupon_pct,2)} — недобор ${f.shortfall_pp.toFixed(2)} п.п. годовых, это ≈ ${fmtFull(perYear)} в год и ≈ ${fmtFull(total)} за срок ноты (${yrs} г.). ${ENGINE_CAVEAT.ru}`
+                :`Fair coupon ${pct(f.fair_coupon_pct,2)} vs ${pct(f.offered_coupon_pct,2)} offered — a shortfall of ${f.shortfall_pp.toFixed(2)} pp p.a., ≈ ${fmtFull(perYear)} per year and ≈ ${fmtFull(total)} over the ${yrs}-year term. ${ENGINE_CAVEAT.en}`,
+        L==="ru"?`≈ ${fmtFull(total)} за срок ноты — предмет для разговора с эмитентом при следующем выпуске`
+                :`≈ ${fmtFull(total)} over the term — a talking point with the issuer on the next issue`);
+    }
+
+    if(n.embSrc==="engine" && n.eng.bank_margin.total_pct<=0){
+      const b=n.eng.bank_margin;
+      add("low",
+        L==="ru"?`Нота оценена не ниже номинала: ${n.name}`:`Note priced at or above par: ${n.name}`,
+        L==="ru"?`Справедливая стоимость ${pct(n.eng.valuation.fair_value_pct,2)} от номинала — при указанных допущениях эмитент не зашил маржу, а отдал ${pct(Math.abs(b.total_pct),2)}. Проверьте допущения волатильности: результат чувствителен именно к ним. ${ENGINE_CAVEAT.ru}`
+                :`Fair value is ${pct(n.eng.valuation.fair_value_pct,2)} of nominal — under the stated assumptions the issuer embedded no margin but gave away ${pct(Math.abs(b.total_pct),2)}. Check the volatility assumption: the result is most sensitive to it. ${ENGINE_CAVEAT.en}`);
+    }else if(n.embSrc==="engine"){
+      const b=n.eng.bank_margin;
+      add(b.total_pct>=3.5?"medium":"low",
+        L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
+        L==="ru"?`Эмитент зашил ${pct(b.total_pct,2)} от номинала при выпуске ≈ ${fmtFull(n.baseValue*b.total_pct/100)}: структурирование ${pct(b.components?.structuring_fee||0,2)}, хеджирование ${pct(b.components?.hedging_cost||0,2)}, кредитный риск ${pct(b.components?.credit_risk_premium||0,2)}, дистрибуция ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.ru}`
+                :`The issuer embedded ${pct(b.total_pct,2)} of nominal at launch ≈ ${fmtFull(n.baseValue*b.total_pct/100)}: structuring ${pct(b.components?.structuring_fee||0,2)}, hedging ${pct(b.components?.hedging_cost||0,2)}, credit risk ${pct(b.components?.credit_risk_premium||0,2)}, distribution ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.en}`);
+    }else if(n.entry||n.product){
+      add("low",
+        L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
+        L==="ru"?`Входная комиссия ${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/год структурной маржи — оценка по данным из файла, движок ноту не считал. Купон ${pct(n.coupon||0,1)} частично уходит на издержки эмитента.`
+                :`Entry fee ${pct(n.entry||0,1)} + ${pct(n.product||0,1)} p.a. structuring margin — taken from the file, not priced by the engine. Part of the ${pct(n.coupon||0,1)} coupon funds issuer costs.`);
+    }
   });
   // derivatives
   if(a.leverage>0.10){
@@ -663,6 +776,15 @@ function backendBase(){
   if(h==="localhost"||h==="127.0.0.1") return location.origin;   // local `python3 server/...` one-URL mode
   return DEFAULT_BACKEND;                                          // GitHub Pages / file:// -> hosted API
 }
+async function postJSON(url, body, ms=120000){
+  const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(), ms);
+  try{
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:ctl.signal});
+    const j=await r.json().catch(()=>({error:"HTTP "+r.status}));
+    if(!r.ok) throw new Error(j.error||("HTTP "+r.status));
+    return j;
+  } finally{ clearTimeout(to); }
+}
 async function fetchJSON(url, ms=7000){
   const ctl=new AbortController(), to=setTimeout(()=>ctl.abort(), ms);
   try{ const r=await fetch(url,{signal:ctl.signal}); if(!r.ok) throw new Error("HTTP "+r.status); return await r.json(); }
@@ -709,6 +831,240 @@ async function refreshPrices(){
     DATA.prices={status: updated?"live":"embedded", source:"Finnhub", updated, total:targets.length}; return {updated,total:targets.length};
   }
   DATA.prices={status:"embedded", source:"embedded", updated:0, total:targets.length}; return {updated:0,total:targets.length};
+}
+
+/* ---- structured-note pricing via the vendored EvidenceInvest engine ---- */
+function noteYears(n){
+  // Original tenor — the margin question is "what did the issuer embed at launch",
+  // which is priced from issue with spot at 100%. Remaining life would answer a
+  // different question (today's mark-to-market) and must not be labelled margin.
+  if(n.tenorYears) return n.tenorYears;
+  const dt=parseDate(n.maturity);
+  return dt ? Math.max(+(daysBetween(TODAY,dt)/365).toFixed(2), 0.5) : 3;
+}
+function noteToEnginePayload(n){
+  const nm=(n.name||"").toLowerCase();
+  const type = nm.includes("phoenix")?"phoenix" : nm.includes("autocall")?"autocall"
+             : (n.capProt>0?"capital_protected":"barrier_note");
+  return {
+    product_type:type,
+    underlying:n.underlying||"",
+    coupon:+n.coupon||0,
+    barrier:+n.barrier||65,
+    capital_protection:+n.capProt||0,
+    currency:n.ccy||"USD",
+    maturity_years:noteYears(n),
+    nominal:+n.value||0,
+    coupon_type: nm.includes("phoenix")?"memory":"conditional",
+    purchase_price:100,
+    fair_coupon:true,
+    // Допущения советника перекрывают справочник: утверждение о банке должно
+    // строиться на числах, за которые готов отвечать тот, кто его делает.
+    ...(n.volOverride!==""&&n.volOverride!=null ? {volatility:+n.volOverride/100} : {}),
+    ...(n.rateOverride!==""&&n.rateOverride!=null ? {risk_free_rate:+n.rateOverride/100} : {})
+  };
+}
+/* Чего не хватает, чтобы оценка ноты была утверждением, а не выдумкой.
+   Дефолты payload'а (барьер 65%, срок 3 года, купон 0) молча превращали
+   выписку, где есть только название и сумма, в обвинение банка в недоплате
+   6.93 п.п. Пока этих полей нет, ноту не оцениваем вообще. */
+const NOTE_REQUIRED = {
+  coupon:     {ru:"купон",         en:"coupon"},
+  barrier:    {ru:"барьер",        en:"barrier"},
+  maturity:   {ru:"срок",          en:"maturity"},
+  underlying: {ru:"базовый актив", en:"underlying"}
+};
+function noteMissing(n){
+  const m=[];
+  if(!(+n.coupon>0)) m.push("coupon");
+  if(!(+n.barrier>0)) m.push("barrier");
+  if(!n.tenorYears && !parseDate(n.maturity)) m.push("maturity");
+  if(!String(n.underlying||"").trim()) m.push("underlying");
+  return m;
+}
+function noteMissingLabel(m){
+  const L=STATE.lang==="ru"?"ru":"en";
+  return m.map(k=>NOTE_REQUIRED[k][L]).join(", ");
+}
+
+/* Утверждение о конкретном банке строится на НАШИХ допущениях волатильности и
+   ставки. Формулировка обязана это называть — иначе это обвинение, а не оценка. */
+const ENGINE_CAVEAT = {
+  ru:"Оценка на дату выпуска при указанных допущениях волатильности и ставки; не утверждение о нарушении.",
+  en:"Valued at issue under the stated volatility and rate assumptions; not an assertion of misconduct."
+};
+
+/* Барьерный риск ноты. Порядок источников важен: вероятность пробоя из
+   Монте-Карло — настоящий ответ; расстояние до барьера из файла — грубая
+   замена; если нет ни того, ни другого, риск НЕ ОЦЕНЁН, и говорить
+   «всё в порядке» инструмент не имеет права. */
+function barrierRisk(n){
+  const e=engineFor(n);
+  const prob=e && e.probabilities ? e.probabilities.barrier_hit : null;
+  if(prob!=null) return {prob, dist:n.barrierDist??null, src:"engine"};
+  if(n.barrierDist!=null) return {prob:null, dist:n.barrierDist, src:"input"};
+  return {prob:null, dist:null, src:null};
+}
+/* Два РАЗНЫХ сигнала, и ни один не заменяет другой:
+   • prob — вероятность пробоя, посчитанная ОТ ДАТЫ ВЫПУСКА за весь срок (движок
+     запускается со спота 100% и исходного тенора — иначе не посчитать маржу);
+   • dist — насколько базовый актив выше барьера СЕЙЧАС.
+   Нота может быть безопасной на выпуске и опасной сегодня. Берём худший из двух:
+   вытеснить расстояние вероятностью значило бы промолчать ровно там, где риск
+   реализовался. */
+function barrierLevel(br){
+  const rank={high:2, medium:1};
+  const byProb = br.prob!=null ? (br.prob>=25?"high" : br.prob>=12?"medium" : null) : null;
+  const byDist = br.dist!=null ? (br.dist<13?"high" : br.dist<20?"medium" : null) : null;
+  const top=Math.max(rank[byProb]||0, rank[byDist]||0);
+  return top===2?"high" : top===1?"medium" : null;
+}
+
+/* Подпись ноты — всё, что меняет оценку. Пока подпись та же, результат
+   движка действителен; изменил советник купон или барьер — оценка
+   автоматически считается заново, а не показывает вчерашнее число. */
+function noteSig(n){
+  const pl=noteToEnginePayload(n);
+  return JSON.stringify([pl.product_type,pl.underlying,pl.coupon,pl.barrier,
+    pl.capital_protection,pl.currency,pl.maturity_years,pl.nominal,pl.coupon_type,
+    n.volOverride??null, n.rateOverride??null]);
+}
+/* Бэкенд без движка отвечает 200 на любой путь. Поэтому «пришёл ответ» и
+   «пришла оценка» — разные вещи: принимаем только то, что структурно является
+   оценкой. Без этой проверки чужой 200 доходил до enginePanel и валил render. */
+function isEngineResult(r){
+  return !!r && typeof r==="object" && !r.error
+      && r.valuation && r.bank_margin && r.probabilities && r.assumptions;
+}
+
+/* Результат движка для позиции — только если он посчитан ИМЕННО для текущих
+   параметров. Иначе null, и расчёт честно откатывается на данные из файла. */
+function engineFor(p){
+  if(p.cls==="structured_note" && noteMissing(p).length) return null;
+  const e=STATE.notePrice[p._id];
+  return (isEngineResult(e) && e.sig===noteSig(p)) ? e : null;
+}
+/* Оценка запускается сама при анализе портфеля, а не по кнопке: числа движка
+   участвуют в комиссиях, скоре и резолюциях, поэтому не могут быть опцией. */
+async function ensureNotesPriced(){
+  const base=backendBase(); if(!base || STATE.engineDown) return;
+  const todo=(STATE.positions||[]).filter(p=>p.cls==="structured_note")
+    .filter(p=>!noteMissing(p).length)
+    .filter(p=>{ const sig=noteSig(p);
+      return !STATE.notePricing[p._id] && (STATE.notePrice[p._id]||{}).sig!==sig; });
+  if(!todo.length) return;
+  todo.forEach(p=>STATE.notePricing[p._id]=true);
+  render();
+  const sigs=new Map(todo.map(p=>[String(p._id), noteSig(p)]));
+  try{
+    const body={notes: todo.map(p=>Object.assign(noteToEnginePayload(p),{id:String(p._id)}))};
+    const res=await postJSON(base+"/notes/price", body);
+    // Бэкенд без движка (например, хостинг только для котировок) отвечает 200 на
+    // любой путь. Отсутствие `results` — это «движка здесь нет», а не ошибка по
+    // каждой ноте: продукт должен честно откатиться на данные из файла.
+    if(!res || typeof res.results!=="object" || res.results===null){
+      const e=new Error(STATE.lang==="ru"?"движок оценки нот на этом бэкенде недоступен"
+                                         :"note pricing engine unavailable on this backend");
+      e.permanent=true;   // дело в бэкенде, а не в связи — повторять бессмысленно
+      throw e;
+    }
+    const got=res.results;
+    Object.entries(got).forEach(([id,r])=>{
+      STATE.notePrice[id]=((r&&r.error)||isEngineResult(r))
+        ? Object.assign({}, r, {sig:sigs.get(id)})
+        : {error:STATE.lang==="ru"?"ответ не является оценкой":"response is not a valuation", sig:sigs.get(id)};
+    });
+    // Нота, по которой сервер не прислал ничего, должна получить отметку —
+    // иначе следующий render() запросит её снова, и так до бесконечности.
+    sigs.forEach((sig,id)=>{ if(!(id in got)) STATE.notePrice[id]={error:"нет ответа по этой ноте", sig}; });
+  }catch(e){
+    const msg=String(e.message||e);
+    // Отсутствие движка на бэкенде залипает: повторять нечего. Сбой связи или
+    // таймаут — нет: отмечаем только эти ноты, следующая попытка возможна.
+    if(e.permanent) STATE.engineDown=msg;
+    todo.forEach(p=>{ STATE.notePrice[p._id]={error:msg, sig:sigs.get(String(p._id)), transient:!e.permanent}; });
+  }finally{
+    todo.forEach(p=>delete STATE.notePricing[p._id]);
+    render();
+  }
+}
+
+async function priceNoteViaEngine(n){
+  const base=backendBase(); if(!base) return;
+  const id=n._id;
+  STATE.notePricing[id]=true; render();
+  try{
+    const sig=noteSig(n);
+    const j=await postJSON(base+"/note/price", noteToEnginePayload(n));
+    if(!isEngineResult(j)) throw new Error(STATE.lang==="ru"
+      ? "движок оценки нот на этом бэкенде недоступен" : "note pricing engine unavailable on this backend");
+    STATE.notePrice[id]=Object.assign({}, j, {sig});
+  }catch(e){
+    STATE.notePrice[id]={error:String(e.message||e), sig:noteSig(n)};
+  }finally{
+    delete STATE.notePricing[id]; render();
+  }
+}
+function enginePanel(n){
+  const ru=STATE.lang==="ru";
+  const busy=STATE.notePricing[n._id];
+  const r=STATE.notePrice[n._id];
+  const btn=`<button class="btn ghost" data-priceNote="${n._id}" style="padding:4px 10px;font-size:11.5px"${busy?" disabled":""}>${busy?(ru?"Считаю…":"Pricing…"):(ru?"⚙ Пересчитать":"⚙ Re-price")}</button>`;
+  const miss=noteMissing(n);
+  if(miss.length) return `<div style="margin-top:9px;border-top:1px solid var(--line);padding-top:9px">
+    <div style="color:var(--watch);font-size:12.5px"><b>${ru?"Оценка невозможна":"Cannot be valued"}</b></div>
+    <div class="muted" style="font-size:11.5px;line-height:1.55;margin-top:4px">${ru
+      ? `В выписке нет: <b>${noteMissingLabel(miss)}</b>. Без них движок считал бы по подставленным значениям, а вывод о марже банка и купоне был бы выдуман. Допишите параметры — оценка появится сама.`
+      : `The statement lacks: <b>${noteMissingLabel(miss)}</b>. Without them the engine would run on invented inputs and any conclusion about issuer margin or coupon would be fabricated. Fill them in and the valuation appears.`}</div>
+    <button class="btn ghost" data-noteedit="${n._id}" style="padding:4px 10px;font-size:11.5px;margin-top:7px">${ru?"Дописать параметры":"Complete the note"}</button>
+  </div>`;
+  if(!backendBase()) return "";
+  if(!r || r.sig!==noteSig(n)) return `<div style="margin-top:9px;border-top:1px solid var(--line);padding-top:9px">
+    <div class="muted" style="font-size:11.5px">${busy?(ru?"Монте-Карло считает ноту…":"Monte-Carlo pricing…"):(ru?"Оценка движком считается вместе с анализом портфеля.":"Engine valuation runs with the portfolio analysis.")}</div></div>`;
+  if(r.error || !isEngineResult(r)) return `<div style="margin-top:9px;border-top:1px solid var(--line);padding-top:9px">${btn}
+    <div class="err" style="font-size:12px;margin-top:6px">${esc(r.error||(ru?"ответ бэкенда не является оценкой":"backend response is not a valuation"))}</div></div>`;
+  const v=r.valuation, b=r.bank_margin, pr=r.probabilities, a=r.assumptions, f=r.fair_coupon||{};
+  const c=b.components||{};
+  const mcol=b.total_pct>3.5?"var(--risk)":b.total_pct>0?"var(--watch)":"var(--good)";
+  const bar=(lbl,val)=>{ const w=b.total_pct>0?Math.max(0,val/b.total_pct*100):0;
+    return `<div style="display:flex;align-items:center;gap:7px;font-size:11.5px;margin-top:3px">
+      <span class="muted" style="flex:0 0 92px">${lbl}</span>
+      <span style="flex:1;height:6px;background:var(--navy);border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:${w}%;background:var(--note)"></i></span>
+      <b style="flex:0 0 40px;text-align:right">${pct(val,2)}</b></div>`; };
+  return `<div style="margin-top:9px;border-top:1px solid var(--line);padding-top:9px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.3px">${ru?"Оценка движком":"Engine valuation"}</span>${btn}
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin:9px 0 4px;font-size:13px">
+      <span>${ru?"Справедливая":"Fair value"}: <b>${pct(v.fair_value_pct,2)}</b></span>
+      ${n.entry?`<span class="muted">${ru?"в файле было":"file said"} ${pct(((n.entry||0)+(n.tenorYears||3)*(n.feeProduct||0)),1)}</span>`:""}
+      <span>${ru?"Зашито при выпуске":"Embedded at issue"}: <b style="color:${mcol}">${pct(b.total_pct,2)}</b>
+        <span class="muted">(${fmtMoney(Math.abs(b.total_abs)*(FX[a.currency]||1)/(FX[STATE.base]||1))})</span></span>
+    </div>
+    ${b.total_pct>0?bar(ru?"структурир.":"structuring",c.structuring_fee||0)+bar(ru?"хеджир.":"hedging",c.hedging_cost||0)+bar(ru?"кред. риск":"credit",c.credit_risk_premium||0)+bar(ru?"дистриб.":"distribution",c.distribution_fee||0):""}
+    ${f.fair_coupon_pct!=null?`<div style="margin-top:9px;padding:8px 10px;background:var(--navy);border-radius:7px;font-size:12.5px">
+      ${ru?"Справедливый купон":"Fair coupon"}: <b>${pct(f.fair_coupon_pct,2)}</b> ${ru?"против предложенных":"vs offered"} <b>${pct(f.offered_coupon_pct,2)}</b>
+      ${f.shortfall_pp>0.05?`<span style="color:var(--risk)"> · ${ru?"недоплата":"shortfall"} ${f.shortfall_pp.toFixed(2)} ${ru?"п.п./год":"pp p.a."}</span>`:""}
+    </div>`:""}
+    <div class="note-meta" style="font-size:11.5px;margin-top:8px">
+      ${ru?"Автоколл":"Autocall"} <b>${pct(pr.autocall||0,1)}</b> · ${ru?"пробой барьера":"barrier hit"} <b>${pct(pr.barrier_hit||0,1)}</b> · ${ru?"полный возврат":"full return"} <b>${pct(pr.full_return||0,1)}</b>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px;font-size:11.5px">
+      <span class="muted">${ru?"Свои допущения:":"Your assumptions:"}</span>
+      <label style="display:flex;align-items:center;gap:4px">${ru?"вол.":"vol"}
+        <input data-assum="vol" data-note="${n._id}" type="number" step="0.5" min="1" max="150"
+          placeholder="${((a.volatility||0)*100).toFixed(0)}" value="${n.volOverride??""}"
+          style="width:58px;padding:3px 5px;font-size:11.5px"/>%</label>
+      <label style="display:flex;align-items:center;gap:4px">${ru?"ставка":"rate"}
+        <input data-assum="rate" data-note="${n._id}" type="number" step="0.1" min="0" max="30"
+          placeholder="${((a.risk_free_rate||0)*100).toFixed(2)}" value="${n.rateOverride??""}"
+          style="width:58px;padding:3px 5px;font-size:11.5px"/>%</label>
+      ${(n.volOverride||n.rateOverride)?`<button class="btn ghost" data-assum="clear" data-note="${n._id}" style="padding:3px 8px;font-size:11px">${ru?"сбросить":"reset"}</button>`:""}
+      ${btn}
+    </div>
+    <div class="footnote" style="margin-top:6px;color:var(--watch)">${ENGINE_CAVEAT[ru?"ru":"en"]}</div>
+    <div class="footnote" style="margin-top:4px">${ru?"Оценка на дату выпуска, срок":"Priced at issue, tenor"} <b>${a.maturity_years} ${ru?"г.":"y"}</b> · vol ${pct((a.volatility||0)*100,0)} (${esc(a.volatility_source||"")}), div ${pct((a.dividend_yield||0)*100,1)}, ${ru?"ставка":"rate"} ${pct((a.risk_free_rate||0)*100,2)} · ${r.engine.n_paths.toLocaleString()} ${ru?"путей":"paths"}</div>
+  </div>`;
 }
 
 /* ---- settings panel + freshness badges ---- */
@@ -758,7 +1114,12 @@ function settingsPanel(){
 }
 function bindSettings(){
   const st=$("#cfg_status"); const say=m=>{ if(st) st.textContent=m; };
-  const readCfg=()=>{ const b=$("#cfg_backend"), f=$("#cfg_finnhub"); if(b) DATA.cfg.backendUrl=b.value.trim(); if(f) DATA.cfg.finnhubKey=f.value.trim(); saveCfg(); };
+  const readCfg=()=>{ const b=$("#cfg_backend"), f=$("#cfg_finnhub");
+    const was=DATA.cfg.backendUrl;
+    if(b) DATA.cfg.backendUrl=b.value.trim(); if(f) DATA.cfg.finnhubKey=f.value.trim(); saveCfg();
+    // Сменили адрес бэкенда — прежний вывод «движка нет» к нему не относится.
+    if(DATA.cfg.backendUrl!==was){ STATE.engineDown=null; STATE.notePrice={}; }
+  };
   const sv=$("#cfg_save"); if(sv) sv.onclick=()=>{ readCfg(); say(t("cfgSaved")); };
   const fx=$("#cfg_fx"); if(fx) fx.onclick=async()=>{ readCfg(); say(t("refreshing")); await refreshFX(); render(); };
   const pr=$("#cfg_prices"); if(pr) pr.onclick=async()=>{ readCfg(); say(t("refreshing")); await refreshPrices(); render(); };
@@ -791,10 +1152,14 @@ function render(){
   if(!STATE.positions){ app.innerHTML=head+landing(); bindLanding(); if(STATE.settingsOpen) bindSettings(); return; }
 
   const a = analyze(STATE.positions);
-  if(!STATE.baseline) STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum};
-  app.innerHTML = head + tabsBar() + viewBody(a);
+  // Базовый срез фиксируем только когда ноты уже оценены движком, иначе первый
+  // же результат оценки покажется «изменением портфеля», которого не было.
+  if(!STATE.baseline && !a.enginePending)
+    STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum};
+  app.innerHTML = head + tabsBar() + unclassifiedBanner() + viewBody(a);
   bindTabs(); bindView(a); if(STATE.settingsOpen) bindSettings();
   const rbb=$("#rebaseBtn"); if(rbb) rbb.onclick=()=>{ STATE.baseline={score:a.score, fee:a.blendedFee, top1:a.top1, illiquid:a.illiquidPct, aum:a.aum}; render(); };
+  ensureNotesPriced();   // сам себя останавливает, когда всё оценено
 }
 
 function tabsBar(){
@@ -813,6 +1178,26 @@ function viewBody(a){
     case "fees": return vFees(a);
     case "health": return vHealth(a);
   }
+}
+
+function unclassifiedBanner(){
+  if(!STATE.positions) return "";
+  const n=STATE.positions.filter(p=>p.cls==="unknown").length;
+  if(!n) return "";
+  const ru=STATE.lang==="ru";
+  const word = ru ? (n===1?"позиция не распознана":(n<5?"позиции не распознаны":"позиций не распознано"))
+                  : (n===1?"position is unclassified":"positions are unclassified");
+  return `<div class="panel" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+      padding:12px 16px;border-color:var(--watch);background:var(--navy)">
+    <span style="color:var(--watch);font-size:16px">▲</span>
+    <div style="flex:1;min-width:220px">
+      <b style="font-size:13.5px">${n} ${word}</b>
+      <div class="muted" style="font-size:12.5px;line-height:1.5;margin-top:2px">${ru
+        ? "Класс актива не определён по названию. Пока он не назначен, эти позиции искажают распределение, диверсификацию и ликвидность."
+        : "Asset class could not be determined from the name. Until assigned, these positions distort allocation, diversification and liquidity."}</div>
+    </div>
+    <button class="btn" id="fixClsBtn" style="padding:7px 14px;font-size:12.5px">${ru?"Назначить":"Assign"}</button>
+  </div>`;
 }
 
 /* ---------- Overview ---------- */
@@ -854,12 +1239,15 @@ function clientsView(){
   const ru=STATE.lang==="ru"; const profiles=getProfiles(); const names=Object.keys(profiles);
   let body;
   if(!names.length) body=`<div class="empty">${ru?"Нет сохранённых профилей. Загрузите портфель и сохраните его в ⚙ → «Профили клиентов».":"No saved profiles. Load a portfolio and save it in ⚙ → Client profiles."}</div>`;
-  else { const cards=names.map(n=>{ const a=analyze((profiles[n].positions||[])); return {n, aum:a.aum, pos:a.rows.length, brk:Object.keys(a.byBroker).length, fee:a.blendedFee, score:a.score}; }).sort((x,y)=>y.aum-x.aum);
-    body=`<table><thead><tr><th>${ru?"Клиент":"Client"}</th><th class="num">${ru?"Активы":"AUM"}</th><th class="num">${ru?"Поз.":"Pos."}</th><th class="num">${ru?"Брок.":"Brk."}</th><th class="num">${ru?"Комис.":"Fee"}</th><th class="num">Health</th><th></th></tr></thead><tbody>${cards.map(c=>`<tr><td><b>${esc(c.n)}</b></td><td class="num">${fmtMoney(c.aum)}</td><td class="num">${c.pos}</td><td class="num">${c.brk}</td><td class="num">${pct(c.fee,2)}</td><td class="num"><b style="color:${ratingColor(c.score)}">${c.score}</b></td><td><button class="chip" data-openc="${esc(c.n)}">${ru?"Открыть":"Open"}</button></td></tr>`).join("")}</tbody></table>`;
+  else { const cards=names.map(n=>{ const a=analyze((profiles[n].positions||[]), profiles[n].brokerFees||{}); return {n, aum:a.aum, pos:a.rows.length, brk:Object.keys(a.byBroker).length, fee:a.blendedFee, score:a.score, feeComplete:a.feeComplete}; }).sort((x,y)=>y.aum-x.aum);
+    body=`<table><thead><tr><th>${ru?"Клиент":"Client"}</th><th class="num">${ru?"Активы":"AUM"}</th><th class="num">${ru?"Поз.":"Pos."}</th><th class="num">${ru?"Брок.":"Brk."}</th><th class="num">${ru?"Комис.":"Fee"}</th><th class="num">Health</th><th></th></tr></thead><tbody>${cards.map(c=>`<tr><td><b>${esc(c.n)}</b></td><td class="num">${fmtMoney(c.aum)}</td><td class="num">${c.pos}</td><td class="num">${c.brk}</td><td class="num">${pct(c.fee,2)}${c.feeComplete?"":`<span style="color:var(--watch)" title="${ru?"тарифы брокеров не заведены — показано только подтверждённое":"broker tariffs missing — confirmed only"}">*</span>`}</td><td class="num"><b style="color:${ratingColor(c.score)}">${c.score}</b>${c.feeComplete?"":`<span style="color:var(--watch)">*</span>`}</td><td><button class="chip" data-openc="${esc(c.n)}">${ru?"Открыть":"Open"}</button></td></tr>`).join("")}</tbody></table>`;
   }
   return `<div class="toolbar"><nav class="tabs"><button class="on">${ru?"Клиенты":"Clients"}</button></nav>
       <button class="btn ghost" id="clientsBack">← ${ru?"Назад":"Back"}</button></div>
-    <div class="panel"><h3>${ru?"Профили клиентов — сравнение":"Client profiles — comparison"} <span class="hint">${names.length}</span></h3>${body}</div>`;
+    <div class="panel"><h3>${ru?"Профили клиентов — сравнение":"Client profiles — comparison"} <span class="hint">${names.length}</span></h3>${body}
+      ${names.some(n=>!analyze(profiles[n].positions||[], profiles[n].brokerFees||{}).feeComplete)?`<div class="footnote" style="color:var(--watch);margin-top:8px">${ru
+        ? "* У этих клиентов не заведены тарифы брокеров: комиссия показана только по подтверждённым данным, а скор посчитан без подоценки «издержки». Строки со звёздочкой сопоставимы между собой, но не с остальными."
+        : "* Broker tariffs are missing for these clients: the fee reflects confirmed data only and the score omits the cost sub-score. Starred rows compare with each other, not with the rest."}</div>`:""}</div>`;
 }
 function bindClients(){
   const bk=$("#clientsBack"); if(bk) bk.onclick=()=>{ STATE.showClients=false; render(); };
@@ -870,16 +1258,22 @@ function vOverview(a){
     card(t("kAum"), fmtMoney(a.aum), `${STATE.base}`),
     card(t("kBrokers"), Object.keys(a.byBroker).length, ""),
     card(t("kPositions"), a.rows.length, ""),
-    card(t("kFee"), pct(a.blendedFee,2), t("perYear")),
-    card(t("kDrag"), fmtMoney(a.dragAbs), `+${pct(a.dragPct,2)} ${t("ofAum")}`),
+    card(t("kFee"), pct(a.blendedFee,2)+(a.feeComplete?"":"*"),
+         a.feeComplete?t("perYear"):(STATE.lang==="ru"?"в год · подтверждённое":"p.a. · confirmed only")),
+    card(t("kDrag"), fmtMoney(a.dragAbs)+(a.feeComplete?"":"*"), `+${pct(a.dragPct,2)} ${t("ofAum")}`),
     cardScore(t("kScore"), a.score)
   ].join("");
+
+  const feeNote = a.feeComplete ? "" : `<div class="panel" style="border-color:var(--watch);background:var(--navy);padding:11px 15px">
+    <div class="muted" style="font-size:12.5px;line-height:1.55">${STATE.lang==="ru"
+      ? `* Комиссия и fee-drag показаны только по подтверждённым данным. Тарифы не заведены по ${a.brokersMissing.map(esc).join(", ")} — фактические издержки выше. <b>Комиссии → Тарифы брокеров.</b>`
+      : `* Fee and fee drag reflect confirmed data only. Tariffs are missing for ${a.brokersMissing.map(esc).join(", ")} — actual costs are higher. <b>Fees → Broker tariffs.</b>`}</div></div>`;
 
   const classSegs=Object.entries(a.byClass).map(([k,v])=>({label:t(CLASSES[k]?CLASSES[k].k:k),value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value);
   const brokerSegs=Object.entries(a.byBroker).map(([k,v],i)=>({label:k,value:v,color:palette(i)})).sort((x,y)=>y.value-x.value);
   const ccySegs=Object.entries(a.byCcy).map(([k,v],i)=>({label:k,value:v,color:palette(i+2)})).sort((x,y)=>y.value-x.value);
 
-  return `${whatIfStrip(a)}<div class="cards">${cards}</div>
+  return `${whatIfStrip(a)}<div class="cards">${cards}</div>${feeNote}
     <div class="row">
       <div class="panel"><h3>${t("allocClass")}</h3>${donutBlock(classSegs,a.aum)}</div>
       <div class="panel"><h3>${t("byBroker")}</h3>${legendBars(brokerSegs,a.aum)}</div>
@@ -934,7 +1328,7 @@ function holdingRow(r,a){
   const flags=[];
   if(r.weight>10) flags.push(STATE.lang==="ru"?"концентрация":"concentration");
   if(r.product>=1.5) flags.push(STATE.lang==="ru"?"дорогой":"expensive");
-  if(r.cls==="structured_note" && (r.barrierDist??30)<20) flags.push(STATE.lang==="ru"?"барьер":"barrier");
+  if(r.cls==="structured_note" && barrierLevel(barrierRisk(r))) flags.push(STATE.lang==="ru"?"барьер":"barrier");
   if(ILLIQUID.has(r.cls)) flags.push(STATE.lang==="ru"?"неликвид":"illiquid");
   return `<tr>
     <td>${esc(r.name)}</td>
@@ -951,7 +1345,7 @@ function holdingRow(r,a){
 function editPanel(){
   const p=(STATE.positions||[]).find(x=>x._id===STATE.editId); if(!p) return "";
   const ru=STATE.lang==="ru";
-  const clsOpts=Object.keys(CLASSES).map(c=>`<option value="${c}" ${c===p.cls?"selected":""}>${t(CLASSES[c].k)}</option>`).join("");
+  const clsOpts=Object.keys(CLASSES).filter(c=>c!=="unknown").map(c=>`<option value="${c}" ${c===p.cls?"selected":""}>${t(CLASSES[c].k)}</option>`).join("");
   const ccyOpts=Object.keys(FX).map(c=>`<option ${c===p.ccy?"selected":""}>${c}</option>`).join("");
   return `<div class="panel manual" id="editPanel" style="border-color:var(--gold)">
     <h3>${ru?"Редактирование позиции":"Edit position"} <span class="hint">${esc(p.name||"")}</span></h3>
@@ -963,6 +1357,22 @@ function editPanel(){
       <div><label>${t("fValue")}</label><input id="e_value" type="number" value="${p.value||0}"/></div>
       <div><label>${t("fFee")}</label><input id="e_fee" type="number" step="0.01" value="${p.feeProduct||0}"/></div>
     </div>
+    ${p.cls==="structured_note"?`
+    <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:8px">
+        ${ru?"Параметры ноты — нужны для оценки движком":"Note parameters — required for engine valuation"}</div>
+      <div class="mg">
+        <div><label>${ru?"Базовый актив":"Underlying"}</label><input id="e_underlying" value="${esc(p.underlying||"")}" placeholder="S&amp;P 500"/></div>
+        <div><label>${ru?"Купон, % годовых":"Coupon, % p.a."}</label><input id="e_coupon" type="number" step="0.1" min="0" max="100" value="${esc(p.coupon??"")}" placeholder="8.0"/></div>
+        <div><label>${ru?"Барьер, % от старта":"Barrier, % of initial"}</label><input id="e_barrier" type="number" step="1" min="1" max="100" value="${esc(p.barrier??"")}" placeholder="65"/></div>
+        <div><label>${ru?"Защита капитала, %":"Capital protection, %"}</label><input id="e_capprot" type="number" step="1" min="0" max="100" value="${esc(p.capProt??"")}" placeholder="0"/></div>
+        <div><label>${ru?"Погашение":"Maturity"}</label><input id="e_maturity" type="date" value="${esc(p.maturity||"")}"/></div>
+        <div><label>${ru?"Срок при выпуске, лет":"Tenor at issue, years"}</label><input id="e_tenor" type="number" step="0.5" min="0.25" max="30" value="${esc(p.tenorYears??"")}" placeholder="3"/></div>
+      </div>
+      <div class="footnote" style="margin-top:8px">${ru
+        ? "Пустые поля остаются пустыми: движок не подставляет за вас барьер или купон, потому что вывод о марже банка на подставленных числах — выдумка."
+        : "Blank stays blank: the engine will not invent a barrier or coupon, because a conclusion about issuer margin drawn from invented inputs is fiction."}</div>
+    </div>`:""}
     <div style="margin-top:12px;display:flex;gap:10px">
       <button class="btn" id="e_save">${ru?"Сохранить":"Save"}</button>
       <button class="btn ghost" id="e_cancel">${ru?"Отмена":"Cancel"}</button>
@@ -983,6 +1393,9 @@ function buildReport(a){
   const row=(k,v)=>`<tr><td>${esc(k)}</td><td style="text-align:right">${fmtMoney(v)}</td><td style="text-align:right;width:64px">${pct(v/a.aum*100)}</td></tr>`;
   const cls=Object.entries(a.byClass).sort((x,y)=>y[1]-x[1]).map(([k,v])=>row(t(CLASSES[k]?CLASSES[k].k:k),v)).join("");
   const brk=Object.entries(a.byBroker).sort((x,y)=>y[1]-x[1]).map(([k,v])=>row(k,v)).join("");
+  const incomplete = a.feeComplete ? "" : `<p class="rep-note">${ru
+    ? `* Показаны только подтверждённые издержки: TER из выписки и маржа нот, посчитанная движком. Консультационная и кастоди по ${a.brokersMissing.map(esc).join(", ")} (${fmtMoney(a.missingVal)} активов) не заведены и в цифру не входят — фактические издержки выше. Подоценка «издержки» в скоре помечена как «н/д», её вес перераспределён.`
+    : `* Confirmed costs only: statement TERs and engine-priced note margins. Advisory and custody for ${a.brokersMissing.map(esc).join(", ")} (${fmtMoney(a.missingVal)} of assets) are not entered and are excluded — actual costs are higher. The cost sub-score is marked n/a and its weight redistributed.`}</p>`;
   const R=resolutions(a).slice(0,8).map(r=>`<li><b>${esc(r.title)}</b> — ${esc(r.body)}${r.impact?` <i>(${esc(r.impact)})</i>`:""}</li>`).join("");
   return `<div class="rep">
     <div class="rep-h"><div><div class="rep-title">${ru?"Отчёт о здоровье портфеля":"Portfolio Health Report"}</div>
@@ -992,9 +1405,10 @@ function buildReport(a){
       <div><span>${ru?"Активы":"Assets"}</span><b>${fmtMoney(a.aum)}</b></div>
       <div><span>${ru?"Брокеров":"Brokers"}</span><b>${Object.keys(a.byBroker).length}</b></div>
       <div><span>${ru?"Позиций":"Positions"}</span><b>${a.rows.length}</b></div>
-      <div><span>${ru?"Комиссия/год":"Fee p.a."}</span><b>${pct(a.blendedFee,2)}</b></div>
+      <div><span>${ru?"Комиссия/год":"Fee p.a."}</span><b>${pct(a.blendedFee,2)}${a.feeComplete?"":"*"}</b></div>
       <div><span>Fee-drag</span><b>${fmtMoney(a.dragAbs)}/${ru?"год":"yr"}</b></div>
     </div>
+    ${incomplete}
     <div class="rep-cols">
       <div><h4>${ru?"Распределение по классам":"Asset allocation"}</h4><div style="text-align:center;margin:2px 0 10px">${donut(Object.entries(a.byClass).map(([k,v])=>({label:k,value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value),150)}</div><table>${cls}</table></div>
       <div><h4>${ru?"По брокерам":"By broker"}</h4><table>${brk}</table></div>
@@ -1043,26 +1457,36 @@ function vStructured(a){
 function noteCard(n){
   const dt=parseDate(n.maturity); const dl=dt?daysBetween(TODAY,dt):null;
   const emb=((n.entry||0)+(n.tenorYears||3)*(n.product||0)).toFixed(1);
-  const bd=n.barrierDist??null;
-  const bcol=bd==null?"var(--muted)":(bd<13?"var(--risk)":bd<20?"var(--watch)":"var(--good)");
+  const br=barrierRisk(n), bd=br.dist;
+  // Цвет — по худшему из двух сигналов (сегодняшнее расстояние и вероятность
+  // от выпуска); серый только когда не известно ни одного.
+  const blvl = barrierLevel(br);
+  const bcol = blvl==="high" ? "var(--risk)" : blvl==="medium" ? "var(--watch)"
+             : (br.prob!=null || bd!=null) ? "var(--good)" : "var(--muted)";
   return `<div style="border:1px solid var(--line);border-radius:11px;padding:15px;background:var(--navy)">
     <div style="display:flex;justify-content:space-between;gap:10px"><b>${esc(n.name)}</b><span class="muted">${esc(n.broker)}</span></div>
     <div style="margin:6px 0 10px;font-size:13px">${fmtFull(n.baseValue)} · ${pct(n.weight)} ${t("weightLbl")}</div>
     <div class="note-meta">
       ${t("underlying")}: <b>${esc(n.underlying||"—")}</b><br/>
-      ${t("coupon")}: <b>${pct(n.coupon||0,1)}</b> · ${t("capProt")}: <b>${n.capProt?pct(n.capProt,0):"0%"}</b><br/>
-      ${t("barrier")}: <b>${n.barrier||"—"}%</b> · ${t("barrierDist")}: <b style="color:${bcol}">${bd!=null?pct(bd,0):"—"}</b><br/>
+      ${t("coupon")}: <b>${n.coupon?pct(n.coupon,1):"—"}</b> · ${t("capProt")}: <b>${n.capProt?pct(n.capProt,0):(n.barrier?"0%":"—")}</b><br/>
+      ${t("barrier")}: <b>${n.barrier?n.barrier+"%":"—"}</b> · ${t("barrierDist")}: <b style="color:${bcol}">${bd!=null?pct(bd,0):"—"}</b>${
+        br.prob!=null?`<br/><span class="muted">${STATE.lang==="ru"?"вероятность пробоя от выпуска за весь срок":"breach probability from issue, full term"}: <b style="color:${bcol}">${pct(br.prob,1)}</b></span>`:""}<br/>
       ${t("maturity")}: <b>${n.maturity||"—"}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
-      ${t("embedded")}: <b style="color:var(--watch)">≈ ${emb}%</b> <span class="muted">(${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/${STATE.lang==="ru"?"г":"y"}×${n.tenorYears||3})</span>
+      ${n.embSrc==="engine"
+        ? `${t("embedded")}: <b style="color:var(--watch)">${pct(n.eng.bank_margin.total_pct,2)}</b> <span class="muted">${STATE.lang==="ru"?"при выпуске, по движку":"at issue, per engine"}</span>`
+        : (n.entry||n.product)
+          ? `${t("embedded")}: <b style="color:var(--watch)">≈ ${emb}%</b> <span class="muted">(${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/${STATE.lang==="ru"?"г":"y"}×${n.tenorYears||3})</span>`
+          : `${t("embedded")}: <b class="muted">—</b>`}
     </div>
-    <div style="margin-top:9px;border-top:1px solid var(--line);padding-top:8px">
+    ${(!n.coupon && !n.barrier) ? "" : `<div style="margin-top:9px;border-top:1px solid var(--line);padding-top:8px">
       <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:5px">${STATE.lang==="ru"?"Сценарии на погашении":"Payoff at maturity"}</div>
       <div class="note-meta" style="font-size:12px">
         <span style="color:var(--good)">▲</span> ${STATE.lang==="ru"?`Базовый ≥ старта — купон ${pct(n.coupon||0,1)}, капитал 100%.`:`Underlying ≥ start — coupon ${pct(n.coupon||0,1)}, capital 100%.`}<br/>
         <span style="color:var(--watch)">◆</span> ${STATE.lang==="ru"?"Между барьером и стартом — купон, капитал 100%.":"Between barrier and start — coupon, capital 100%."}<br/>
         <span style="color:var(--risk)">▼</span> ${STATE.lang==="ru"?(n.capProt?`Ниже барьера — защита капитала ${pct(n.capProt,0)}.`:"Ниже барьера — защиты нет, убыток повторяет падение базового актива."):(n.capProt?`Below barrier — ${pct(n.capProt,0)} capital protection.`:"Below barrier — no protection, loss tracks the underlying.")}
       </div>
-    </div>
+    </div>`}
+    ${enginePanel(n)}
   </div>`;
 }
 function derivCard(d){
@@ -1079,6 +1503,41 @@ function derivCard(d){
 }
 
 /* ---------- Fees ---------- */
+/* Договорная сетка вводится советником. Пустое поле — это «не знаем», и оно
+   не превращается в число: подсказка серым показывает отраслевой диапазон,
+   а не значение, попадающее в расчёт. */
+function tariffPanel(a){
+  const ru=STATE.lang==="ru";
+  if(!a.brokersAll.length) return "";
+  const rows=a.brokersAll.map(b=>{
+    const f=(STATE.brokerFees||{})[b]||{};
+    const val=a.rows.filter(r=>r.broker===b).reduce((s,r)=>s+r.baseValue,0);
+    const st=brokerTariffState(b);
+    const known=st==="full";
+    const fld=(k,lbl)=>`<label style="display:flex;flex-direction:column;gap:3px;font-size:11px" class="muted">${lbl}, %
+      <input data-tariff="${k}" data-broker="${esc(b)}" type="number" step="0.05" min="0" max="5"
+        placeholder="${TARIFF_HINT[k]}" value="${f[k]??""}"
+        style="width:88px;padding:5px 7px;font-size:12.5px"/></label>`;
+    return `<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;
+        padding:11px 0;border-top:1px solid var(--line)">
+      <div style="flex:1 1 150px;min-width:0">
+        <b style="font-size:13px">${esc(b)}</b>
+        <div class="muted" style="font-size:11.5px">${fmtMoney(val)}</div>
+      </div>
+      ${fld("advisory",t("advisory"))}
+      ${fld("custody",t("custody"))}
+      <span style="flex:0 0 auto;font-size:11.5px;padding-bottom:6px;color:${known?"var(--good)":"var(--watch)"}">
+        ${known?(ru?"учтён":"counted"):st==="partial"?(ru?"заполнено наполовину — не учитывается":"half-filled — not counted"):(ru?"не заведён":"not entered")}</span>
+    </div>`;
+  }).join("");
+  return `<div class="panel"><h3>${ru?"Тарифы брокеров":"Broker tariffs"}</h3>
+    <div class="footnote" style="margin-bottom:4px">${ru
+      ? "Мы не подставляем чужую тарифную сетку за вас: договорные условия знает только советник. Заполните один раз — сохранится в профиле клиента. Серым показан отраслевой диапазон, он в расчёт не идёт."
+      : "We do not guess your negotiated grid: only the advisor knows it. Enter it once — it is stored with the client profile. Grey shows an industry range and never enters the calculation."}</div>
+    ${rows}
+  </div>`;
+}
+
 function vFees(a){
   const comp=a.feeComponents;
   const compRows=[["advisory",comp.advisory],["custody",comp.custody],["product",comp.product],["entryAmort",comp.entryAmort]];
@@ -1087,8 +1546,15 @@ function vFees(a){
   const expMax=exp[0]?exp[0].feeAbs:1;
   const proj10=a.feeAbs*10, projBench=a.aum*BENCH/100*10;
 
-  return `<div class="cards">
-      ${card(t("kFee"),pct(a.blendedFee,2),t("perYear"))}
+  const ruL=STATE.lang==="ru";
+  return `${a.feeComplete?"":`<div class="panel" style="border-color:var(--watch);background:var(--navy);padding:12px 16px">
+      <b style="font-size:13.5px">${ruL?"Показано только подтверждённое":"Confirmed data only"}</b>
+      <div class="muted" style="font-size:12.5px;line-height:1.55;margin-top:3px">${ruL
+        ? `${pct(a.blendedFee,2)}/год посчитано по TER из файла и марже нот из движка. Консультационная и кастоди по ${a.brokersMissing.length} брокер${a.brokersMissing.length===1?"у":"ам"} (${a.brokersMissing.map(esc).join(", ")}, ${fmtMoney(a.missingVal)} активов) не заведены и в цифру не входят — реальные издержки выше.`
+        : `${pct(a.blendedFee,2)} p.a. is computed from file TERs and engine-priced note margins. Advisory and custody for ${a.brokersMissing.length} broker(s) (${a.brokersMissing.map(esc).join(", ")}, ${fmtMoney(a.missingVal)} of assets) are not entered and are excluded — the true cost is higher.`}</div>
+    </div>`}
+    <div class="cards">
+      ${card(t("kFee"),pct(a.blendedFee,2),a.feeComplete?t("perYear"):(ruL?"в год · подтверждённое":"p.a. · confirmed only"))}
       ${card(STATE.lang==="ru"?"Издержки в год":"Annual cost",fmtMoney(a.feeAbs),STATE.base)}
       ${card(t("kDrag"),fmtMoney(a.dragAbs),`vs ${pct(BENCH,2)} bench`)}
       ${card(t("proj"),fmtMoney(proj10),`vs ${fmtMoney(projBench)} bench`)}
@@ -1112,7 +1578,8 @@ function vFees(a){
       <tbody>${exp.map(r=>`<tr><td>${esc(r.name)}</td><td class="muted">${esc(r.broker)}</td>
         <td class="num">${pct(r.feePct,2)}</td><td class="num">${fmtMoney(r.feeAbs)}</td>
         <td style="width:30%"><div class="bar"><i style="width:${r.feeAbs/expMax*100}%;background:var(--note)"></i></div></td></tr>`).join("")}</tbody></table>
-    </div>`;
+    </div>
+    ${tariffPanel(a)}`;
 }
 function barCompare(l1,v1,l2,v2,max,money){
   const f=money?fmtMoney:(x)=>pct(x,2);
@@ -1126,7 +1593,10 @@ function barCompare(l1,v1,l2,v2,max,money){
 function vHealth(a){
   const subs=[
     ["cDiversification",a.sub.diversification,`top-1 ${pct(a.top1)} · ${t("techConc")} ${pct(a.techShare)}`],
-    ["cCost",a.sub.cost,`${pct(a.blendedFee,2)} ${t("perYear")} · drag ${pct(a.dragPct,2)}`],
+    ["cCost",a.sub.cost, a.feeComplete
+       ? `${pct(a.blendedFee,2)} ${t("perYear")} · drag ${pct(a.dragPct,2)}`
+       : (STATE.lang==="ru"?`не заведены тарифы по ${a.brokersMissing.length} брокер${a.brokersMissing.length===1?"у":"ам"}`
+                           :`tariffs missing for ${a.brokersMissing.length} broker(s)`)],
     ["cCurrency",a.sub.currency, a.largestFx.c?`${a.largestFx.c} ${pct(a.largestFx.pct)}`:"—"],
     ["cLiquidity",a.sub.liquidity,`${t("illiquidShare")} ${pct(a.illiquidPct)}`],
     ["cQuality",a.sub.quality,`${a.notes.length} ${STATE.lang==="ru"?"нот":"notes"} · ${a.leverage.toFixed(2)}× lev`],
@@ -1142,10 +1612,15 @@ function vHealth(a){
         <div style="margin-top:4px;font-weight:800;color:${ratingColor(a.score)}">${ratingLabel(a.score)}</div></div>
       <div class="score-sub">
         ${subs.map(([k,v,d])=>`<div class="ssub">
-          <div class="top"><span>${t(k)} <span class="muted" style="font-size:11.5px">· ${d}</span></span><b style="color:${ratingColor(v)}">${Math.round(v)}</b></div>
-          <div class="bar"><i style="width:${v}%;background:${ratingColor(v)}"></i></div></div>`).join("")}
+          <div class="top"><span>${t(k)} <span class="muted" style="font-size:11.5px">· ${d}</span></span>
+            <b style="color:${v==null?"var(--muted)":ratingColor(v)}">${v==null?(STATE.lang==="ru"?"н/д":"n/a"):Math.round(v)}</b></div>
+          <div class="bar">${v==null?`<i style="width:100%;background:repeating-linear-gradient(90deg,var(--line) 0 6px,transparent 6px 12px)"></i>`
+                                     :`<i style="width:${v}%;background:${ratingColor(v)}"></i>`}</div></div>`).join("")}
       </div>
     </div>
+    ${!a.feeComplete?`<div class="footnote" style="color:var(--watch);margin-top:8px">${STATE.lang==="ru"
+      ? `Скор неполный: тарифы не заведены по ${a.brokersMissing.map(esc).join(", ")}. Вес «издержек» (25%) перераспределён между остальными подоценками — мы не занижаем скор за то, чего не знаем. Заведите тарифы во вкладке «Комиссии».`
+      : `Score incomplete: no tariffs entered for ${a.brokersMissing.map(esc).join(", ")}. The 25% cost weight is redistributed — we do not penalise the score for what we do not know. Enter tariffs on the Fees tab.`}</div>`:""}
     <div class="footnote">${STATE.lang==="ru"
       ?"Веса: диверсификация 25% · издержки 25% · ликвидность 15% · качество продуктов 15% · валюта 10% · кэш 10%."
       :"Weights: diversification 25% · cost 25% · liquidity 15% · product quality 15% · currency 10% · cash 10%."}</div>
@@ -1232,18 +1707,18 @@ function removeSource(src){            // remove a single loaded statement
 }
 
 /* ---------- persistence: auto-save + named client profiles (localStorage) ---------- */
-function saveAutosave(){ try{ if(STATE.positions && STATE.positions.length) localStorage.setItem("wl_auto", JSON.stringify({positions:STATE.positions, client:STATE.client||""})); else localStorage.removeItem("wl_auto"); }catch(e){} }
-function loadAutosave(){ try{ const a=JSON.parse(localStorage.getItem("wl_auto")||"null"); if(a&&a.positions&&a.positions.length){ STATE.positions=a.positions; STATE.client=a.client||""; STATE.positions.forEach(p=>{ if((p._id||0)>PID) PID=p._id; }); recalcSource(); return true; } }catch(e){} return false; }
+function saveAutosave(){ try{ if(STATE.positions && STATE.positions.length) localStorage.setItem("wl_auto", JSON.stringify({positions:STATE.positions, client:STATE.client||"", brokerFees:STATE.brokerFees})); else localStorage.removeItem("wl_auto"); }catch(e){} }
+function loadAutosave(){ try{ const a=JSON.parse(localStorage.getItem("wl_auto")||"null"); if(a&&a.positions&&a.positions.length){ STATE.positions=a.positions; STATE.client=a.client||""; STATE.brokerFees=a.brokerFees||{}; STATE.positions.forEach(p=>{ if((p._id||0)>PID) PID=p._id; }); recalcSource(); return true; } }catch(e){} return false; }
 function getProfiles(){ try{ return JSON.parse(localStorage.getItem("wl_profiles")||"{}"); }catch(e){ return {}; } }
-function saveProfile(name){ if(!name || !STATE.positions) return; const all=getProfiles(); all[name]={positions:STATE.positions, client:STATE.client||name, savedAt:new Date().toISOString().slice(0,10)}; try{ localStorage.setItem("wl_profiles", JSON.stringify(all)); }catch(e){} }
-function loadProfile(name){ const p=getProfiles()[name]; if(!p) return; STATE.positions=(p.positions||[]).slice(); STATE.client=p.client||name; STATE.editId=null; STATE.baseline=null; STATE.positions.forEach(x=>{ if((x._id||0)>PID) PID=x._id; }); recalcSource(); STATE.view="overview"; STATE.settingsOpen=false; setPrices0(); render(); }
+function saveProfile(name){ if(!name || !STATE.positions) return; const all=getProfiles(); all[name]={positions:STATE.positions, client:STATE.client||name, brokerFees:STATE.brokerFees, savedAt:new Date().toISOString().slice(0,10)}; try{ localStorage.setItem("wl_profiles", JSON.stringify(all)); }catch(e){} }
+function loadProfile(name){ const p=getProfiles()[name]; if(!p) return; STATE.positions=(p.positions||[]).slice(); STATE.client=p.client||name; STATE.brokerFees=p.brokerFees||{}; STATE.engineDown=null; STATE.editId=null; STATE.baseline=null; STATE.positions.forEach(x=>{ if((x._id||0)>PID) PID=x._id; }); recalcSource(); STATE.view="overview"; STATE.settingsOpen=false; setPrices0(); render(); }
 function deleteProfile(name){ const all=getProfiles(); delete all[name]; try{ localStorage.setItem("wl_profiles", JSON.stringify(all)); }catch(e){} }
 
 /* ---------- manual entry ---------- */
 function showManual(){
   STATE.manual = STATE.manual.length?STATE.manual:[];
   const area=$("#manualArea");
-  const clsOpts=Object.keys(CLASSES).map(c=>`<option value="${c}">${t(CLASSES[c].k)}</option>`).join("");
+  const clsOpts=Object.keys(CLASSES).filter(c=>c!=="unknown").map(c=>`<option value="${c}">${t(CLASSES[c].k)}</option>`).join("");
   area.innerHTML=`<div class="panel manual" style="margin-top:18px">
     <h3>${t("srcManT")}</h3>
     <div class="mg">
@@ -1306,19 +1781,50 @@ const HEADER_MAP = {
   coupon:["coupon","купон"], barrier:["barrier","барьер"], maturity:["maturity","погашение","maturity date"],
   underlying:["underlying","базовый","базовый актив"], notional:["notional","номинал"], dtype:["derivative type","тип дерив  атива"]
 };
+// Признаки, которые надо проверять РАНЬШЕ общего словаря.
+// Порядок здесь — не стиль, а исправление дефекта: ключ "note" в списке
+// структурных нот перехватывал "US Treasury Note 1.5% 2030" и уводил
+// казначейку США в структурные продукты, а оттуда — в неликвид.
+const NOTE_HINTS = ["autocall","phoenix","structured","reverse convertible","barrier note",
+                    "нота","ноты","структурн","автоколл","барьерн"];
+const BOND_HINTS = ["treasury","t-bill","t-note","bund","bobl","schatz","gilt","btp","oat",
+                    "офз","ofz","евробонд","eurobond","муниципальн","debenture"];
+// «1.5% 2030» в названии — устойчивый признак долговой бумаги
+const BOND_PATTERN = /\d[.,]?\d*\s*%\s*(?:19|20)\d\d/;
+// Альтернативы проверяются РАНЬШЕ фондов: иначе "Hedge Fund" ловится словом "fund"
+const ALT_HINTS = ["hedge","private equity","venture","real estate fund","хедж","прямых инвестиц"];
+const DERIV_HINTS = ["option","опцион","put","call ","warrant","future","фьючерс","swap","forward"];
+const ETF_HINTS = ["ishares","spdr","vanguard","xtrackers","lyxor","amundi","invesco","etf","бпиф"];
+// Юридические формы — надёжный признак акции. Со границами слова, чтобы
+// "sa" не срабатывало внутри других слов.
+const EQUITY_PATTERN = /\b(inc|corp|corporation|co|ltd|plc|ag|sa|nv|oyj|spa|holdings?|group)\b\.?/;
+// Кириллические формы отдельно: \b в JS работает по ASCII и на «ао» не срабатывает
+const EQUITY_PATTERN_RU = /(^|[\s(])(ао|ап|пао|оао|зао)([\s).,]|$)/;
+
 const CLASS_MAP = {
   equity:["equity","equities","stock","акц","акция","акции"],
   bond:["bond","bonds","fixed income","облиг","бонд"],
   fund_etf:["fund","etf","mutual","фонд","etf"],
-  structured_note:["structured","note","нота","ноты","структ"],
+  structured_note:NOTE_HINTS,
   derivative:["derivative","option","future","swap","дериватив","опцион","фьючерс"],
   cash:["cash","кэш","деньги","money market","нал"],
   alternative:["alternative","hedge","private equity","альтернатив","хедж","pe"]
 };
 function normClass(s){
   const x=String(s||"").toLowerCase();
+  if(!x.trim()) return "unknown";
+  // Ноты — по явным признакам, а не по слову "note"
+  if(NOTE_HINTS.some(w=>x.includes(w))) return "structured_note";
+  if(BOND_HINTS.some(w=>x.includes(w))) return "bond";
+  if(BOND_PATTERN.test(x)) return "bond";
+  if(DERIV_HINTS.some(w=>x.includes(w))) return "derivative";
+  if(ALT_HINTS.some(w=>x.includes(w))) return "alternative";
+  if(ETF_HINTS.some(w=>x.includes(w))) return "fund_etf";
   for(const [k,list] of Object.entries(CLASS_MAP)) if(list.some(w=>x.includes(w))) return k;
-  return "equity";
+  if(EQUITY_PATTERN.test(x) || EQUITY_PATTERN_RU.test(x)) return "equity";
+  // Раньше здесь стоял тихий откат в "equity": нераспознанная бумага молча
+  // становилась акцией и искажала аллокацию, диверсификацию, ликвидность и скор.
+  return "unknown";
 }
 function mapHeaders(headers){
   const lower=headers.map(h=>String(h||"").trim().toLowerCase());
@@ -1477,6 +1983,7 @@ function bindTabs(){
   document.querySelectorAll("nav.tabs button").forEach(b=> b.onclick=()=>{ STATE.view=b.dataset.tab; render(); });
   const as=$("#addStmtBtn"); if(as) as.onclick=()=>$("#fileInp").click();
   const rp=$("#reportBtn"); if(rp) rp.onclick=openReport;
+  const fc=$("#fixClsBtn"); if(fc) fc.onclick=()=>{ STATE.view="holdings"; STATE.holdFilter="unknown"; render(); };
   const cv=$("#csvBtn"); if(cv) cv.onclick=exportCSV;
   const lp=$("#livePricesBtn");
   if(lp) lp.onclick=async()=>{ if(!backendBase()) return;
@@ -1484,6 +1991,42 @@ function bindTabs(){
     try{ await refreshPrices(); }catch(e){} render(); };
 }
 function bindView(a){
+  // Тариф брокера живёт во вкладке «Комиссии»: пустое поле стирает значение,
+  // а не записывает ноль.
+  document.querySelectorAll("[data-tariff]").forEach(el=>{
+    el.onchange=()=>{
+      const b=el.dataset.broker, k=el.dataset.tariff, v=el.value.trim();
+      STATE.brokerFees[b]=STATE.brokerFees[b]||{};
+      if(v==="") delete STATE.brokerFees[b][k]; else STATE.brokerFees[b][k]=+v;
+      if(STATE.brokerFees[b].advisory==null && STATE.brokerFees[b].custody==null) delete STATE.brokerFees[b];
+      if(STATE.client) saveProfile(STATE.client);
+      render();
+    };
+  });
+  if(STATE.view==="structured"){
+    document.querySelectorAll("[data-noteedit]").forEach(b=>{
+      b.onclick=()=>{ STATE.editId=+b.dataset.noteedit; STATE.view="holdings"; STATE.holdFilter="all"; render(); };
+    });
+    document.querySelectorAll("[data-priceNote]").forEach(b=>{
+      b.onclick=()=>{ const n=(STATE.positions||[]).find(x=>x._id===+b.dataset.pricenote);
+        if(n){ STATE.engineDown=null; priceNoteViaEngine(n); } };
+    });
+    // Меняется допущение — меняется подпись ноты, и оценка пересчитывается сама.
+    document.querySelectorAll("[data-assum]").forEach(el=>{
+      const pos=()=>(STATE.positions||[]).find(x=>x._id===+el.dataset.note);
+      if(el.dataset.assum==="clear"){
+        el.onclick=()=>{ const n=pos(); if(!n) return; delete n.volOverride; delete n.rateOverride; render(); };
+        return;
+      }
+      el.onchange=()=>{ const n=pos(); if(!n) return;
+        const v=el.value.trim();
+        const key=el.dataset.assum==="vol"?"volOverride":"rateOverride";
+        const x=+v, lo=el.dataset.assum==="vol"?1:0, hi=el.dataset.assum==="vol"?150:30;
+        if(v==="" || !isFinite(x) || x<lo || x>hi) delete n[key]; else n[key]=x;
+        render();
+      };
+    });
+  }
   if(STATE.view==="holdings"){
     document.querySelectorAll("th[data-sort]").forEach(th=> th.onclick=()=>{
       const k=th.dataset.sort;
@@ -1495,7 +2038,18 @@ function bindView(a){
     document.querySelectorAll("[data-hdel]").forEach(b=> b.onclick=()=>{ delPosition(+b.dataset.hdel); });
     if(STATE.editId!=null){
       const sv=$("#e_save"); if(sv) sv.onclick=()=>{ const p=(STATE.positions||[]).find(x=>x._id===STATE.editId);
-        if(p){ p.broker=($("#e_broker").value||"").trim()||"—"; p.name=($("#e_name").value||"").trim()||p.name; p.cls=$("#e_cls").value; p.ccy=$("#e_ccy").value; p.value=+$("#e_value").value||p.value; p.feeProduct=+$("#e_fee").value||0; }
+        if(p){ p.broker=($("#e_broker").value||"").trim()||"—"; p.name=($("#e_name").value||"").trim()||p.name; p.cls=$("#e_cls").value; p.ccy=$("#e_ccy").value; p.value=+$("#e_value").value||p.value; p.feeProduct=+$("#e_fee").value||0;
+          // Значение вне диапазона — это не «введено», а мусор: оно не должно
+          // попасть в расчёт (отрицательный срок давал отрицательную комиссию).
+          const num=(id,lo,hi)=>{ const el=$(id); if(!el) return undefined;
+            const v=el.value.trim(); if(v==="") return null;
+            const x=+v; return (!isFinite(x) || x<lo || x>hi) ? null : x; };
+          const str=id=>{ const el=$(id); if(!el) return undefined; return el.value.trim(); };
+          const setF=(key,v)=>{ if(v===undefined) return; if(v===null||v==="") delete p[key]; else p[key]=v; };
+          setF("underlying",str("#e_underlying")); setF("coupon",num("#e_coupon",0,100));
+          setF("barrier",num("#e_barrier",1,100)); setF("capProt",num("#e_capprot",0,100));
+          setF("maturity",str("#e_maturity"));     setF("tenorYears",num("#e_tenor",0.25,30));
+        }
         STATE.editId=null; render(); };
       const cn=$("#e_cancel"); if(cn) cn.onclick=()=>{ STATE.editId=null; render(); };
       const dl=$("#e_del"); if(dl) dl.onclick=()=>{ delPosition(STATE.editId); };
@@ -1506,7 +2060,7 @@ function bindView(a){
 /* top controls */
 $("#langSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.lang=b.dataset.lang; render(); });
 $("#curSeg").addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return; STATE.base=b.dataset.cur; render(); });
-$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.sources=[]; STATE.source=""; STATE.client=""; STATE.editId=null; STATE.baseline=null; STATE.showClients=false; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
+$("#resetBtn").onclick=()=>{ STATE.positions=null; STATE.manual=[]; STATE.brokerFees={}; STATE.notePrice={}; STATE.engineDown=null; STATE.sources=[]; STATE.source=""; STATE.client=""; STATE.editId=null; STATE.baseline=null; STATE.showClients=false; STATE.view="overview"; try{localStorage.removeItem("wl_auto");}catch(e){} render(); };
 $("#gearBtn").onclick=()=>{ STATE.settingsOpen=!STATE.settingsOpen; render(); };
 $("#clientsBtn").onclick=()=>{ STATE.showClients=!STATE.showClients; render(); };
 $("#fileInp").addEventListener("change", e=>{ handleFiles(e.target.files); e.target.value=""; });
