@@ -2048,7 +2048,9 @@ function rowsToPositions(matrix){
   // Итоговая строка выписки — не позиция. Если её импортировать, портфель
   // удвоится: сумма всех бумаг войдёт в него ещё раз отдельной строкой.
   // Запоминаем её отдельно и потом сверяем с суммой распознанного.
-  const TOTAL_RE=/^\s*(итого|всего|total|subtotal|sub-?total|grand\s*total|summe|gesamt|totaal|итоговая)\b/i;
+  // \b в JS опирается на латиницу: после «итого» границы слова НЕ возникает,
+  // и строка итога проскакивала в портфель, удваивая его. Границу задаём явно.
+  const TOTAL_RE=/^\s*(итого|всего|итоговая|сумма|total|subtotal|sub-?total|grand\s*total|summe|gesamt|totaal)(\s|:|$|[^\wА-Яа-яЁё])/i;
   let statedTotal=null;
   for(let i=1;i<matrix.length;i++){
     const r=matrix[i]; if(!r || !r.length || r.every(c=>c===""||c==null)) continue;
