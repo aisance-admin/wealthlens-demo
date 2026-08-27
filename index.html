@@ -1698,6 +1698,19 @@ function buildReport(a){
   if(a.techShare==null) caveats.push(L(
     "<b>Сектор не указан</b> ни в одной строке выписки — концентрация по секторам не оценивалась и в скор не входит.",
     "<b>Sector is absent</b> from every statement row — sector concentration was not assessed and is excluded from the score."));
+  // Допущения, на которых стоят все выводы о нотах, — в самом документе.
+  // Проверяющий должен видеть их, не открывая инструмент: волатильность здесь
+  // плоская и справочная, а рыночная оценка барьерной ноты требует поверхности
+  // implied vol со скью на страйке барьера.
+  const priced=a.notes.filter(n=>n.eng);
+  if(priced.length){
+    const vols=priced.map(n=>`${esc(n.underlying||"—")} ${pct((n.eng.assumptions.volatility||0)*100,0)} (${esc(n.eng.assumptions.volatility_source||"")})`);
+    const sp=priced[0].eng.assumptions;
+    caveats.push(L(
+      `<b>Волатильность принята плоской</b>, из справочника, без улыбки и терм-структуры: ${vols.join("; ")}. Рыночная оценка барьерной ноты требует поверхности implied vol со скью на страйке барьера; при типичном equity-скью волатильность на низких страйках выше справочной, поэтому вероятность пробоя и зашитая маржа здесь <b>скорее занижены</b>. Кредитный спред эмитента принят ${pct((sp.credit_spread||0)*100,2)} — это допущение, а не котировка конкретного банка. Числа показывают направление и порядок величины, но не являются оценкой дилерского уровня.`,
+      `<b>Volatility is flat</b>, taken from a reference table, with no smile or term structure: ${vols.join("; ")}. A market valuation of a barrier note requires an implied-vol surface with skew at the barrier strike; under typical equity skew, vol at low strikes exceeds the reference figure, so the breach probability and the embedded margin here are <b>likely understated</b>. The issuer credit spread is assumed at ${pct((sp.credit_spread||0)*100,2)} — an assumption, not a quote for the specific bank. The figures show direction and order of magnitude, not a dealer-grade valuation.`));
+  }
+
   const ck=(STATE.importNote||{}).checkTotal;
   if(ck) caveats.push((()=>{
     const num=v=>v.toLocaleString(ru?"ru-RU":"en-US",{maximumFractionDigits:0});
@@ -1871,8 +1884,8 @@ function buildReport(a){
         <th class="num">${L("Δ п.п.","Δ pp")}</th><th class="num">${L("Маржа","Margin")}</th>
         <th class="num">${L("Пробой","Breach")}</th></tr></thead><tbody>${noteRows}</tbody></table>
       <p class="rep-note">${L(
-        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом при выпуске: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно зашито ≈ ${money(shortfallMoney)} приведённой стоимости.</b>`:""} Оценка не является утверждением о нарушении.`,
-        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer at launch: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate embedded ≈ ${money(shortfallMoney)} in present value.</b>`:""} This is not an assertion of misconduct.`)}</p>
+        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" при выпуске":" (по каждой ноте основа расчёта указана в её карточке: при выпуске либо на остаточном сроке)"}: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно зашито ≈ ${money(shortfallMoney)} приведённой стоимости.</b>`:""} Оценка не является утверждением о нарушении.`,
+        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" at launch":" (each note's basis is stated on its card: at issue or on remaining life)"}: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate embedded ≈ ${money(shortfallMoney)} in present value.</b>`:""} This is not an assertion of misconduct.`)}</p>
     </div>`:""}
 
     ${(a.bonds.length||a.derivs.length)?`<div class="rep-sec">
