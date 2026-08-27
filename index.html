@@ -563,6 +563,13 @@ function analyze(positions, feeMap){
   const blendedFee = aum? feeAbs/aum*100 : 0;
   const dragPct = Math.max(0, blendedFee - BENCH);
   const dragAbs = aum*dragPct/100;
+  // Зашитая маржа ноты — РАЗОВАЯ величина, уплаченная при покупке; она перестаёт
+  // существовать в дату погашения. Разносить её по годам для сравнения с
+  // регулярной комиссией можно, а умножать на десять лет — нет: раньше проекция
+  // начисляла её дважды с лишним. Считаем отдельно и складываем корректно.
+  const noteOneOff = rows.reduce((s,r)=>s + (r.embSrc ? r.baseValue*r.entryAmort/100*noteYears(r) : 0), 0);
+  const recurringAbs = rows.reduce((s,r)=>s + r.baseValue*(r.advisory+r.custody+r.product)/100, 0);
+  const proj10 = recurringAbs*10 + noteOneOff;   // разовое — один раз, а не десять
   // Брокеры портфеля и то, по каким из них тарифы заведены. Разделять важно:
   // «0.64%/год по подтверждённым данным» и «0.64%, потому что остальное принято
   // за ноль» — разные утверждения, и второе продукту говорить нельзя.
@@ -687,7 +694,7 @@ function analyze(positions, feeMap){
 
   return {
     rows, sorted, aum, byClass, byBroker, byCcy, bySector,
-    feeAbs, blendedFee, dragPct, dragAbs, feeComponents,
+    feeAbs, blendedFee, dragPct, dragAbs, feeComponents, noteOneOff, recurringAbs, proj10,
     brokersAll, brokersMissing, missingVal, feeComplete, fxUnknown, fxUnknownCcy,
     top1, top5, hhi, techShare, sectorKnown, largestFx, nonBase,
     illiquid, illiquidPct, cashPct, notes, derivs, notionalAbs, leverage,
@@ -773,13 +780,19 @@ function resolutions(a){
     const f=(n.eng||{}).fair_coupon||{};
     if(f.shortfall_pp>0.25){
       const yrs=noteYears(n);
-      const perYear=n.baseValue*f.shortfall_pp/100, total=perYear*yrs;
+      const perYear=n.baseValue*f.shortfall_pp/100;
+      // Деньгами величина ОДНА: приведённая стоимость разрыва, она же зашитая
+      // маржа. Умножать недобор на срок нельзя — это предполагает, что нота
+      // доживёт до погашения и выплатит каждый купон, тогда как автоколл гасит
+      // её раньше и купон условный. Раньше здесь печаталось число вчетверо
+      // больше маржи, и оба стояли рядом как «та же сумма».
+      const pv=n.baseValue*((n.eng.bank_margin||{}).total_pct||0)/100;
       add(f.shortfall_pp>=1.5?"high":"medium",
         L==="ru"?`Купон ниже справедливого: ${n.name}`:`Coupon below fair value: ${n.name}`,
-        L==="ru"?`Справедливый купон ${pct(f.fair_coupon_pct,2)} против предложенных ${pct(f.offered_coupon_pct,2)} — недобор ${f.shortfall_pp.toFixed(2)} п.п. годовых, это ≈ ${fmtFull(perYear)} в год и ≈ ${fmtFull(total)} за срок ноты (${yrs} г.). ${ENGINE_CAVEAT.ru}`
-                :`Fair coupon ${pct(f.fair_coupon_pct,2)} vs ${pct(f.offered_coupon_pct,2)} offered — a shortfall of ${f.shortfall_pp.toFixed(2)} pp p.a., ≈ ${fmtFull(perYear)} per year and ≈ ${fmtFull(total)} over the ${yrs}-year term. ${ENGINE_CAVEAT.en}`,
-        L==="ru"?`≈ ${fmtFull(total)} за срок ноты — предмет для разговора с эмитентом при следующем выпуске`
-                :`≈ ${fmtFull(total)} over the term — a talking point with the issuer on the next issue`);
+        L==="ru"?`Справедливый купон ${pct(f.fair_coupon_pct,2)} против предложенных ${pct(f.offered_coupon_pct,2)} — недобор ${f.shortfall_pp.toFixed(2)} п.п. годовых. В деньгах разрыв стоит ≈ ${fmtFull(pv)} (${pct((n.eng.bank_margin||{}).total_pct||0,2)} номинала) — это приведённая стоимость, она же зашитая маржа эмитента: одна и та же величина, показанная через купон и через сумму, а не две потери. Умножать недобор на срок нельзя: нота с автоколлом гасится раньше и купон условный. ${ENGINE_CAVEAT.ru}${noteBasis(n)==="remaining"?" "+BASIS_CAVEAT.ru:""}`
+                :`Fair coupon ${pct(f.fair_coupon_pct,2)} vs ${pct(f.offered_coupon_pct,2)} offered — a shortfall of ${f.shortfall_pp.toFixed(2)} pp p.a. In money the gap is worth ≈ ${fmtFull(pv)} (${pct((n.eng.bank_margin||{}).total_pct||0,2)} of nominal) — its present value, which is the embedded issuer margin: one quantity expressed two ways, not two losses. The shortfall must not be multiplied by the tenor: an autocallable note redeems early and the coupon is conditional. ${ENGINE_CAVEAT.en}${noteBasis(n)==="remaining"?" "+BASIS_CAVEAT.en:""}`,
+        L==="ru"?`≈ ${fmtFull(pv)} приведённой стоимости — предмет для разговора с эмитентом при следующем выпуске`
+                :`≈ ${fmtFull(pv)} in present value — a talking point with the issuer on the next issue`);
     }
 
     if(n.embSrc==="engine" && n.eng.bank_margin.total_pct<=0){
@@ -792,8 +805,8 @@ function resolutions(a){
       const b=n.eng.bank_margin;
       add(b.total_pct>=3.5?"medium":"low",
         L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
-        L==="ru"?`Эмитент зашил ${pct(b.total_pct,2)} от номинала при выпуске ≈ ${fmtFull(n.baseValue*b.total_pct/100)}: структурирование ${pct(b.components?.structuring_fee||0,2)}, хеджирование ${pct(b.components?.hedging_cost||0,2)}, кредитный риск ${pct(b.components?.credit_risk_premium||0,2)}, дистрибуция ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.ru}`
-                :`The issuer embedded ${pct(b.total_pct,2)} of nominal at launch ≈ ${fmtFull(n.baseValue*b.total_pct/100)}: structuring ${pct(b.components?.structuring_fee||0,2)}, hedging ${pct(b.components?.hedging_cost||0,2)}, credit risk ${pct(b.components?.credit_risk_premium||0,2)}, distribution ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.en}`);
+        L==="ru"?`Эмитент зашил ${pct(b.total_pct,2)} от номинала (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — это тот же недобор купона, выраженный суммой, а не отдельная потеря. Разложение: структурирование ${pct(b.components?.structuring_fee||0,2)}, хеджирование ${pct(b.components?.hedging_cost||0,2)}, кредитный риск ${pct(b.components?.credit_risk_premium||0,2)}, дистрибуция ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.ru}`
+                :`The issuer embedded ${pct(b.total_pct,2)} of nominal (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — the same gap as the coupon shortfall, expressed as an amount, not a separate loss. Breakdown: structuring ${pct(b.components?.structuring_fee||0,2)}, hedging ${pct(b.components?.hedging_cost||0,2)}, credit risk ${pct(b.components?.credit_risk_premium||0,2)}, distribution ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.en}`);
     }else if(n.entry||n.product){
       add("low",
         L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
@@ -985,18 +998,37 @@ async function refreshPrices(){
 }
 
 /* ---- structured-note pricing via the vendored EvidenceInvest engine ---- */
+/* На каком сроке считается нота — и, значит, ЧТО именно означает результат.
+   Движок стартует со спота 100%, как на выпуске. Если известен исходный срок,
+   получается настоящая маржа при выпуске — величина, зафиксированная навсегда.
+   Если известна только дата погашения, честно считается остаточный срок, и
+   тогда это НЕ маржа при выпуске: результат зависит от сегодняшней даты и
+   называть его историческим утверждением о банке нельзя. Раньше подпись всегда
+   гласила «при выпуске», а срок при этом брался остаточный — число таяло с
+   календарём: 15.79% сегодня, ~5% через три года по той же ноте. */
+function noteBasis(n){ return n.tenorYears>0 ? "issue" : "remaining"; }
 function noteYears(n){
-  // Original tenor — the margin question is "what did the issuer embed at launch",
-  // which is priced from issue with spot at 100%. Remaining life would answer a
-  // different question (today's mark-to-market) and must not be labelled margin.
-  if(n.tenorYears) return n.tenorYears;
+  if(n.tenorYears>0) return +n.tenorYears;
   const dt=parseDate(n.maturity);
   return dt ? Math.max(+(daysBetween(TODAY,dt)/365).toFixed(2), 0.5) : 3;
 }
+function basisLabel(n){
+  const ru=STATE.lang==="ru";
+  return noteBasis(n)==="issue"
+    ? (ru?"при выпуске":"at issue")
+    : (ru?"на остаточном сроке":"on remaining life");
+}
 function noteToEnginePayload(n){
   const nm=(n.name||"").toLowerCase();
-  const type = nm.includes("phoenix")?"phoenix" : nm.includes("autocall")?"autocall"
-             : (n.capProt>0?"capital_protected":"barrier_note");
+  const prot=+n.capProt>0;
+  // Защищённая нота с купоном — это "ios" (купонная нога + защищённое погашение).
+  // Тип "capital_protected" в движке выбрасывает купон целиком и подставляет
+  // 100% участия в росте: купон от 0 до 25% давал одну и ту же стоимость.
+  // Автоколл "ios" поддерживает, поэтому имя продукта на выбор типа не влияет.
+  const type = prot ? "ios"
+             : nm.includes("phoenix") ? "phoenix"
+             : nm.includes("autocall") ? "autocall"
+             : "barrier_note";
   return {
     product_type:type,
     underlying:n.underlying||"",
@@ -1007,6 +1039,7 @@ function noteToEnginePayload(n){
     maturity_years:noteYears(n),
     nominal:+n.value||0,
     coupon_type: nm.includes("phoenix")?"memory":"conditional",
+    autocall: prot ? (nm.includes("autocall")||nm.includes("phoenix")) : undefined,
     purchase_price:100,
     fair_coupon:true,
     // Допущения советника перекрывают справочник: утверждение о банке должно
@@ -1028,7 +1061,9 @@ const NOTE_REQUIRED = {
 function noteMissing(n){
   const m=[];
   if(!(+n.coupon>0)) m.push("coupon");
-  if(!(+n.barrier>0)) m.push("barrier");
+  // У ноты с защитой капитала барьера нет по конструкции — требовать его
+  // значило бы заставлять советника выдумывать несуществующий параметр.
+  if(!(+n.capProt>0) && !(+n.barrier>0)) m.push("barrier");
   if(!n.tenorYears && !parseDate(n.maturity)) m.push("maturity");
   if(!String(n.underlying||"").trim()) m.push("underlying");
   return m;
@@ -1041,8 +1076,14 @@ function noteMissingLabel(m){
 /* Утверждение о конкретном банке строится на НАШИХ допущениях волатильности и
    ставки. Формулировка обязана это называть — иначе это обвинение, а не оценка. */
 const ENGINE_CAVEAT = {
-  ru:"Оценка на дату выпуска при указанных допущениях волатильности и ставки; не утверждение о нарушении.",
-  en:"Valued at issue under the stated volatility and rate assumptions; not an assertion of misconduct."
+  ru:"Оценка при указанных допущениях волатильности, ставки и кредитного спреда эмитента; не утверждение о нарушении.",
+  en:"Valued under the stated volatility, rate and issuer credit-spread assumptions; not an assertion of misconduct."
+};
+/* Когда срок известен только по дате погашения, результат зависит от сегодняшней
+   даты и историческим утверждением о банке не является. Это надо писать рядом. */
+const BASIS_CAVEAT = {
+  ru:"Исходный срок ноты в данных не указан, поэтому расчёт сделан на остаточном сроке: это текущая переоценка, а не маржа, зафиксированная при выпуске. Укажите срок при выпуске, чтобы получить историческую величину.",
+  en:"The note's original tenor is absent from the data, so the calculation uses the remaining life: this is a current revaluation, not the margin fixed at issue. Enter the original tenor to obtain the historical figure."
 };
 
 /* Барьерный риск ноты. Порядок источников важен: вероятность пробоя из
@@ -1189,7 +1230,7 @@ function enginePanel(n){
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin:9px 0 4px;font-size:13px">
       <span>${ru?"Справедливая":"Fair value"}: <b>${pct(v.fair_value_pct,2)}</b></span>
       ${n.entry?`<span class="muted">${ru?"в файле было":"file said"} ${pct(((n.entry||0)+(n.tenorYears||3)*(n.feeProduct||0)),1)}</span>`:""}
-      <span>${ru?"Зашито при выпуске":"Embedded at issue"}: <b style="color:${mcol}">${pct(b.total_pct,2)}</b>
+      <span>${ru?"Зашито":"Embedded"} ${basisLabel(n)}: <b style="color:${mcol}">${pct(b.total_pct,2)}</b>
         <span class="muted">(${fmtMoney(Math.abs(b.total_abs)*(FX[a.currency]||1)/(FX[STATE.base]||1))})</span></span>
     </div>
     ${b.total_pct>0?bar(ru?"структурир.":"structuring",c.structuring_fee||0)+bar(ru?"хеджир.":"hedging",c.hedging_cost||0)+bar(ru?"кред. риск":"credit",c.credit_risk_premium||0)+bar(ru?"дистриб.":"distribution",c.distribution_fee||0):""}
@@ -1214,7 +1255,7 @@ function enginePanel(n){
       ${btn}
     </div>
     <div class="footnote" style="margin-top:6px;color:var(--watch)">${ENGINE_CAVEAT[ru?"ru":"en"]}</div>
-    <div class="footnote" style="margin-top:4px">${ru?"Оценка на дату выпуска, срок":"Priced at issue, tenor"} <b>${a.maturity_years} ${ru?"г.":"y"}</b> · vol ${pct((a.volatility||0)*100,0)} (${esc(a.volatility_source||"")}), div ${pct((a.dividend_yield||0)*100,1)}, ${ru?"ставка":"rate"} ${pct((a.risk_free_rate||0)*100,2)} · ${r.engine.n_paths.toLocaleString()} ${ru?"путей":"paths"}</div>
+    <div class="footnote" style="margin-top:4px">${ru?("Оценка "+basisLabel(n)+", срок"):("Priced "+basisLabel(n)+", tenor")} <b>${a.maturity_years} ${ru?"г.":"y"}</b> · vol ${pct((a.volatility||0)*100,0)} (${esc(a.volatility_source||"")}), div ${pct((a.dividend_yield||0)*100,1)}, ${ru?"ставка":"rate"} ${pct((a.risk_free_rate||0)*100,2)} · ${r.engine.n_paths.toLocaleString()} ${ru?"путей":"paths"}</div>
   </div>`;
 }
 
@@ -1717,9 +1758,12 @@ function buildReport(a){
       <td class="num">${pct(e.bank_margin.total_pct,2)}</td>
       <td class="num">${br.prob!=null?pct(br.prob,1):"—"}</td></tr>`;
   }).join("");
+  // Совокупно — сумма ПРИВЕДЁННЫХ величин (они же зашитые маржи), а не
+  // недоборов, умноженных на срок: последнее завышает разрыв в разы.
   const shortfallMoney=a.notes.reduce((s,n)=>{
     const f=(n.eng||{}).fair_coupon||{};
-    return s + (f.shortfall_pp>0 ? n.baseValue*f.shortfall_pp/100*noteYears(n) : 0);
+    const m=(n.eng||{}).bank_margin||{};
+    return s + (f.shortfall_pp>0 && m.total_pct>0 ? n.baseValue*m.total_pct/100 : 0);
   },0);
 
   /* ---------- 5. облигации и деривативы ---------- */
@@ -1808,8 +1852,8 @@ function buildReport(a){
               <tr><td><b>${L("Итого","Total")}</b></td><td class="num"><b>${money(a.feeAbs)}</b></td>
                 <td class="num"><b>${pct(a.blendedFee,2)}</b></td></tr></tbody></table>
           <p class="rep-note" style="margin-top:8px">${L(
-            `Бенчмарк — индексный портфель ${pct(BENCH,2)}/год. Разница (fee-drag) ${money(a.dragAbs)} в год, ${money(a.feeAbs*10)} против ${money(a.aum*BENCH/100*10)} за 10 лет.`,
-            `Benchmark — an indexed portfolio at ${pct(BENCH,2)} p.a. The gap (fee drag) is ${money(a.dragAbs)} per year; ${money(a.feeAbs*10)} versus ${money(a.aum*BENCH/100*10)} over ten years.`)}</p>
+            `Бенчмарк — индексный портфель ${pct(BENCH,2)}/год. Разница (fee-drag) ${money(a.dragAbs)} в год. За 10 лет: ${money(a.proj10)} против ${money(a.aum*BENCH/100*10)} — из них регулярных ${money(a.recurringAbs*10)}${a.noteOneOff?` и разовой маржи нот ${money(a.noteOneOff)}, уплаченной один раз при покупке, а не ежегодно`:""}.`,
+            `Benchmark — an indexed portfolio at ${pct(BENCH,2)} p.a. The fee drag is ${money(a.dragAbs)} per year. Over ten years: ${money(a.proj10)} versus ${money(a.aum*BENCH/100*10)} — of which ${money(a.recurringAbs*10)} recurring${a.noteOneOff?` and ${money(a.noteOneOff)} of one-off note margin, paid once at purchase rather than annually`:""}.`)}</p>
         </div>
         <div>
           <h4>${L("Тарифы брокеров","Broker tariffs")}</h4>
@@ -1827,8 +1871,8 @@ function buildReport(a){
         <th class="num">${L("Δ п.п.","Δ pp")}</th><th class="num">${L("Маржа","Margin")}</th>
         <th class="num">${L("Пробой","Breach")}</th></tr></thead><tbody>${noteRows}</tbody></table>
       <p class="rep-note">${L(
-        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом при выпуске: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно недополучено ≈ ${money(shortfallMoney)} за сроки нот.</b>`:""} Оценка не является утверждением о нарушении.`,
-        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer at launch: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate shortfall ≈ ${money(shortfallMoney)} over the notes' terms.</b>`:""} This is not an assertion of misconduct.`)}</p>
+        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом при выпуске: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно зашито ≈ ${money(shortfallMoney)} приведённой стоимости.</b>`:""} Оценка не является утверждением о нарушении.`,
+        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer at launch: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate embedded ≈ ${money(shortfallMoney)} in present value.</b>`:""} This is not an assertion of misconduct.`)}</p>
     </div>`:""}
 
     ${(a.bonds.length||a.derivs.length)?`<div class="rep-sec">
@@ -2044,7 +2088,7 @@ function noteCard(n){
         br.prob!=null?`<br/><span class="muted">${STATE.lang==="ru"?"вероятность пробоя от выпуска за весь срок":"breach probability from issue, full term"}: <b style="color:${bcol}">${pct(br.prob,1)}</b></span>`:""}<br/>
       ${t("maturity")}: <b>${fmtDate(n.maturity)}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
       ${n.embSrc==="engine"
-        ? `${t("embedded")}: <b style="color:var(--watch)">${pct(n.eng.bank_margin.total_pct,2)}</b> <span class="muted">${STATE.lang==="ru"?"при выпуске, по движку":"at issue, per engine"}</span>`
+        ? `${t("embedded")}: <b style="color:var(--watch)">${pct(n.eng.bank_margin.total_pct,2)}</b> <span class="muted">${basisLabel(n)}, ${STATE.lang==="ru"?"по движку":"per engine"}</span>`
         : (n.entry||n.product)
           ? `${t("embedded")}: <b style="color:var(--watch)">≈ ${emb}%</b> <span class="muted">(${pct(n.entry||0,1)} + ${pct(n.product||0,1)}/${STATE.lang==="ru"?"г":"y"}×${n.tenorYears||3})</span>`
           : `${t("embedded")}: <b class="muted">—</b>`}
@@ -2115,7 +2159,7 @@ function vFees(a){
   const compMax=Math.max(...compRows.map(c=>c[1]))||1;
   const exp=[...a.rows].filter(r=>r.feeAbs>0).sort((x,y)=>y.feeAbs-x.feeAbs).slice(0,8);
   const expMax=exp[0]?exp[0].feeAbs:1;
-  const proj10=a.feeAbs*10, projBench=a.aum*BENCH/100*10;
+  const proj10=a.proj10, projBench=a.aum*BENCH/100*10;
 
   const ruL=STATE.lang==="ru";
   return `${a.feeComplete?"":`<div class="panel" style="border-color:var(--watch);background:var(--navy);padding:12px 16px">
@@ -2364,8 +2408,18 @@ const HEADER_MAP = {
   ticker:["ticker","symbol","тикер","символ","bbg","bloomberg ticker"],
   isin:["isin","изин"],
   sector:["sector","сектор","industry","отрасль"],
-  coupon:["coupon","купон"], barrier:["barrier","барьер"], maturity:["maturity","погашение","maturity date"],
-  underlying:["underlying","базовый","базовый актив"], notional:["notional","номинал"], dtype:["derivative type","тип дерив  атива"]
+  coupon:["coupon","купон"],
+  // barrierDist объявлен ДО barrier: колонка «До барьера» содержит подстроку
+  // «барьер», и без этого порядка барьер ноты читался бы как расстояние до него.
+  barrierDist:["barrier distance","distance to barrier","до барьера","расстояние до барьера","buffer"],
+  barrier:["barrier","барьер"],
+  maturity:["maturity","погашение","maturity date"],
+  underlying:["underlying","базовый","базовый актив"], notional:["notional","номинал"],
+  capProt:["capital protection","защита капитала","защита","protection"],
+  entry:["entry fee","входная комиссия","входная","upfront"],
+  tenorYears:["tenor","срок при выпуске","срок, лет","term years"],
+  expiry:["expiry","экспирация","expiration"],
+  dtype:["derivative type","тип деривати ва"]
 };
 // Признаки, которые надо проверять РАНЬШЕ общего словаря.
 // Порядок здесь — не стиль, а исправление дефекта: ключ "note" в списке
@@ -2414,10 +2468,19 @@ function normClass(s){
 }
 function mapHeaders(headers){
   const lower=headers.map(h=>String(h||"").trim().toLowerCase());
-  const map={};
-  for(const [field,syn] of Object.entries(HEADER_MAP)){
-    const idx=lower.findIndex(h=> syn.some(s=> h===s || h.includes(s)));
-    if(idx>=0) map[field]=idx;
+  const map={}, taken=new Set();
+  const claim=(f,i)=>{ map[f]=i; taken.add(i); };
+  // Сначала ТОЧНЫЕ совпадения заголовка, потом вхождение подстроки, и одна
+  // колонка достаётся только одному полю. Иначе «Barrier %» и «До барьера %»
+  // конкурируют за одно поле, а лишняя колонка достаётся кому попало.
+  for(const [f,syn] of Object.entries(HEADER_MAP)){
+    const i=lower.findIndex((h,ix)=>!taken.has(ix) && syn.some(x=>h===x));
+    if(i>=0) claim(f,i);
+  }
+  for(const [f,syn] of Object.entries(HEADER_MAP)){
+    if(map[f]!=null) continue;
+    const i=lower.findIndex((h,ix)=>!taken.has(ix) && syn.some(x=>h.includes(x)));
+    if(i>=0) claim(f,i);
   }
   return map;
 }
@@ -2471,11 +2534,11 @@ function rowsToPositions(matrix){
     // Числовые поля разбираем тем же парсером, что и суммы: в европейской
     // выписке купон приходит как «2,1», а `+"2,1"` — это NaN, после которого
     // строка доезжала до pct() и роняла вкладку.
-    ["coupon","barrier","notional","capProt","entry","tenorYears"].forEach(f=>{
+    ["coupon","barrier","barrierDist","notional","capProt","entry","tenorYears"].forEach(f=>{
       const v=g(f); if(v==null||v==="") return;
       const n=parseNum(v); if(n||n===0) p[f]=n;
     });
-    ["maturity","underlying"].forEach(f=>{ const v=g(f); if(v!=null&&v!=="") p[f]=v; });
+    ["maturity","underlying","expiry"].forEach(f=>{ const v=g(f); if(v!=null&&v!=="") p[f]=v; });
     const tk=g("ticker"); if(tk) p.ticker=String(tk).trim().toUpperCase();
     const isin=g("isin"); if(isin) p.isin=String(isin).trim().toUpperCase();
     const qn=parseNum(g("quantity")); if(qn) p.qty=qn;
