@@ -170,29 +170,80 @@
   .acts button{background:var(--navy);border:1px solid var(--line);color:var(--muted);border-radius:7px;padding:3px 8px;cursor:pointer;font-size:12px;margin-left:4px}
   .acts button:hover{border-color:var(--gold);color:var(--ink)}
   @media print{
+    @page{ size:A4; margin:14mm 12mm 16mm; }
+    /* Печатная палитра. Цвета интерфейса подобраны под тёмный фон и на белой
+       бумаге выглядят выцветшими; переопределяем их только для печати, чтобы
+       не трогать логику — ratingColor() и цвета классов продолжают работать. */
+    :root{
+      --good:#2c7a5c; --watch:#a8761a; --risk:#b8433a; --muted:#8a8a8a;
+      --equity:#3c6fa8; --bond:#3f9689; --fund:#a8861f; --note:#a85f22;
+      --deriv:#7d54a6; --cash:#6b7f92; --alt:#c05f4a;
+      --ink:#111; --line:#ddd; --gold:#c9a227; --gold2:#8a6d1f;
+    }
     body{background:#fff !important}
     .wrap{display:none !important}
-    #reportArea{display:block !important;color:#111;font-family:Arial,Helvetica,sans-serif;padding:8px 4px}
+    #reportArea{display:block !important;color:#111;font-family:"Helvetica Neue",Arial,Helvetica,sans-serif;padding:0}
     #reportArea svg circle:last-of-type{fill:#fff}
     #reportArea .legend{display:none}
-    .rep-h{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #c9a227;padding-bottom:10px;margin-bottom:16px}
-    .rep-title{font-size:20px;font-weight:700}
-    .rep-sub{color:#555;font-size:13px;margin-top:3px}
-    .rep-score{font-size:34px;font-weight:800;line-height:1}
-    .rep-score span{font-size:14px;color:#888;font-weight:400}
-    .rep-kpi{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
-    .rep-kpi>div{border:1px solid #ddd;border-radius:8px;padding:8px 12px;min-width:104px}
-    .rep-kpi span{display:block;font-size:10.5px;color:#666;text-transform:uppercase;letter-spacing:.3px}
-    .rep-kpi b{font-size:16px}
-    .rep-cols{display:flex;gap:28px;margin-bottom:6px}
-    .rep-cols>div{flex:1}
-    .rep h4{font-size:13.5px;margin:14px 0 6px;border-bottom:1px solid #eee;padding-bottom:4px;color:#222}
-    .rep table{width:100%;border-collapse:collapse;font-size:12px}
-    .rep td{padding:3px 0;border-bottom:1px solid #f2f2f2}
-    .rep-res{padding-left:18px}
-    .rep-res li{font-size:12px;margin-bottom:7px;line-height:1.45}
-    .rep-note{font-size:10.5px;line-height:1.5;color:#7c6f4e;background:#fdfaf0;border-left:3px solid #d9c07a;padding:7px 10px;margin:10px 0 0}
-  .rep-foot{margin-top:18px;color:#999;font-size:11px;text-align:right;border-top:1px solid #eee;padding-top:8px}
+
+    /* Разделы не рвутся посередине, заголовки таблиц повторяются на каждой
+       странице — иначе многостраничный список позиций нечитаем.              */
+    .rep-sec{page-break-inside:avoid; break-inside:avoid; margin-bottom:16px}
+    .rep-break{page-break-before:always; break-before:page}
+    .rep thead{display:table-header-group}
+    .rep tr{page-break-inside:avoid; break-inside:avoid}
+
+    .rep-h{display:flex;justify-content:space-between;align-items:flex-start;
+      border-bottom:2.5px solid #c9a227;padding-bottom:11px;margin-bottom:15px}
+    .rep-title{font-size:21px;font-weight:700;letter-spacing:.2px}
+    .rep-sub{color:#555;font-size:12px;margin-top:4px;line-height:1.5}
+    .rep-score{font-size:36px;font-weight:800;line-height:1;text-align:right}
+    .rep-score span{display:block;font-size:12px;color:#777;font-weight:400;margin-top:3px}
+
+    .rep-kpi{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:14px}
+    .rep-kpi>div{border:1px solid #dcdcdc;border-radius:7px;padding:8px 11px;min-width:96px;flex:1}
+    .rep-kpi span{display:block;font-size:9.5px;color:#666;text-transform:uppercase;letter-spacing:.4px}
+    .rep-kpi b{font-size:15.5px}
+
+    .rep-cols{display:flex;gap:24px;align-items:flex-start}
+    .rep-cols>div{flex:1;min-width:0}
+    .rep h3{font-size:15px;margin:0 0 10px;padding-bottom:5px;border-bottom:2px solid #c9a227;color:#111}
+    .rep h4{font-size:12.5px;margin:12px 0 5px;border-bottom:1px solid #e8e8e8;padding-bottom:3px;color:#333;
+      text-transform:uppercase;letter-spacing:.4px}
+    .rep table{width:100%;border-collapse:collapse;font-size:11px}
+    .rep th{font-size:9.5px;text-transform:uppercase;letter-spacing:.3px;color:#666;text-align:left;
+      border-bottom:1px solid #ccc;padding:4px 5px 4px 0;font-weight:600}
+    .rep td{padding:3.5px 5px 3.5px 0;border-bottom:1px solid #f2f2f2;vertical-align:top}
+    .rep .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .rep .muted{color:#888}
+    .rep .warn{color:#a8761a}
+    .rep .bad{color:#b8433a}
+    .rep .good{color:#2c7a5c}
+
+    /* подоценки */
+    .rep-sub-row{display:flex;align-items:center;gap:9px;font-size:11px;margin-bottom:5px}
+    .rep-sub-row .lbl{flex:0 0 132px;color:#444}
+    .rep-sub-row .track{flex:1;height:7px;background:#eee;border-radius:4px;overflow:hidden}
+    .rep-sub-row .fill{display:block;height:100%}
+    .rep-sub-row .val{flex:0 0 34px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+
+    .rep-res{padding-left:0;list-style:none;margin:0}
+    .rep-res li{font-size:11px;margin-bottom:9px;line-height:1.5;padding-left:10px;border-left:3px solid #ddd}
+    .rep-res li.high{border-left-color:#b8433a}
+    .rep-res li.medium{border-left-color:#d9a13a}
+    .rep-res li.low{border-left-color:#8bb8a3}
+    .rep-res .lv{font-size:8.5px;text-transform:uppercase;letter-spacing:.5px;color:#888;margin-left:6px}
+    .rep-res .imp{display:block;color:#8a6d1f;font-weight:600;margin-top:2px}
+
+    .rep-note{font-size:10px;line-height:1.55;color:#6d6144;background:#fdfaf0;border-left:3px solid #d9c07a;
+      padding:8px 11px;margin:9px 0 0;border-radius:0 4px 4px 0}
+    .rep-note.alert{color:#7d3b34;background:#fdf3f2;border-left-color:#d98d84}
+    .rep-note b{color:inherit}
+    .rep-note ul{margin:5px 0 0;padding-left:16px}
+    .rep-note li{margin-bottom:2px}
+
+    .rep-foot{margin-top:16px;color:#999;font-size:10px;border-top:1px solid #eee;padding-top:7px;
+      display:flex;justify-content:space-between}
   }
 </style>
 </head>
@@ -398,7 +449,7 @@ function P(broker,name,cls,ccy,value,feeProduct,sector,extra){
 }
 
 /* ---------- state ---------- */
-let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false, notePrice:{}, notePricing:{}, engineDown:null, brokerFees:{}, importNote:null };
+let STATE = { lang:"ru", base:"USD", positions:null, view:"overview", source:"", sources:[], client:"", editId:null, baseline:null, showClients:false, manual:[], holdSort:{k:"baseValue",dir:-1}, holdFilter:"all", settingsOpen:false, notePrice:{}, notePricing:{}, engineDown:null, brokerFees:{}, importNote:null, loadedFp:{}, duplicateWarning:null };
 const t = k => (I18N[STATE.lang][k] ?? k);
 const $ = (s,r=document)=>r.querySelector(s);
 
@@ -423,6 +474,16 @@ function fmtFull(v){
 // «2,1» из европейской выписки приходило строкой и роняло вкладку целиком.
 const pct = (v,d=1)=>{ const n=typeof v==="number"?v:parseNum(v); return (isFinite(n)?n:0).toFixed(d)+"%"; };
 const esc = s => String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+/* Дата на экране. С cellDates значение приходит объектом Date, и `String(d)`
+   давал «Fri Dec 18 2026 00:00:00 GMT+0100 (Центральная Европа…)» прямо в
+   таблице. Приводим к ISO-виду; нераспознанное показываем как есть. */
+function fmtDate(v){
+  if(v==null || v==="") return "—";
+  const d=parseDate(v);
+  if(d){ const p=n=>String(n).padStart(2,"0");
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+  return esc(String(v)).slice(0,12);
+}
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function parseDate(s){
   if(s==null || s==="") return null;
@@ -1282,7 +1343,10 @@ function importBanner(){
                                    :`files not parsed: <b>${n.failed.map(esc).join(", ")}</b>`);
   if(n.skipped) parts.push(ru?`пропущено строк без суммы: <b>${n.skipped}</b>`
                              :`rows skipped without a value: <b>${n.skipped}</b>`);
-  if(!n.added) parts.push(ru?"<b>ни одной позиции прочитать не удалось — на экране прежние данные</b>"
+  if(n.duplicate) parts.push(ru
+    ? `<b>эта выписка уже загружена</b> (как «${esc(n.duplicate.prev)}») — повторно не добавлена, портфель не изменился`
+    : `<b>this statement is already loaded</b> (as "${esc(n.duplicate.prev)}") — not added again, the portfolio is unchanged`);
+  if(!n.added && !n.duplicate) parts.push(ru?"<b>ни одной позиции прочитать не удалось — на экране прежние данные</b>"
                             :"<b>no positions could be read — the screen still shows the previous data</b>");
   return `<div class="panel" style="display:flex;align-items:flex-start;gap:13px;flex-wrap:wrap;
       padding:12px 16px;border-color:${bad?"var(--risk)":"var(--watch)"};background:var(--navy)">
@@ -1529,7 +1593,7 @@ function clearClientState(){
   STATE.positions=null; STATE.sources=[]; STATE.source=""; STATE.editId=null;
   STATE.brokerFees={}; STATE.notePrice={}; STATE.notePricing={};
   STATE.engineDown=null; STATE.baseline=null; STATE.client="";
-  STATE.holdFilter="all"; STATE.importNote=null;
+  STATE.holdFilter="all"; STATE.importNote=null; STATE.loadedFp={}; STATE.duplicateWarning=null;
 }
 function delPosition(id){
   if(!STATE.positions) return;
@@ -1540,35 +1604,247 @@ function delPosition(id){
   render();
 }
 function buildReport(a){
-  const ru=STATE.lang==="ru"; const today=new Date().toISOString().slice(0,10);
-  const row=(k,v)=>`<tr><td>${esc(k)}</td><td style="text-align:right">${fmtMoney(v)}</td><td style="text-align:right;width:64px">${pct(v/a.aum*100)}</td></tr>`;
-  const cls=Object.entries(a.byClass).sort((x,y)=>y[1]-x[1]).map(([k,v])=>row(t(CLASSES[k]?CLASSES[k].k:k),v)).join("");
-  const brk=Object.entries(a.byBroker).sort((x,y)=>y[1]-x[1]).map(([k,v])=>row(k,v)).join("");
-  const incomplete = a.feeComplete ? "" : `<p class="rep-note">${ru
-    ? `* Показаны только подтверждённые издержки: TER из выписки и маржа нот, посчитанная движком. Консультационная и кастоди по ${a.brokersMissing.map(esc).join(", ")} (${fmtMoney(a.missingVal)} активов) не заведены и в цифру не входят — фактические издержки выше. Подоценка «издержки» в скоре помечена как «н/д», её вес перераспределён.`
-    : `* Confirmed costs only: statement TERs and engine-priced note margins. Advisory and custody for ${a.brokersMissing.map(esc).join(", ")} (${fmtMoney(a.missingVal)} of assets) are not entered and are excluded — actual costs are higher. The cost sub-score is marked n/a and its weight redistributed.`}</p>`;
-  const R=resolutions(a).slice(0,8).map(r=>`<li><b>${esc(r.title)}</b> — ${esc(r.body)}${r.impact?` <i>(${esc(r.impact)})</i>`:""}</li>`).join("");
+  const ru=STATE.lang==="ru";
+  const L=(r,e)=>ru?r:e;
+  const today=new Date().toLocaleDateString(ru?"ru-RU":"en-GB",{day:"2-digit",month:"long",year:"numeric"});
+  const B=STATE.base;
+  const money=v=>fmtFull(v);
+  const shareRow=(k,v,extra="")=>`<tr><td>${esc(k)}</td>${extra}
+    <td class="num">${money(v)}</td><td class="num" style="width:58px">${pct(a.aum?v/a.aum*100:0)}</td></tr>`;
+
+  /* ---------- 1. сводка ---------- */
+  const subLabels={diversification:"cDiversification",cost:"cCost",currency:"cCurrency",
+                   liquidity:"cLiquidity",quality:"cQuality",cash:"cCash"};
+  const subRows=Object.keys(a.W).map(k=>{
+    const v=a.sub[k];
+    return `<div class="rep-sub-row">
+      <span class="lbl">${t(subLabels[k])} <span class="muted">${Math.round(a.W[k]*100)}%</span></span>
+      <span class="track">${v==null?"":`<i class="fill" style="width:${v}%;background:${ratingColor(v)}"></i>`}</span>
+      <span class="val" style="color:${v==null?"#999":ratingColor(v)}">${v==null?L("н/д","n/a"):Math.round(v)}</span>
+    </div>`;
+  }).join("");
+
+  /* ---------- оговорки: всё, чего инструмент НЕ знает ---------- */
+  const caveats=[];
+  if(!a.feeComplete) caveats.push(L(
+    `<b>Тарифы брокеров не заведены</b> по ${a.brokersMissing.map(esc).join(", ")} (${money(a.missingVal)} активов). Комиссия ${pct(a.blendedFee,2)}/год посчитана только по TER из выписки и марже нот; консультационная и кастоди в неё не входят — <b>фактические издержки выше</b>. Подоценка «издержки» помечена «н/д», её вес перераспределён между остальными.`,
+    `<b>Broker tariffs not entered</b> for ${a.brokersMissing.map(esc).join(", ")} (${money(a.missingVal)} of assets). The ${pct(a.blendedFee,2)} p.a. figure covers only statement TERs and note margins; advisory and custody are excluded — <b>actual costs are higher</b>. The cost sub-score is marked n/a and its weight redistributed.`));
+  const unk=a.rows.filter(r=>r.cls==="unknown");
+  if(unk.length) caveats.push(L(
+    `<b>${unk.length} позиц. не классифицированы</b> (${money(unk.reduce((s,r)=>s+r.baseValue,0))}): ${unk.slice(0,5).map(r=>esc(r.name)).join(", ")}${unk.length>5?" и др.":""}. Они искажают распределение, диверсификацию и оценку ликвидности.`,
+    `<b>${unk.length} position(s) unclassified</b> (${money(unk.reduce((s,r)=>s+r.baseValue,0))}): ${unk.slice(0,5).map(r=>esc(r.name)).join(", ")}${unk.length>5?" and others":""}. They distort allocation, diversification and liquidity.`));
+  if(a.fxUnknown.length) caveats.push(L(
+    `<b>${a.fxUnknown.length} позиц. в валютах без курса</b> (${a.fxUnknownCcy.map(esc).join(", ")}) — их стоимость в ${B} неизвестна, и они <b>не входят</b> ни в активы, ни в распределение, ни в издержки.`,
+    `<b>${a.fxUnknown.length} position(s) in currencies with no rate</b> (${a.fxUnknownCcy.map(esc).join(", ")}) — their ${B} value is unknown and they are <b>excluded</b> from assets, allocation and costs.`));
+  const noteGaps=a.notes.filter(n=>noteMissing(n).length);
+  if(noteGaps.length) caveats.push(L(
+    `<b>${noteGaps.length} нот${noteGaps.length===1?"а не оценена":" не оценены"}</b> (${money(noteGaps.reduce((s,n)=>s+n.baseValue,0))}): ${noteGaps.map(n=>`${esc(n.name)} — нет ${noteMissingLabel(noteMissing(n))}`).join("; ")}. Ни маржа эмитента, ни вероятность пробоя барьера по ним не считались.`,
+    `<b>${noteGaps.length} note(s) not valued</b> (${money(noteGaps.reduce((s,n)=>s+n.baseValue,0))}): ${noteGaps.map(n=>`${esc(n.name)} — missing ${noteMissingLabel(noteMissing(n))}`).join("; ")}. Neither issuer margin nor barrier probability was computed.`));
+  if(a.durMissing.length) caveats.push(L(
+    `<b>Дюрация не посчитана</b> по ${a.durMissing.length} облигац. (${a.durMissing.map(b=>esc(b.name)).join(", ")}) — нет купона или даты погашения. Показатель ${a.portDuration!=null?`${a.portDuration.toFixed(2)} охватывает ${pct(a.durCoverage*100,0)} номинала`:"не рассчитан"}.`,
+    `<b>Duration not computed</b> for ${a.durMissing.length} bond(s) (${a.durMissing.map(b=>esc(b.name)).join(", ")}) — coupon or maturity missing. The figure ${a.portDuration!=null?`${a.portDuration.toFixed(2)} covers ${pct(a.durCoverage*100,0)} of nominal`:"could not be computed"}.`));
+  if(a.techShare==null) caveats.push(L(
+    "<b>Сектор не указан</b> ни в одной строке выписки — концентрация по секторам не оценивалась и в скор не входит.",
+    "<b>Sector is absent</b> from every statement row — sector concentration was not assessed and is excluded from the score."));
+  const ck=(STATE.importNote||{}).checkTotal;
+  if(ck) caveats.push(ck.diff<=0.005
+    ? L(`<b>Сверка с итогом выписки пройдена:</b> заявлено ${ck.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}, распознано столько же.`,
+        `<b>Reconciled with the statement total:</b> stated ${ck.stated.toLocaleString("en-US",{maximumFractionDigits:0})}, parsed the same.`)
+    : L(`<b>Расхождение с итогом выписки ${(ck.diff*100).toFixed(1)}%</b>: заявлено ${ck.stated.toLocaleString("ru-RU",{maximumFractionDigits:0})}, распознано ${ck.sum.toLocaleString("ru-RU",{maximumFractionDigits:0})}. Часть позиций прочитана неверно — <b>выводы делать рано</b>.`,
+        `<b>${(ck.diff*100).toFixed(1)}% gap versus the statement total</b>: stated ${ck.stated.toLocaleString("en-US",{maximumFractionDigits:0})}, parsed ${ck.sum.toLocaleString("en-US",{maximumFractionDigits:0})}. Some positions were misread — <b>conclusions are premature</b>.`));
+
+  const caveatBox = caveats.length ? `<div class="rep-note${ck&&ck.diff>0.005?" alert":""}">
+    <b>${L("Что учтено не полностью","Known gaps")}</b>
+    <ul>${caveats.map(c=>`<li>${c}</li>`).join("")}</ul></div>` : "";
+
+  /* ---------- 2. структура ---------- */
+  const cls=Object.entries(a.byClass).sort((x,y)=>y[1]-x[1])
+    .map(([k,v])=>shareRow(t(CLASSES[k]?CLASSES[k].k:k),v)).join("");
+  const brk=Object.entries(a.byBroker).sort((x,y)=>y[1]-x[1]).map(([k,v])=>shareRow(k,v)).join("");
+  const ccy=Object.entries(a.byCcy).sort((x,y)=>y[1]-x[1]).map(([k,v])=>shareRow(k,v)).join("");
+  const top10=a.sorted.slice(0,10).map((r,i)=>`<tr>
+    <td class="num muted" style="width:18px">${i+1}</td><td>${esc(r.name)}</td>
+    <td class="muted">${esc(r.broker)}</td>
+    <td class="num">${money(r.baseValue)}</td><td class="num">${pct(r.weight)}</td></tr>`).join("");
+
+  /* ---------- 3. издержки ---------- */
+  const comp=a.feeComponents;
+  const feeRows=[["advisory",comp.advisory],["custody",comp.custody],["product",comp.product],["entryAmort",comp.entryAmort]]
+    .filter(([,v])=>v>0)
+    .map(([k,v])=>`<tr><td>${t(k)}</td><td class="num">${money(v)}</td>
+      <td class="num">${pct(a.aum?v/a.aum*100:0,2)}</td></tr>`).join("");
+  const tariffRows=a.brokersAll.map(b=>{
+    const f=(STATE.brokerFees||{})[b]||{}, st=brokerTariffState(b);
+    return `<tr><td>${esc(b)}</td>
+      <td class="num">${f.advisory!=null?pct(f.advisory,2):"—"}</td>
+      <td class="num">${f.custody!=null?pct(f.custody,2):"—"}</td>
+      <td class="${st==="full"?"good":"warn"}">${st==="full"?L("учтён","counted"):st==="partial"?L("заполнено наполовину","half-filled"):L("не заведён","not entered")}</td></tr>`;
+  }).join("");
+
+  /* ---------- 4. ноты ---------- */
+  const noteRows=a.notes.map(n=>{
+    const miss=noteMissing(n);
+    if(miss.length) return `<tr><td>${esc(n.name)}</td><td class="muted">${esc(n.broker)}</td>
+      <td class="num">${money(n.baseValue)}</td><td colspan="5" class="warn">${L("не оценена — нет: ","not valued — missing: ")}${noteMissingLabel(miss)}</td></tr>`;
+    const e=n.eng, f=e.fair_coupon||{}, br=barrierRisk(n);
+    const short=f.shortfall_pp>0.05;
+    return `<tr><td>${esc(n.name)}</td><td class="muted">${esc(n.broker)}</td>
+      <td class="num">${money(n.baseValue)}</td>
+      <td class="num">${pct(f.offered_coupon_pct||n.coupon||0,2)}</td>
+      <td class="num">${f.fair_coupon_pct!=null?pct(f.fair_coupon_pct,2):"—"}</td>
+      <td class="num ${short?"bad":"good"}">${f.shortfall_pp!=null?(f.shortfall_pp>0?"+":"")+f.shortfall_pp.toFixed(2):"—"}</td>
+      <td class="num">${pct(e.bank_margin.total_pct,2)}</td>
+      <td class="num">${br.prob!=null?pct(br.prob,1):"—"}</td></tr>`;
+  }).join("");
+  const shortfallMoney=a.notes.reduce((s,n)=>{
+    const f=(n.eng||{}).fair_coupon||{};
+    return s + (f.shortfall_pp>0 ? n.baseValue*f.shortfall_pp/100*noteYears(n) : 0);
+  },0);
+
+  /* ---------- 5. облигации и деривативы ---------- */
+  const bondRows=a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td>
+    <td class="num">${money(b.baseValue)}</td><td class="num">${b.coupon?pct(b.coupon,2):"—"}</td>
+    <td class="num">${fmtDate(b.maturity)}</td>
+    <td class="num">${b._dur!=null?b._dur.toFixed(1):`<span class="warn">—</span>`}</td>
+    <td class="num ${b._dur!=null?"bad":"muted"}">${b._dur!=null?"−"+b._dur.toFixed(1)+"%":"—"}</td></tr>`).join("");
+  const derivRows=a.derivs.map(d=>`<tr><td>${esc(d.name)}</td><td class="muted">${esc(d.broker)}</td>
+    <td class="num">${money(d.baseValue)}</td>
+    <td class="num">${d.notional?money(d.notional*(FX[d.ccy]||1)/(FX[B]||1)):"—"}</td>
+    <td class="num">${fmtDate(d.expiry||d.maturity)}</td></tr>`).join("");
+
+  /* ---------- 6. полный список ---------- */
+  const allRows=a.sorted.map(r=>`<tr>
+    <td>${esc(r.name)}</td>
+    <td class="muted">${esc(r.broker)}</td>
+    <td class="muted">${t(CLASSES[r.cls]?CLASSES[r.cls].k:r.cls)}</td>
+    <td class="num">${esc(r.ccy)}</td>
+    <td class="num">${r.fxOk?money(r.baseValue):`<span class="warn">${(r.value||0).toLocaleString(ru?"ru-RU":"en-US",{maximumFractionDigits:0})} ${esc(r.ccy)}</span>`}</td>
+    <td class="num">${r.fxOk?pct(r.weight):"—"}</td>
+    <td class="num">${r.feePct?pct(r.feePct,2):"—"}</td></tr>`).join("");
+
+  /* ---------- 7. резолюции ---------- */
+  const R=resolutions(a);
+  const lvName={high:L("высокий","high"),medium:L("средний","medium"),low:L("к сведению","info")};
+  const resList=R.map(r=>`<li class="${r.level}"><b>${esc(r.title)}</b><span class="lv">${lvName[r.level]}</span><br/>${esc(r.body)}
+    ${r.impact?`<span class="imp">${t("impact")}: ${esc(r.impact)}</span>`:""}</li>`).join("");
+
+  const sources=(STATE.sources&&STATE.sources.length)?STATE.sources.map(esc).join(", "):esc(STATE.source||"—");
+
   return `<div class="rep">
-    <div class="rep-h"><div><div class="rep-title">${ru?"Отчёт о здоровье портфеля":"Portfolio Health Report"}</div>
-      <div class="rep-sub">${esc(STATE.client||(ru?"Портфель клиента":"Client portfolio"))} · ${today} · ${STATE.base}</div></div>
-      <div class="rep-score" style="color:${ratingColor(a.score)}">${a.score}<span>/100 · ${ratingLabel(a.score)}</span></div></div>
-    <div class="rep-kpi">
-      <div><span>${ru?"Активы":"Assets"}</span><b>${fmtMoney(a.aum)}</b></div>
-      <div><span>${ru?"Брокеров":"Brokers"}</span><b>${Object.keys(a.byBroker).length}</b></div>
-      <div><span>${ru?"Позиций":"Positions"}</span><b>${a.rows.length}</b></div>
-      <div><span>${ru?"Комиссия/год":"Fee p.a."}</span><b>${pct(a.blendedFee,2)}${a.feeComplete?"":"*"}</b></div>
-      <div><span>Fee-drag</span><b>${fmtMoney(a.dragAbs)}/${ru?"год":"yr"}</b></div>
+    <div class="rep-h">
+      <div>
+        <div class="rep-title">${L("Отчёт о состоянии портфеля","Portfolio Health Report")}</div>
+        <div class="rep-sub">${esc(STATE.client||L("Портфель клиента","Client portfolio"))} · ${today}
+          · ${L("базовая валюта","base currency")} ${B}<br/>
+          ${L("Источник данных","Data source")}: ${sources} · ${L("курсы","FX")} ${esc((DATA.fx||{}).asOf||"—")} (${esc((DATA.fx||{}).source||"—")})</div>
+      </div>
+      <div class="rep-score" style="color:${ratingColor(a.score)}">${a.score}<span>/100 · ${ratingLabel(a.score)}</span></div>
     </div>
-    ${incomplete}
-    <div class="rep-cols">
-      <div><h4>${ru?"Распределение по классам":"Asset allocation"}</h4><div style="text-align:center;margin:2px 0 10px">${donut(Object.entries(a.byClass).map(([k,v])=>({label:k,value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value),150)}</div><table>${cls}</table></div>
-      <div><h4>${ru?"По брокерам":"By broker"}</h4><table>${brk}</table></div>
+
+    <div class="rep-sec">
+      <div class="rep-kpi">
+        <div><span>${L("Активы","Assets")}</span><b>${money(a.aum)}</b></div>
+        <div><span>${L("Позиций","Positions")}</span><b>${a.rows.length}</b></div>
+        <div><span>${L("Брокеров","Brokers")}</span><b>${Object.keys(a.byBroker).length}</b></div>
+        <div><span>${L("Комиссия/год","Fee p.a.")}</span><b>${pct(a.blendedFee,2)}${a.feeComplete?"":"*"}</b></div>
+        <div><span>Fee-drag</span><b>${money(a.dragAbs)}</b></div>
+        <div><span>${L("Дюрация","Duration")}</span><b>${a.portDuration!=null?a.portDuration.toFixed(1):L("н/д","n/a")}</b></div>
+      </div>
+      <h4>${L("Составляющие оценки","Score components")}</h4>
+      ${subRows}
+      ${caveatBox}
     </div>
-    <h4>${ru?"Резолюции и рекомендации":"Resolutions & recommendations"}</h4>
-    <ol class="rep-res">${R||("<li>"+(ru?"Существенных замечаний нет.":"No material issues.")+"</li>")}</ol>
-    <div class="rep-foot">WealthLens · ${ru?"сформировано":"generated"} ${today}</div>
+
+    <div class="rep-sec rep-break">
+      <h3>${L("Структура портфеля","Portfolio structure")}</h3>
+      <div class="rep-cols">
+        <div>
+          <h4>${L("По классам активов","By asset class")}</h4>
+          <div style="text-align:center;margin:4px 0 8px">${donut(Object.entries(a.byClass).map(([k,v])=>({label:k,value:v,color:CLASSES[k]?CLASSES[k].c:"#888"})).sort((x,y)=>y.value-x.value),132)}</div>
+          <table>${cls}</table>
+        </div>
+        <div>
+          <h4>${L("По брокерам","By broker")}</h4><table>${brk}</table>
+          <h4>${L("Валютная экспозиция","Currency exposure")}</h4><table>${ccy}</table>
+        </div>
+      </div>
+    </div>
+
+    <div class="rep-sec">
+      <h4>${L("Крупнейшие позиции","Largest positions")} <span class="muted">— top-1 ${pct(a.top1)} · top-5 ${pct(a.top5)} · HHI ${Math.round(a.hhi)}${a.techShare!=null?` · ${L("технологии","technology")} ${pct(a.techShare)}`:""}</span></h4>
+      <table><thead><tr><th></th><th>${t("instrument")}</th><th>${t("broker")}</th>
+        <th class="num">${L("Стоимость","Value")}</th><th class="num">${L("Доля","Weight")}</th></tr></thead>
+        <tbody>${top10}</tbody></table>
+    </div>
+
+    <div class="rep-sec rep-break">
+      <h3>${L("Издержки","Costs")}</h3>
+      <div class="rep-cols">
+        <div>
+          <h4>${L("Компоненты, в год","Components, p.a.")}</h4>
+          <table><thead><tr><th>${L("Статья","Item")}</th><th class="num">${B}</th><th class="num">%</th></tr></thead>
+            <tbody>${feeRows||`<tr><td colspan="3" class="muted">${L("нет подтверждённых издержек","no confirmed costs")}</td></tr>`}
+              <tr><td><b>${L("Итого","Total")}</b></td><td class="num"><b>${money(a.feeAbs)}</b></td>
+                <td class="num"><b>${pct(a.blendedFee,2)}</b></td></tr></tbody></table>
+          <p class="rep-note" style="margin-top:8px">${L(
+            `Бенчмарк — индексный портфель ${pct(BENCH,2)}/год. Разница (fee-drag) ${money(a.dragAbs)} в год, ${money(a.feeAbs*10)} против ${money(a.aum*BENCH/100*10)} за 10 лет.`,
+            `Benchmark — an indexed portfolio at ${pct(BENCH,2)} p.a. The gap (fee drag) is ${money(a.dragAbs)} per year; ${money(a.feeAbs*10)} versus ${money(a.aum*BENCH/100*10)} over ten years.`)}</p>
+        </div>
+        <div>
+          <h4>${L("Тарифы брокеров","Broker tariffs")}</h4>
+          <table><thead><tr><th>${t("broker")}</th><th class="num">${t("advisory")}</th>
+            <th class="num">${t("custody")}</th><th>${L("Статус","Status")}</th></tr></thead>
+            <tbody>${tariffRows}</tbody></table>
+        </div>
+      </div>
+    </div>
+
+    ${a.notes.length?`<div class="rep-sec rep-break">
+      <h3>${L("Структурные ноты","Structured notes")}</h3>
+      <table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${L("Стоимость","Value")}</th>
+        <th class="num">${L("Купон","Coupon")}</th><th class="num">${L("Справедливый","Fair")}</th>
+        <th class="num">${L("Δ п.п.","Δ pp")}</th><th class="num">${L("Маржа","Margin")}</th>
+        <th class="num">${L("Пробой","Breach")}</th></tr></thead><tbody>${noteRows}</tbody></table>
+      <p class="rep-note">${L(
+        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом при выпуске: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно недополучено ≈ ${money(shortfallMoney)} за сроки нот.</b>`:""} Оценка не является утверждением о нарушении.`,
+        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer at launch: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate shortfall ≈ ${money(shortfallMoney)} over the notes' terms.</b>`:""} This is not an assertion of misconduct.`)}</p>
+    </div>`:""}
+
+    ${(a.bonds.length||a.derivs.length)?`<div class="rep-sec">
+      ${a.bonds.length?`<h4>${L("Облигации","Bonds")}${a.portDuration!=null?` <span class="muted">— ${L("дюрация","duration")} ${a.portDuration.toFixed(2)} ${L("по","covering")} ${pct(a.durCoverage*100,0)} ${L("номинала","of nominal")}</span>`:""}</h4>
+        <table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${L("Стоимость","Value")}</th>
+          <th class="num">${L("Купон","Coupon")}</th><th class="num">${L("Погашение","Maturity")}</th>
+          <th class="num">${L("Дюрация","Duration")}</th><th class="num">${L("+1% ставок","+1% rates")}</th></tr></thead>
+          <tbody>${bondRows}</tbody></table>`:""}
+      ${a.derivs.length?`<h4>${L("Деривативы","Derivatives")} <span class="muted">— ${L("условный номинал","notional")} ${money(a.notionalAbs)} = ${a.leverage.toFixed(2)}× ${L("капитала","of equity")}</span></h4>
+        <table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${L("Стоимость","Value")}</th>
+          <th class="num">${L("Номинал","Notional")}</th><th class="num">${L("Экспирация","Expiry")}</th></tr></thead>
+          <tbody>${derivRows}</tbody></table>`:""}
+    </div>`:""}
+
+    <div class="rep-sec rep-break">
+      <h3>${L("Резолюции и рекомендации","Resolutions & recommendations")} <span class="muted">${R.length}</span></h3>
+      <ol class="rep-res">${resList||`<li class="low">${L("Существенных замечаний нет.","No material issues.")}</li>`}</ol>
+    </div>
+
+    <div class="rep-sec rep-break">
+      <h3>${L("Полный список позиций","Full holdings")} <span class="muted">${a.rows.length}</span></h3>
+      <table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th>${t("fClass")}</th>
+        <th class="num">${L("Вал.","Ccy")}</th><th class="num">${L("Стоимость","Value")} (${B})</th>
+        <th class="num">${L("Доля","Weight")}</th><th class="num">${L("Комис./год","Fee p.a.")}</th></tr></thead>
+        <tbody>${allRows}</tbody></table>
+      <p class="rep-note">${L(
+        "Стоимости приведены в базовой валюте по курсам на дату отчёта. Комиссия по позиции — сумма подтверждённых составляющих: тариф брокера (если заведён), TER продукта и зашитая маржа ноты по оценке движка.",
+        "Values are stated in the base currency at the report-date rates. The per-position fee is the sum of confirmed components: broker tariff (where entered), product TER and the engine-priced embedded note margin.")}</p>
+    </div>
+
+    <div class="rep-foot">
+      <span>WealthLens · ${L("сформировано","generated")} ${today}</span>
+      <span>${L("Оценка носит информационный характер и не является инвестиционной рекомендацией.","For information only; not investment advice.")}</span>
+    </div>
   </div>`;
 }
+
 function openReport(){ if(!STATE.positions) return; const ra=$("#reportArea"); if(ra) ra.innerHTML=buildReport(analyze(STATE.positions)); window.print(); }
 /* ---------- сохранение файла ------------------------------------------
    На обычном хосте файл отдаёт ссылка с download. В просмотрщике артефакта
@@ -1654,7 +1930,7 @@ function vStructured(a){
   const ru=STATE.lang==="ru";
   html+=`<div class="panel"><h3>${ru?"Облигации":"Bonds"} <span class="hint">${a.bonds.length}${a.bonds.length?` · ${ru?"дюрация":"duration"} ${a.portDuration!=null?`≈ ${a.portDuration.toFixed(1)}${a.durCoverage<0.999?` (${ru?"по":"of"} ${pct(a.durCoverage*100,0)} ${ru?"номинала":"nominal"})`:""}`:(ru?"н/д":"n/a")}`:""}</span></h3>`;
   if(!a.bonds.length) html+=`<div class="empty">${ru?"Облигаций не обнаружено.":"No bonds found."}</div>`;
-  else html+=`<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("coupon")}</th><th class="num">${t("maturity")}</th><th class="num">${ru?"Дюрация":"Duration"}</th><th class="num">+1% ${ru?"ставок":"rates"}</th></tr></thead><tbody>${a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td><td class="num">${b.coupon?pct(b.coupon,1):"—"}</td><td class="num">${b.maturity||"—"}</td><td class="num">${b._dur!=null?b._dur.toFixed(1):`<span class="muted" title="${ru?"не хватает: ":"missing: "}${(b._durMissing||[]).join(", ")}">—</span>`}</td><td class="num" style="color:${b._dur!=null?"var(--risk)":"var(--muted)"}">${b._dur!=null?`−${b._dur.toFixed(1)}%`:"—"}</td></tr>`).join("")}</tbody></table>
+  else html+=`<table><thead><tr><th>${t("instrument")}</th><th>${t("broker")}</th><th class="num">${t("coupon")}</th><th class="num">${t("maturity")}</th><th class="num">${ru?"Дюрация":"Duration"}</th><th class="num">+1% ${ru?"ставок":"rates"}</th></tr></thead><tbody>${a.bonds.map(b=>`<tr><td>${esc(b.name)}</td><td class="muted">${esc(b.broker)}</td><td class="num">${b.coupon?pct(b.coupon,1):"—"}</td><td class="num">${fmtDate(b.maturity)}</td><td class="num">${b._dur!=null?b._dur.toFixed(1):`<span class="muted" title="${ru?"не хватает: ":"missing: "}${(b._durMissing||[]).join(", ")}">—</span>`}</td><td class="num" style="color:${b._dur!=null?"var(--risk)":"var(--muted)"}">${b._dur!=null?`−${b._dur.toFixed(1)}%`:"—"}</td></tr>`).join("")}</tbody></table>
     <div class="footnote">${ru?"Дюрация и чувствительность — приблизительная оценка по купону и сроку (точную даёт Bloomberg).":"Duration and sensitivity are rough estimates from coupon and maturity (Bloomberg gives exact figures)."}</div>`;
   html+=`</div>`;
   return html;
@@ -1676,7 +1952,7 @@ function noteCard(n){
       ${t("coupon")}: <b>${n.coupon?pct(n.coupon,1):"—"}</b> · ${t("capProt")}: <b>${n.capProt?pct(n.capProt,0):(n.barrier?"0%":"—")}</b><br/>
       ${t("barrier")}: <b>${n.barrier?n.barrier+"%":"—"}</b> · ${t("barrierDist")}: <b style="color:${bcol}">${bd!=null?pct(bd,0):"—"}</b>${
         br.prob!=null?`<br/><span class="muted">${STATE.lang==="ru"?"вероятность пробоя от выпуска за весь срок":"breach probability from issue, full term"}: <b style="color:${bcol}">${pct(br.prob,1)}</b></span>`:""}<br/>
-      ${t("maturity")}: <b>${n.maturity||"—"}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
+      ${t("maturity")}: <b>${fmtDate(n.maturity)}</b>${dl!=null?` <span class="muted">(${dl} ${t("daysLeft")})</span>`:""}<br/>
       ${n.embSrc==="engine"
         ? `${t("embedded")}: <b style="color:var(--watch)">${pct(n.eng.bank_margin.total_pct,2)}</b> <span class="muted">${STATE.lang==="ru"?"при выпуске, по движку":"at issue, per engine"}</span>`
         : (n.entry||n.product)
@@ -1891,11 +2167,26 @@ function setPrices0(){ DATA.prices={status:"embedded", source:"embedded", update
 function loadPositions(arr, source){   // REPLACE the whole portfolio (demo / single source)
   if(!arr || !arr.length){ const le=$("#landErr"); if(le){le.textContent=t("needRows");le.className="err";} return; }
   arr=arr.slice(); tagPositions(arr, source);
-  STATE.positions=arr; STATE.editId=null; STATE.baseline=null; recalcSource(); STATE.view="overview";
+  STATE.positions=arr; STATE.editId=null; STATE.baseline=null;
+  STATE.loadedFp={[statementFingerprint(arr)]:source}; STATE.duplicateWarning=null;
+  recalcSource(); STATE.view="overview";
   setPrices0(); render();
+}
+/* Отпечаток выписки: брокер + бумага + сумма по каждой строке. Повторная
+   загрузка того же файла раньше молча удваивала портфель — на экране просто
+   становилось вдвое больше активов, и заметить это было нечем. */
+function statementFingerprint(arr){
+  return arr.map(p=>`${p.broker}|${p.name}|${Math.round(+p.value||0)}|${p.ccy}`).sort().join("~");
 }
 function addPositions(arr, source){    // APPEND a statement to the consolidated portfolio (multi-broker)
   if(!arr || !arr.length) return 0;
+  const fp=statementFingerprint(arr);
+  const dup=(STATE.loadedFp||{})[fp];
+  if(dup){
+    STATE.duplicateWarning={source, prev:dup, count:arr.length};
+    return 0;                       // не добавляем: удвоение хуже, чем отказ
+  }
+  STATE.loadedFp=Object.assign({}, STATE.loadedFp, {[fp]:source});
   arr=arr.slice(); tagPositions(arr, source);
   if(!STATE.positions) STATE.positions=[];
   STATE.positions=STATE.positions.concat(arr);
@@ -2148,11 +2439,15 @@ async function handleFiles(fileList){
   // «PDF разбирается эвристически» не показывалось ни секунды, а полный провал
   // импорта на дашборде проходил вообще молча — пользователь видел прежние
   // цифры и считал их разбором своего файла.
-  STATE.importNote={added, failed, pdfHeur, skipped, checkTotal, files:files.map(f=>f.name)};
+  STATE.importNote={added, failed, pdfHeur, skipped, checkTotal, files:files.map(f=>f.name),
+                    duplicate:STATE.duplicateWarning};
+  STATE.duplicateWarning=null;
   if(!added && pdfText) console.log("[WealthLens] extracted PDF text:\n"+pdfText);
   if(!added) toast(STATE.lang==="ru"
-    ? "Не удалось распознать ни одной позиции — данные на экране не изменились."
-    : "No positions could be parsed — nothing on screen has changed.", true);
+    ? (STATE.importNote.duplicate ? "Эта выписка уже загружена — портфель не изменился."
+                                  : "Не удалось распознать ни одной позиции — данные на экране не изменились.")
+    : (STATE.importNote.duplicate ? "This statement is already loaded — the portfolio is unchanged."
+                                  : "No positions could be parsed — nothing on screen has changed."), true);
   render();
 }
 function showFileErr(){ const le=$("#landErr"); if(le){ le.textContent=t("fileErr"); le.className="err"; } }
