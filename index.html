@@ -760,6 +760,14 @@ function resolutions(a){
                    :`No capital protection if breached — losses track the underlying, ≈ ${fmtFull(n.baseValue)} at risk.`)
         ].filter(Boolean).join(" "));
     }
+    // Ядро умеет само сказать, что числу верить нельзя. Печатать число и
+    // молчать об этом — то же, что показывать выдуманное.
+    if(n.eng && (n.eng.valuation||{}).is_reliable===false){
+      add("high",
+        L==="ru"?`Оценка ноты помечена ядром как ненадёжная: ${n.name}`:`Valuation flagged unreliable: ${n.name}`,
+        L==="ru"?`Расчётное ядро использовало запасной источник данных и пометило результат ненадёжным. Справедливая стоимость, маржа и справедливый купон по этой ноте требуют перепроверки, прежде чем на них ссылаться.${(n.eng.warnings||[]).length?" Предупреждения ядра: "+esc((n.eng.warnings||[]).join("; ")):""}`
+                :`The pricing core used a fallback data source and flagged the result unreliable. This note's fair value, margin and fair coupon must be re-checked before being cited.${(n.eng.warnings||[]).length?" Engine warnings: "+esc((n.eng.warnings||[]).join("; ")):""}`);
+    }
     const miss=noteMissing(n);
     if(miss.length){
       add("medium",
@@ -1258,6 +1266,12 @@ function enginePanel(n){
       ${(n.volOverride||n.rateOverride)?`<button class="btn ghost" data-assum="clear" data-note="${n._id}" style="padding:3px 8px;font-size:11px">${ru?"сбросить":"reset"}</button>`:""}
       ${btn}
     </div>
+    ${(r.valuation&&r.valuation.is_reliable===false)?`<div class="footnote" style="margin-top:6px;color:var(--risk)">${ru
+      ? "<b>Ядро пометило расчёт ненадёжным</b> — использован запасной источник данных. Числу по этой ноте нельзя доверять без перепроверки."
+      : "<b>The engine flagged this valuation as unreliable</b> — a fallback data source was used. Do not rely on this note's figures without re-checking."}</div>`:""}
+    ${(r.warnings||[]).some(w=>/GUARDRAIL|вне \[/.test(w))?`<div class="footnote" style="margin-top:6px;color:var(--risk)">${ru
+      ? "Результат вышел за границы правдоподобия, которые ядро проверяет само: "+esc((r.warnings||[]).filter(w=>/GUARDRAIL|вне \[/.test(w)).join("; "))
+      : "The result fell outside the engine's own plausibility band: "+esc((r.warnings||[]).filter(w=>/GUARDRAIL|вне \[/.test(w)).join("; "))}</div>`:""}
     ${b.decomposition_confidence==="low"?`<div class="footnote" style="margin-top:6px;color:var(--risk)">${ru
       ? "Разбивка маржи недостоверна: сумма оценённых компонент превысила общую маржу и они были пропорционально сжаты — доли перестали зависеть от параметров ноты. Пользуйтесь только общей величиной."
       : "The margin breakdown is unreliable: the component estimates exceeded the total and were rescaled, so the shares no longer depend on the note's parameters. Use only the total."}</div>`:""}
@@ -1720,6 +1734,15 @@ function buildReport(a){
       `<b>Волатильность принята плоской</b>, из справочника, без улыбки и терм-структуры: ${vols.join("; ")}. Рыночная оценка барьерной ноты требует поверхности implied vol со скью на страйке барьера; при типичном equity-скью волатильность на низких страйках выше справочной, поэтому вероятность пробоя и зашитая маржа здесь <b>скорее занижены</b>. Кредитный спред эмитента принят ${pct((sp.credit_spread||0)*100,2)} — это допущение, а не котировка конкретного банка. Числа показывают направление и порядок величины, но не являются оценкой дилерского уровня.`,
       `<b>Volatility is flat</b>, taken from a reference table, with no smile or term structure: ${vols.join("; ")}. A market valuation of a barrier note requires an implied-vol surface with skew at the barrier strike; under typical equity skew, vol at low strikes exceeds the reference figure, so the breach probability and the embedded margin here are <b>likely understated</b>. The issuer credit spread is assumed at ${pct((sp.credit_spread||0)*100,2)} — an assumption, not a quote for the specific bank. The figures show direction and order of magnitude, not a dealer-grade valuation.`));
   }
+
+  const unreliable=a.notes.filter(n=>n.eng && (n.eng.valuation||{}).is_reliable===false);
+  if(unreliable.length) caveats.push(L(
+    `<b>Ядро пометило ненадёжной оценку ${unreliable.length} нот${unreliable.length===1?"ы":""}</b> (${unreliable.map(n=>esc(n.name)).join(", ")}) — использован запасной источник данных. Справедливая стоимость, маржа и справедливый купон по ним требуют перепроверки.`,
+    `<b>The engine flagged ${unreliable.length} note valuation(s) as unreliable</b> (${unreliable.map(n=>esc(n.name)).join(", ")}) — a fallback data source was used. Their fair value, margin and fair coupon require re-checking.`));
+  const guarded=a.notes.filter(n=>n.eng && (n.eng.warnings||[]).some(w=>/GUARDRAIL|вне \[/.test(w)));
+  if(guarded.length) caveats.push(L(
+    `<b>Маржа вышла за границы правдоподобия ядра</b> по ${guarded.length} нот${guarded.length===1?"е":"ам"}: ${guarded.map(n=>esc(n.name)).join(", ")}. Ядро проверяет свой результат само и считает такую величину подозрительной — это не значит «неверна», но требует объяснения.`,
+    `<b>The margin fell outside the engine's plausibility band</b> for ${guarded.length} note(s): ${guarded.map(n=>esc(n.name)).join(", ")}. The core checks its own output and treats such a value as suspect — not necessarily wrong, but requiring explanation.`));
 
   const ck=(STATE.importNote||{}).checkTotal;
   if(ck) caveats.push((()=>{
