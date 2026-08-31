@@ -805,8 +805,12 @@ function resolutions(a){
       const b=n.eng.bank_margin;
       add(b.total_pct>=3.5?"medium":"low",
         L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
-        L==="ru"?`Эмитент зашил ${pct(b.total_pct,2)} от номинала (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — это тот же недобор купона, выраженный суммой, а не отдельная потеря. Разложение: структурирование ${pct(b.components?.structuring_fee||0,2)}, хеджирование ${pct(b.components?.hedging_cost||0,2)}, кредитный риск ${pct(b.components?.credit_risk_premium||0,2)}, дистрибуция ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.ru}`
-                :`The issuer embedded ${pct(b.total_pct,2)} of nominal (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — the same gap as the coupon shortfall, expressed as an amount, not a separate loss. Breakdown: structuring ${pct(b.components?.structuring_fee||0,2)}, hedging ${pct(b.components?.hedging_cost||0,2)}, credit risk ${pct(b.components?.credit_risk_premium||0,2)}, distribution ${pct(b.components?.distribution_fee||0,2)}. ${ENGINE_CAVEAT.en}`);
+        L==="ru"?`Эмитент зашил ${pct(b.total_pct,2)} от номинала (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — это тот же недобор купона, выраженный суммой, а не отдельная потеря. ${b.decomposition_confidence==="low"
+  ? "Разбивку по составляющим инструмент в этом случае не приводит: оценки компонент превысили общую маржу и были сжаты, доли стали неинформативными."
+  : `Ориентировочное разложение (объясняющая модель на экспертных коэффициентах, не восстановление комиссий банка): структурирование ${pct(b.components?.structuring_fee||0,2)}, хеджирование ${pct(b.components?.hedging_cost||0,2)}, кредитный риск ${pct(b.components?.credit_risk_premium||0,2)}, необъяснённый остаток ${pct(b.components?.distribution_fee||0,2)}.`} ${ENGINE_CAVEAT.ru}`
+                :`The issuer embedded ${pct(b.total_pct,2)} of nominal (${basisLabel(n)}) ≈ ${fmtFull(n.baseValue*b.total_pct/100)} — the same gap as the coupon shortfall, expressed as an amount, not a separate loss. ${b.decomposition_confidence==="low"
+  ? "No component breakdown is shown here: the component estimates exceeded the total margin and were rescaled, leaving the shares uninformative."
+  : `Indicative breakdown (an explanatory model on expert coefficients, not a reconstruction of the bank's fees): structuring ${pct(b.components?.structuring_fee||0,2)}, hedging ${pct(b.components?.hedging_cost||0,2)}, credit risk ${pct(b.components?.credit_risk_premium||0,2)}, unexplained residual ${pct(b.components?.distribution_fee||0,2)}.`} ${ENGINE_CAVEAT.en}`);
     }else if(n.entry||n.product){
       add("low",
         L==="ru"?`Зашитая стоимость ноты: ${n.name}`:`Embedded cost: ${n.name}`,
@@ -1233,7 +1237,7 @@ function enginePanel(n){
       <span>${ru?"Зашито":"Embedded"} ${basisLabel(n)}: <b style="color:${mcol}">${pct(b.total_pct,2)}</b>
         <span class="muted">(${fmtMoney(Math.abs(b.total_abs)*(FX[a.currency]||1)/(FX[STATE.base]||1))})</span></span>
     </div>
-    ${b.total_pct>0?bar(ru?"структурир.":"structuring",c.structuring_fee||0)+bar(ru?"хеджир.":"hedging",c.hedging_cost||0)+bar(ru?"кред. риск":"credit",c.credit_risk_premium||0)+bar(ru?"дистриб.":"distribution",c.distribution_fee||0):""}
+    ${b.total_pct>0?bar(ru?"структурир.":"structuring",c.structuring_fee||0)+bar(ru?"хеджир.":"hedging",c.hedging_cost||0)+bar(ru?"кред. риск":"credit",c.credit_risk_premium||0)+bar(ru?"остаток":"residual",c.distribution_fee||0):""}
     ${f.fair_coupon_pct!=null?`<div style="margin-top:9px;padding:8px 10px;background:var(--navy);border-radius:7px;font-size:12.5px">
       ${ru?"Справедливый купон":"Fair coupon"}: <b>${pct(f.fair_coupon_pct,2)}</b> ${ru?"против предложенных":"vs offered"} <b>${pct(f.offered_coupon_pct,2)}</b>
       ${f.shortfall_pp>0.05?`<span style="color:var(--risk)"> · ${ru?"недоплата":"shortfall"} ${f.shortfall_pp.toFixed(2)} ${ru?"п.п./год":"pp p.a."}</span>`:""}
@@ -1254,6 +1258,12 @@ function enginePanel(n){
       ${(n.volOverride||n.rateOverride)?`<button class="btn ghost" data-assum="clear" data-note="${n._id}" style="padding:3px 8px;font-size:11px">${ru?"сбросить":"reset"}</button>`:""}
       ${btn}
     </div>
+    ${b.decomposition_confidence==="low"?`<div class="footnote" style="margin-top:6px;color:var(--risk)">${ru
+      ? "Разбивка маржи недостоверна: сумма оценённых компонент превысила общую маржу и они были пропорционально сжаты — доли перестали зависеть от параметров ноты. Пользуйтесь только общей величиной."
+      : "The margin breakdown is unreliable: the component estimates exceeded the total and were rescaled, so the shares no longer depend on the note's parameters. Use only the total."}</div>`:""}
+    ${(v.mc_quality==="borderline"||v.mc_quality==="insufficient")?`<div class="footnote" style="margin-top:6px;color:${v.mc_quality==="insufficient"?"var(--risk)":"var(--watch)"}">${ru
+      ? `Точность Монте-Карло: полуширина 95% доверительного интервала ${v.ci95_half_width_pct} п.п. номинала${v.mc_quality==="insufficient"?" — числом как клиентской справедливой стоимостью пользоваться нельзя":" — годится как ориентир, но не как клиентский вывод"}.`
+      : `Monte-Carlo precision: 95% CI half-width ${v.ci95_half_width_pct} pp of nominal${v.mc_quality==="insufficient"?" — not usable as a client-grade fair value":" — indicative only"}.`}</div>`:""}
     <div class="footnote" style="margin-top:6px;color:var(--watch)">${ENGINE_CAVEAT[ru?"ru":"en"]}</div>
     <div class="footnote" style="margin-top:4px">${ru?("Оценка "+basisLabel(n)+", срок"):("Priced "+basisLabel(n)+", tenor")} <b>${a.maturity_years} ${ru?"г.":"y"}</b> · vol ${pct((a.volatility||0)*100,0)} (${esc(a.volatility_source||"")}), div ${pct((a.dividend_yield||0)*100,1)}, ${ru?"ставка":"rate"} ${pct((a.risk_free_rate||0)*100,2)} · ${r.engine.n_paths.toLocaleString()} ${ru?"путей":"paths"}</div>
   </div>`;
@@ -1884,8 +1894,8 @@ function buildReport(a){
         <th class="num">${L("Δ п.п.","Δ pp")}</th><th class="num">${L("Маржа","Margin")}</th>
         <th class="num">${L("Пробой","Breach")}</th></tr></thead><tbody>${noteRows}</tbody></table>
       <p class="rep-note">${L(
-        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" при выпуске":" (по каждой ноте основа расчёта указана в её карточке: при выпуске либо на остаточном сроке)"}: структурирование, хеджирование, кредитный риск, дистрибуция. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно зашито ≈ ${money(shortfallMoney)} приведённой стоимости.</b>`:""} Оценка не является утверждением о нарушении.`,
-        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" at launch":" (each note's basis is stated on its card: at issue or on remaining life)"}: structuring, hedging, credit risk, distribution. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate embedded ≈ ${money(shortfallMoney)} in present value.</b>`:""} This is not an assertion of misconduct.`)}</p>
+        `<b>Как читать.</b> «Справедливый» — купон, при котором нота стоила бы номинал на дату выпуска при указанных допущениях волатильности и ставки. «Δ» — насколько предложенный купон ниже (со знаком «+») справедливого. «Маржа» — доля номинала, зашитая эмитентом${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" при выпуске":" (основа расчёта по каждой ноте указана отдельно)"}, то есть разница между уплаченной ценой и модельной справедливой стоимостью. Разложение маржи на составляющие — <b>объясняющая модель на экспертных коэффициентах, а не восстановление фактических комиссий банка</b>; наиболее обоснована сама общая величина. «Пробой» — вероятность пробоя барьера за весь срок, посчитанная от даты выпуска; это не остаточный риск на сегодня.${shortfallMoney>0?` <b>Совокупно зашито ≈ ${money(shortfallMoney)} приведённой стоимости.</b>`:""} Оценка не является утверждением о нарушении.`,
+        `<b>How to read.</b> "Fair" is the coupon at which the note would be worth par at issue under the stated volatility and rate assumptions. "Δ" is how far the offered coupon falls short. "Margin" is the share of nominal embedded by the issuer${a.notes.every(n=>!n.eng||noteBasis(n)==="issue")?" at launch":" (each note's basis is stated separately)"} — the gap between the price paid and the model fair value. Its breakdown into components is <b>an explanatory model on expert coefficients, not a reconstruction of the bank's actual fees</b>; the total itself is the best-supported figure. "Breach" is the probability of breaching the barrier over the full term, measured from issue — not the remaining risk today.${shortfallMoney>0?` <b>Aggregate embedded ≈ ${money(shortfallMoney)} in present value.</b>`:""} This is not an assertion of misconduct.`)}</p>
     </div>`:""}
 
     ${(a.bonds.length||a.derivs.length)?`<div class="rep-sec">
