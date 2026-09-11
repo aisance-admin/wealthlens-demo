@@ -82,16 +82,20 @@ WL.insights = function(P){
       basis: "выписка · текущие цены CBOE с задержкой"});
   }
 
-  // 5. Результат к себестоимости: лучшая и худшая бумага.
-  const withCost = P.positions.filter(p => p.type === "stock" && p.cost != null && p.unrealized != null);
+  // 5. Результат к себестоимости: лучшая и худшая бумага. Считается так же, как колонка
+  // «Изменение с покупки» в таблице: по текущим ценам, если они есть, иначе по ценам выписки.
+  // Иначе вывод и таблица показывали бы для одной бумаги два разных результата.
+  const withCost = P.positions.filter(p => p.type === "stock" && p.cost > 0)
+    .map(p => ({p, c: WL.change(P, p, "cost")})).filter(x => x.c);
   if(withCost.length >= 2){
-    const s = [...withCost].sort((a, b) => b.unrealized - a.unrealized), best = s[0], worst = s[s.length - 1];
+    const s = [...withCost].sort((a, b) => b.c.abs - a.c.abs), best = s[0], worst = s[s.length - 1];
+    const isLive = withCost.some(x => x.p.live);
     const noCost = P.positions.filter(p => p.type === "stock" && p.cost == null).map(p => p.symbol);
     out.push({level: "info", kind: "pnl",
-      title: `Лучший результат к покупке — ${best.symbol} ${fmt.signed(best.unrealized)}, худший — ${worst.symbol} ${fmt.signed(worst.unrealized)}`,
-      text: `${best.name} ${fmt.pct((best.value / best.cost - 1) * 100, 0)}, ${worst.name} ${fmt.pct((worst.value / worst.cost - 1) * 100, 0)} к средней цене покупки.` +
+      title: `Лучший результат к покупке — ${best.p.symbol} ${fmt.signed(best.c.abs)}, худший — ${worst.p.symbol} ${fmt.signed(worst.c.abs)}`,
+      text: `${best.p.name} ${fmt.pct(best.c.pct, 0)}, ${worst.p.name} ${fmt.pct(worst.c.pct, 0)} к средней цене покупки${isLive ? ", по текущим ценам" : ""}.` +
             (noCost.length ? ` Без себестоимости в выписке: ${noCost.join(", ")}.` : ""),
-      basis: `выписка ${best.brokerShort} на ${fmt.date(best.priceDate)}`});
+      basis: isLive ? `выписка ${best.p.brokerShort} · текущие цены CBOE с задержкой` : `выписка ${best.p.brokerShort} на ${fmt.date(best.p.priceDate)}`});
   }
 
   // 6. Журналы: состояние на дату выписки и результат за период.
