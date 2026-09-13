@@ -12,10 +12,10 @@ const {pad, round2} = WL.util;
 const HEAD = {
   broker: ["брокер", "банк", "площадка", "custodian", "broker", "bank", "account", "счёт", "счет"],
   name: ["наименование", "название", "бумага", "инструмент", "актив", "описание", "позиция",
-         "security", "instrument", "description", "name", "asset", "position", "holding"],
+         "security", "instrument", "description", "name", "position", "holding"],
   ticker: ["тикер", "символ", "код", "symbol", "ticker", "bbg", "bloomberg"],
   isin: ["isin", "изин"],
-  type: ["тип", "класс", "класс актива", "вид", "asset class", "assetclass", "type", "class", "category"],
+  type: ["тип", "класс", "класс актива", "вид", "asset class", "asset category", "assetclass", "type", "class", "category"],
   qty: ["количество", "кол-во", "колво", "штук", "шт", "quantity", "qty", "shares", "units", "контракты"],
   costTotal: ["себестоимость", "сумма покупки", "затраты", "cost basis", "total cost", "book value", "стоимость покупки"],
   costPrice: ["цена покупки", "средняя цена", "цена входа", "цена приобретения", "avg price", "average price",
@@ -33,10 +33,37 @@ const OCC = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
    структурной ноты цены у нас нет, поэтому они отдельные типы. Незнакомый класс не выдаём
    за акцию — это «прочее»: лучше честная строка, чем неверная подпись. */
 const CLASS = [[/структурн|structured|\bnote|нот[аы]/i, "note"], [/облигац|\bbond|бонд|\bобл\b/i, "bond"],
-  [/фонд|fund|\betf|бпиф|\bпиф|trust/i, "fund"], [/акци|equity|stock|share/i, "stock"],
+  [/фонд|fund|\betf|бпиф|\bпиф|trust/i, "fund"],
+  // Опционы и фьючерсы — до акций: «Equity and Index Options» иначе читается как акции.
   [/опцион|option|колл|пут|\bcall\b|\bput\b/i, "option"], [/фьючерс|фьюч|future/i, "future"],
-  [/cash|денеж|деньг|остат|balance|наличн|ликвидн/i, "cash"]];
+  [/акци|equity|stock|share/i, "stock"],
+  [/cash|денеж|деньг|остат|balance|наличн|ликвидн|валют|currency/i, "cash"]];
 const classOf = t => (CLASS.find(c => c[0].test(t)) || [null, null])[1];
+const IB_OPT = /^([A-Z][A-Z0-9.]{0,5})\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$/;
+const MONTHS = {JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
+                JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12"};
+/* Опцион из записи вида «MCD 18SEP26 230 P»: собираем из неё код OCC — по нему работают
+   и календарь экспираций, и котировка контракта. */
+function ibOption(symRaw){
+  const m = IB_OPT.exec(String(symRaw || "").trim());
+  if(!m || !MONTHS[m[3]]) return null;
+  const dd = pad(m[2]), mm = MONTHS[m[3]], yy = m[4], strike = +m[5];
+  return {underlying: m[1], right: m[6], strike, expiry: `20${yy}-${mm}-${dd}`,
+          occ: m[1] + yy + mm + dd + m[6] + String(Math.round(strike * 1000)).padStart(8, "0")};
+}
+/* Выгрузка одним файлом из нескольких таблиц (так делают Interactive Brokers и Exante):
+   в первой колонке имя раздела, во второй — Header/Data/Total. Берём строки только своего
+   раздела, иначе в позиции попадут строки денежного отчёта и сводок. */
+function sectionBody(rows, row){
+  const key = clean(rows[row][0]);
+  if(!key) return null;
+  const same = rows.slice(row + 1).filter(r => clean(r[0]) === key);
+  if(same.length < 2) return null;
+  const marks = new Set(same.map(r => clean(r[1]).toLowerCase()));
+  if(!marks.has("data")) return {key, data: same, totals: []};
+  return {key, data: same.filter(r => clean(r[1]).toLowerCase() === "data"),
+          totals: same.filter(r => /^(total|subtotal)/i.test(clean(r[1])))};
+}
 
 /* Разделитель нельзя брать по первой строке: сверху часто стоит заголовок отчёта без
    единого разделителя. И нельзя брать по общему количеству: в европейской выгрузке
@@ -110,6 +137,8 @@ const MONEY = new Set(["qty", "costTotal", "costPrice", "price", "value", "commi
 function mapHeaders(rowCells){
   const low = rowCells.map(h => clean(h).toLowerCase());
   const map = {}, taken = new Set();
+  // Признак многосекционного файла: вторая ячейка шапки — метка строки.
+  if(/^(header|data|total|subtotal)$/i.test(low[1] || "")){ taken.add(0); taken.add(1); }
   // Колонка с процентом — ставка, а не деньги: «Fee product %» это TER фонда, и принимать
   // её за комиссию сделки нельзя.
   const fits = (f, h, ix) => !taken.has(ix) && h && !(MONEY.has(f) && h.includes("%"));
@@ -149,17 +178,42 @@ function loadXLSX(){
   });
 }
 
+const BROKER_BY_NAME = [[/exante/i, "Exante"], [/interactive|\bibkr\b|\bib_/i, "Interactive Brokers"],
+  [/schwab/i, "Charles Schwab"], [/swissquote|\bsq[_-]/i, "Swissquote"], [/\bubs\b/i, "UBS"],
+  [/jpmorgan|\bjpm\b|morgan/i, "J.P. Morgan"], [/goldman|\bgs[_-]/i, "Goldman Sachs"], [/\bciti\b/i, "Citi"],
+  [/saxo/i, "Saxo Bank"], [/pictet/i, "Pictet"], [/julius|baer/i, "Julius Baer"], [/lombard/i, "Lombard Odier"]];
+const brokerFromFile = name => (BROKER_BY_NAME.find(b => b[0].test(name)) || [null, null])[1];
+
+function brokerFromHead(rows, upto){
+  for(const r of rows.slice(0, upto)){
+    const i = r.findIndex(c => /^(brokername|broker|банк|брокер)$/i.test(clean(c)));
+    if(i >= 0){ const v = clean(r[i + 1]) || clean(r[i + 2]); if(v) return v; }
+  }
+  return null;
+}
+
 function buildDoc(rows, head, file){
   const {row, map} = head;
   const tag = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
   const g = (r, f) => map[f] != null ? r[map[f]] : undefined;
   const positions = [], totals = [], notes = [];
-  let dataRows = 0, dates = new Set();
+  const headBroker = brokerFromHead(rows, head.row);
+  let dataRows = 0;
 
-  for(let i = row + 1; i < rows.length; i++){
-    const r = rows[i] || [];
+  const sect = sectionBody(rows, row);
+  const body = sect ? sect.data : rows.slice(row + 1);
+  if(sect) sect.totals.forEach(r => {
+    const v = numOrNull(g(r, "value"));
+    if(v != null) totals.push({ccy: ccy3(g(r, "ccy")), value: v});
+  });
+  for(let i = 0; i < body.length; i++){
+    const r = body[i] || [];
     if(!r.length || r.every(c => c === "" || c == null)) continue;
-    const label = clean(g(r, "name")) || clean(r.find(c => clean(c)));
+    const nameCol = clean(g(r, "name"));
+    const symRaw = clean(g(r, "ticker")).toUpperCase();
+    // В многосекционном файле первые две колонки служебные: имя раздела и метка строки —
+    // в название бумаги они не годятся.
+    const label = nameCol || symRaw || clean((sect ? r.slice(2) : r).find(c => clean(c)));
     const qty = numOrNull(g(r, "qty"));
     const price = numOrNull(g(r, "price"));
     let value = numOrNull(g(r, "value"));
@@ -168,12 +222,13 @@ function buildDoc(rows, head, file){
       if(value != null) totals.push({ccy: ccy3(g(r, "ccy")) || ccy3(label), value});
       continue;
     }
-    if(!label && qty == null && value == null) continue;
+    if(qty == null && value == null && price == null) continue;   // подзаголовок или примечание
     dataRows++;
 
     const ccy = ccy3(g(r, "ccy")) || "USD";
     const kind = clean(g(r, "type")).toLowerCase();
-    const sym = clean(g(r, "ticker")).toUpperCase().replace(/\s+/g, "");
+    const ib = ibOption(symRaw) || ibOption(nameCol.toUpperCase());
+    const sym = ib ? ib.occ : symRaw.replace(/\s+/g, "").replace(/\.[A-Z]{3,}$/, "");
     const occ = OCC.exec(sym);
     const cls = kind ? classOf(kind) : null;
     // Колонки класса нет — считаем бумагу акцией: так устроены почти все выгрузки позиций.
@@ -181,7 +236,7 @@ function buildDoc(rows, head, file){
     const type = occ ? "option" : cls || (kind ? "other" : "stock");
     const isCash = type === "cash" || (!kind && /^(денежные средства|деньги|cash|остаток|cash balance)/i.test(label));
     const isOption = type === "option", isFuture = type === "future";
-    const broker = clean(g(r, "broker")) || tag;
+    const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
     const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
                   name: label || "Позиция " + i, ccy, value: value != null ? round2(value) : null};
 
@@ -191,7 +246,7 @@ function buildDoc(rows, head, file){
     const costTotal = numOrNull(g(r, "costTotal"));
     const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty) : null);
     const p = {...base, type,
-               symbol: sym || null, qty, price, priceDate: null, cost,
+               symbol: sym || null, code: symRaw !== sym ? symRaw : null, qty, price, priceDate: null, cost,
                costNote: cost == null ? "нет в выгрузке" : null,
                purchaseDate: toISO(g(r, "date")), commission: numOrNull(g(r, "commission")),
                isin: clean(g(r, "isin")) || null};
@@ -199,7 +254,8 @@ function buildDoc(rows, head, file){
       p.occ = sym; p.underlying = occ[1]; p.underlyingName = occ[1]; p.right = occ[5]; p.multiplier = 100;
       p.strike = +occ[6] / 1000;
       p.expiry = `20${occ[2]}-${occ[3]}-${occ[4]}`;
-      p.name = label || `${occ[1]} ${occ[5] === "C" ? "колл" : "пут"} ${p.strike}`;
+      // Запись брокера «MCD 18SEP26 230 P» заменяем на нашу: «MCD пут 230».
+      p.name = (ib ? "" : label) || `${occ[1]} ${occ[5] === "C" ? "колл" : "пут"} ${p.strike}`;
     } else if(isOption || isFuture){
       p.expiry = toISO(g(r, "expiry"));
     }
@@ -230,6 +286,7 @@ function buildDoc(rows, head, file){
   if(!asOf){ asOf = new Date().toISOString().slice(0, 10); notes.push("даты оценки в файле нет — взята сегодняшняя"); }
   positions.forEach(p => { if(p.priceDate == null) p.priceDate = asOf; });
 
+  if(sect) notes.push(`прочитан раздел «${sect.key}»`);
   if(map.price == null) notes.push("колонки текущей цены нет — цены подтянутся с рынка по тикеру");
   if(map.costPrice == null && map.costTotal == null) notes.push("цены покупки в файле нет");
   if(map.commission == null) notes.push("комиссий в файле нет");
