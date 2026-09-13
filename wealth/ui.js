@@ -13,7 +13,7 @@ const LEVEL = {high: "Важно", watch: "Внимание", info: "К свед
 const TYPE_RU = {stock: "Акции", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
 // Сверка остатков Swissquote идёт в валюте счёта: франки не должны печататься долларами.
 const ccyOf = c => c.ccy || (/Остаток ([A-Z]{3})/.exec(c.label || "") || [])[1] || "USD";
-const S = {docs: [], P: null, period: "1d", filter: "all", bench: "SPY", client: "Клиент", showPast: false};
+const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: "Клиент", showPast: false};
 
 const save = () => { try{ localStorage.setItem(STORE, JSON.stringify({client: S.client, docs: S.docs})); }catch(e){} };
 const load = () => { try{ const v = JSON.parse(localStorage.getItem(STORE) || "null"); if(v && v.docs){ S.docs = v.docs; S.client = v.client || S.client; } }catch(e){} };
@@ -81,7 +81,7 @@ function renderApp(){
       <section><div class="sec-h"><h2>Структура портфеля</h2><span class="aside" id="structAside"></span></div><div class="struct" id="structure"></div></section>
       <section><div class="sec-h"><h2>Сроки</h2><span class="aside">экспирации, ролловеры фьючерсов</span></div><div class="card tl" id="timeline"></div></section>
       <section><div class="sec-h"><h2>Позиции</h2><span class="aside" id="posAside"></span></div>
-        <div class="toolbar no-print"><div class="seg" id="periods" role="group" aria-label="Период изменения"></div><div class="seg" id="filters" role="group" aria-label="Тип"></div></div>
+        <div class="toolbar no-print"><div class="seg" id="periods" role="group" aria-label="Период изменения"></div><div class="seg" id="filters" role="group" aria-label="Тип"></div><div class="seg" id="venues" role="group" aria-label="Брокер"></div></div>
         <div class="card table-wrap" id="positions"></div></section>
       <section class="print-only" id="printPeriods"></section>
       <section><div class="sec-h"><h2>Акции против бенчмарка</h2><span class="spacer"></span>
@@ -189,6 +189,13 @@ function renderControls(){
   $("#filters").innerHTML = types.map(t => `<button type="button" data-f="${t}" aria-pressed="${S.filter === t}">${t === "all" ? "Все" : TYPE_RU[t]}</button>`).join("");
   $("#periods").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.period = b.dataset.per; renderControls(); renderPositions(); renderChart(); };
   $("#filters").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.filter = b.dataset.f; renderControls(); renderPositions(); };
+  // Портфель по умолчанию общий; разбивка по площадкам — по желанию, поэтому переключатель
+  // появляется, только когда брокеров больше одного.
+  const brokers = [...new Set(S.P.positions.map(p => p.brokerShort))];
+  $("#venues").hidden = brokers.length < 2;
+  $("#venues").innerHTML = ["all", ...brokers].map(b =>
+    `<button type="button" data-b="${esc(b)}" aria-pressed="${S.broker === b}">${b === "all" ? "Все площадки" : esc(b)}</button>`).join("");
+  $("#venues").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.broker = b.dataset.b; renderControls(); renderPositions(); };
 }
 function renderPositions(){
   WL.renderPositions($("#positions"), S.P, S);

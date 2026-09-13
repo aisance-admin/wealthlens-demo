@@ -23,6 +23,9 @@ function row(P, p, per){
   if(p.expiry && p.expiry < P.today) note += " · истёк после даты выписки";
   const td = [];
   td.push(`<td class="l nm">${esc(p.name)}${sub(`<span class="code">${esc(code)}</span>${note ? " · " + esc(note) : ""}`)}</td>`);
+  // Брокер — колонка, а не отдельная таблица. Дата выписки стоит здесь же: в общем списке
+  // соседние строки могут быть на разные даты, и это должно быть видно в самой строке.
+  td.push(`<td class="l brk">${esc(p.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td>`);
   td.push(`<td>${p.type === "cash" ? "" : fmt.qty(p.qty) + (p.type === "stock" ? "" : sub("контр."))}</td>`);
 
   // Цена и дата покупки — один пункт у велса, одна колонка здесь.
@@ -55,7 +58,7 @@ function row(P, p, per){
 
   let val, usd;
   if(cur.value != null){
-    val = fmt.money(cur.value, p.ccy, 0) + (!cur.live && stale ? sub(`на ${fmt.date(doc.asOf)}`) : "");
+    val = fmt.money(cur.value, p.ccy, 0);
     usd = k != null ? fmt.money(cur.value * k, "USD", 0) : unk("нет курса");
   } else {
     val = p.type === "future" ? unk("в деньгах счёта") : dash(p.valueNote || "нет в выписке");
@@ -74,39 +77,54 @@ function row(P, p, per){
           change: ch && k != null ? ch.abs * k : null, counts: p.type !== "cash"};
 }
 
+/* Единый список по всему портфелю: по умолчанию всё вместе, брокер — колонка. Внутри типа
+   акции, фьючерсы и деньги идут по размеру позиции, опционы — по сроку, истёкшие в конце.
+   Отдельная площадка смотрится переключателем «Брокер» и карточками вверху страницы. */
+const TYPE_LABEL = {stock: "Акции", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
+function sortKey(P, p){
+  if(p.type === "option") return (p.expiry && p.expiry < P.today ? "Z" : "A") + (p.expiry || "");
+  const k = WL.usd(P, p.ccy), v = WL.current(P, p).value;
+  const usd = v != null && k != null ? v * k : (p.notional != null && k != null ? p.notional * k : 0);
+  return -Math.abs(usd);
+}
+
 WL.renderPositions = function(el, P, S){
   const per = WL.PERIODS.find(x => x.id === S.period);
-  let body = "", covered = 0, countable = 0, change = 0;
-  const parts = [];
-  for(const doc of P.docs){
-    const ps = P.positions.filter(p => p.source === doc.fileName && (S.filter === "all" || p.type === S.filter));
+  const brokers = [...new Set(P.positions.map(p => p.brokerShort))];
+  const only = S.broker && brokers.includes(S.broker) ? S.broker : "all";
+  const shown = P.positions.filter(p => (S.filter === "all" || p.type === S.filter) && (only === "all" || p.brokerShort === only));
+  let body = "", covered = 0, countable = 0, change = 0, grand = 0;
+  for(const t of TYPE_ORDER){
+    const ps = shown.filter(p => p.type === t)
+      .sort((a, b) => { const ka = sortKey(P, a), kb = sortKey(P, b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
     if(!ps.length) continue;
-    const stale = staleDoc(P, doc);
-    body += `<tr class="grp"><td colspan="8">${esc(doc.broker)} · ${doc.kind === "ledger"
-      ? `журнал операций за ${fmt.date(doc.periodFrom)}–${fmt.date(doc.asOf)}` : `выписка на ${fmt.date(doc.asOf)}`}
-      ${stale ? `<span class="pill stale">данные ${WL.days(doc.asOf, P.today)} дн. назад</span>` : P.live ? `<span class="pill live">цены сейчас</span>` : ""}</td></tr>`;
-    let sum = 0;
-    for(const t of TYPE_ORDER) for(const p of ps.filter(x => x.type === t)){
+    let sum = 0, rows = "", anyUsd = false;
+    for(const p of ps){
       const r = row(P, p, per.id);
-      body += r.html;
-      if(r.usd != null) sum += r.usd;
+      rows += r.html;
+      if(r.usd != null){ sum += r.usd; anyUsd = true; }
       if(r.counts){ countable++; if(r.change != null){ covered++; change += r.change; } }
     }
-    parts.push({doc, sum, stale});
-    body += `<tr class="foot"><td class="l" colspan="7">Итого ${esc(doc.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td><td>${fmt.money(sum, "USD", 0)}</td></tr>`;
+    grand += sum;
+    const label = t === "option" && ps.every(p => p.qty < 0) ? "Опционы проданные" : TYPE_LABEL[t];
+    body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.plural(ps.length, "позиция", "позиции", "позиций")}</span></td>` +
+      `<td>${anyUsd ? fmt.money(sum, "USD", 0) : t === "future" ? unk("в деньгах счёта") : dash("нет текущих цен")}</td></tr>` + rows;
   }
-  const mixed = parts.some(x => x.stale) && parts.some(x => !x.stale);
-  const grand = parts.reduce((a, x) => a + x.sum, 0);
+  const docs = P.docs.filter(d => only === "all" || d.brokerShort === only);
+  const mixed = docs.some(d => staleDoc(P, d));
   el.innerHTML = `<table class="pos"><thead><tr>
-      <th class="l">Бумага</th><th>Кол-во</th><th>Покупка${sub("цена · дата")}</th>
+      <th class="l">Бумага</th><th class="l">Брокер</th><th>Кол-во</th><th>Покупка${sub("цена · дата")}</th>
       <th>Комиссия</th><th>Текущая цена</th><th>Изменение${sub(`${esc(per.label.toLowerCase())} · ${covered} из ${countable}`)}</th>
-      <th>В валюте</th><th>В USD</th></tr></thead><tbody>${body}
-    <tr class="foot"><td class="l" colspan="5">Всего по портфелю${mixed ? sub(parts.map(x => `${esc(x.doc.brokerShort)} — ${x.stale ? "на " + fmt.date(x.doc.asOf) : "сейчас"}`).join(", ")) : ""}</td>
+      <th>В валюте</th><th>В USD</th></tr></thead><tbody>${body ||
+      `<tr><td class="l" colspan="9"><span class="muted">По выбранному фильтру позиций нет.</span></td></tr>`}
+    <tr class="foot"><td class="l" colspan="6">Всего${only === "all" ? " по портфелю" : " · " + esc(only)}${!mixed ? ""
+        : only === "all" ? sub(docs.map(d => `${esc(d.brokerShort)} — ${staleDoc(P, d) ? "на " + fmt.date(d.asOf) : "сейчас"}`).join(", "))
+        : sub(`на ${fmt.date(docs[0].asOf)}`)}</td>
       <td>${covered ? `<span class="${cls(change)}">${fmt.signed(change)}</span>${sub(`по ${covered} из ${countable} позиций`)}` : dash("нет данных за этот период")}</td>
       <td></td><td>${fmt.money(grand, "USD", 0)}</td></tr></tbody></table>
     <p class="basis" style="margin:0; padding:10px 12px">Прочерк — таких данных нет в выписке брокера или нет котировок за период<span class="no-print">; наведите курсор, чтобы увидеть причину</span>.
       Что запросить у клиента, собрано ниже в разделе «Документы и чего не хватает».</p>`;
-  return {grand, covered, countable, change, mixed, parts};
+  return {grand, covered, countable, change, only};
 };
 
 /* ── График: акции в текущем составе против бенчмарка ─────────────────── */

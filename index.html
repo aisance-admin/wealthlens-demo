@@ -140,6 +140,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13px}
 /* Пояснения под числами переносятся, числа — нет: так колонки остаются узкими,
    а «В валюте» и «В USD» помещаются в экран без горизонтальной прокрутки. */
 .pos .sub2,.pos .unk{white-space:normal}
+.pos td.brk{color:var(--ink-2)}
+.pos td.brk .sub2{margin-left:0; max-width:none}
 .pos td:not(.nm) .sub2,.pos th .sub2{max-width:128px; margin-left:auto}
 .pos th:first-child,.pos td:first-child{position:sticky; left:0; z-index:1; background:var(--surface)}
 .pos th:first-child,.pos tr.foot td:first-child,.pos tr.row:hover td:first-child{background:var(--surface-2)}
@@ -247,6 +249,7 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
   .hero{margin-top:6px}
   .table-wrap{overflow:visible}
   table.pos{font-size:10px}
+  .pos .nm{min-width:150px; max-width:230px}
   .pos td,.pos th{padding:4px 6px}
   .pos th:first-child,.pos td:first-child{position:static}
   .pos thead{display:table-header-group}
