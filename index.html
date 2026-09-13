@@ -293,7 +293,7 @@ ul.notes li{margin:5px 0; color:var(--ink-2)}
 <main class="wrap" id="app"></main>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Детали позиции"></aside>
-<input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+<input type="file" id="file" accept=".pdf,.csv,.tsv,.txt,.xlsx,.xls,application/pdf" multiple hidden>
 <script>
 /* Адрес сервера котировок и новостей. Страница, открытая с нашего сервера, ходит на тот же
    адрес. Опубликованная копия (GitHub Pages) берёт его из wealth/api.json: файл пишет
@@ -310,6 +310,7 @@ WL.apiReady = (async () => {
 })();
 </script>
 <script src="wealth/parse.js"></script>
+<script src="wealth/sheet.js"></script>
 <script src="wealth/model.js"></script>
 <script src="wealth/insights.js"></script>
 <script src="wealth/table.js"></script>

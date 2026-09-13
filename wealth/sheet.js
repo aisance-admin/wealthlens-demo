@@ -1,0 +1,291 @@
+/* Флоу велса · импорт выгрузок CSV и Excel.
+   PDF у каждого банка свой, и под него нужен отдельный разборщик. Выгрузка таблицей
+   есть почти у любого брокера, и колонки в ней уже размечены — поэтому это путь для
+   всех остальных площадок. Заголовки сопоставляются автоматически; что не сошлось,
+   честно показано в «Документах», а не подставлено по умолчанию. */
+(function(){
+const WL = window.WL;
+const {pad, round2} = WL.util;
+
+/* Синонимы заголовков. Порядок важен: поле, объявленное раньше, забирает колонку
+   первым, поэтому «цена покупки» достаётся себестоимости, а не текущей цене. */
+const HEAD = {
+  broker: ["брокер", "банк", "площадка", "custodian", "broker", "bank", "account", "счёт", "счет"],
+  name: ["наименование", "название", "бумага", "инструмент", "актив", "описание", "позиция",
+         "security", "instrument", "description", "name", "asset", "position", "holding"],
+  ticker: ["тикер", "символ", "код", "symbol", "ticker", "bbg", "bloomberg"],
+  isin: ["isin", "изин"],
+  type: ["тип", "класс", "класс актива", "вид", "asset class", "assetclass", "type", "class", "category"],
+  qty: ["количество", "кол-во", "колво", "штук", "шт", "quantity", "qty", "shares", "units", "контракты"],
+  costTotal: ["себестоимость", "сумма покупки", "затраты", "cost basis", "total cost", "book value", "стоимость покупки"],
+  costPrice: ["цена покупки", "средняя цена", "цена входа", "цена приобретения", "avg price", "average price",
+              "average cost", "purchase price", "book price"],
+  price: ["текущая цена", "цена", "last price", "market price", "price", "last", "курс", "котировка"],
+  value: ["рыночная стоимость", "стоимость", "оценка", "сумма", "market value", "value", "amount", "mv"],
+  ccy: ["валюта", "currency", "ccy", "cur"],
+  date: ["дата покупки", "дата сделки", "дата приобретения", "purchase date", "trade date", "open date", "дата"],
+  commission: ["комиссия", "комиссии", "сбор", "commission", "fee", "fees"],
+  expiry: ["экспирация", "погашение", "expiry", "expiration", "maturity"],
+};
+const TOTAL_RE = /^\s*(итого|всего|итоговая|сумма по|total|subtotal|sub-?total|grand\s*total|gesamt)(\s|:|$|[^\wА-Яа-яЁё])/i;
+const OCC = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+/* Класс актива из файла. Фонд ведёт себя как акция: тикер и биржевая цена. У облигации и
+   структурной ноты цены у нас нет, поэтому они отдельные типы. Незнакомый класс не выдаём
+   за акцию — это «прочее»: лучше честная строка, чем неверная подпись. */
+const CLASS = [[/структурн|structured|\bnote|нот[аы]/i, "note"], [/облигац|\bbond|бонд|\bобл\b/i, "bond"],
+  [/фонд|fund|\betf|бпиф|\bпиф|trust/i, "fund"], [/акци|equity|stock|share/i, "stock"],
+  [/опцион|option|колл|пут|\bcall\b|\bput\b/i, "option"], [/фьючерс|фьюч|future/i, "future"],
+  [/cash|денеж|деньг|остат|balance|наличн|ликвидн/i, "cash"]];
+const classOf = t => (CLASS.find(c => c[0].test(t)) || [null, null])[1];
+
+/* Разделитель нельзя брать по первой строке: сверху часто стоит заголовок отчёта без
+   единого разделителя. И нельзя брать по общему количеству: в европейской выгрузке
+   запятых внутри чисел больше, чем точек с запятой между колонками. Считаем по первым
+   строкам и берём тот знак, который даёт ОДИНАКОВОЕ число колонок в большинстве строк —
+   так выглядит настоящая таблица. */
+function delimiter(text){
+  const lines = String(text || "").split(/\r?\n/).filter(l => l.trim()).slice(0, 20);
+  const count = (line, ch) => { let n = 0, q = false;
+    for(let i = 0; i < line.length; i++){ const c = line[i];
+      if(c === '"'){ if(q && line[i + 1] === '"') i++; else q = !q; }
+      else if(!q && c === ch) n++; }
+    return n; };
+  let best = {ch: ",", agree: 0, cols: 0};
+  for(const ch of [";", "\t", ",", "|"]){
+    const counts = lines.map(l => count(l, ch)).filter(n => n > 0);
+    if(!counts.length) continue;
+    const mode = counts.sort((a, b) => counts.filter(x => x === b).length - counts.filter(x => x === a).length)[0];
+    const agree = counts.filter(n => n === mode).length;
+    if(agree > best.agree || (agree === best.agree && mode > best.cols)) best = {ch, agree, cols: mode};
+  }
+  return best.ch;
+}
+function parseCSV(text){
+  const D = delimiter(text), rows = [];
+  let row = [], cur = "", q = false;
+  text = text.replace(/^﻿/, "");
+  for(let i = 0; i < text.length; i++){
+    const c = text[i];
+    if(q){ if(c === '"'){ if(text[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += c; }
+    else if(c === '"') q = true;
+    else if(c === D){ row.push(cur); cur = ""; }
+    else if(c === "\n"){ row.push(cur); rows.push(row); row = []; cur = ""; }
+    else if(c !== "\r") cur += c;
+  }
+  if(cur !== "" || row.length){ row.push(cur); rows.push(row); }
+  return rows;
+}
+
+// Числа приходят в трёх видах: 1,234.56 · 1 234,56 · 1'234.56. Пустая ячейка — не ноль.
+function numOrNull(v){
+  if(v == null || v instanceof Date) return null;
+  if(typeof v === "number") return isFinite(v) ? v : null;
+  let t = String(v).trim();
+  if(!t || /^[—–-]+$/.test(t)) return null;
+  const neg = /^\(.*\)$/.test(t) || /^-/.test(t);
+  t = t.replace(/[\s'’ ]/g, "").replace(/[()]/g, "").replace(/[^\d.,]/g, "");
+  if(!/\d/.test(t)) return null;
+  const hasC = t.includes(","), hasD = t.includes(".");
+  if(hasC && hasD) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(/,/g, ".") : t.replace(/,/g, "");
+  else if(hasC) t = /^\d+,\d{1,2}$/.test(t) ? t.replace(",", ".") : t.replace(/,/g, "");
+  else if(hasD && (t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
+  const n = parseFloat(t);
+  return isFinite(n) ? (neg ? -Math.abs(n) : n) : null;
+}
+function toISO(v){
+  if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+  const s = String(v == null ? "" : v).trim();
+  let m = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/.exec(s);
+  if(m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
+  m = /^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})/.exec(s);          // день.месяц.год
+  if(m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[2])}-${pad(m[1])}`;
+  return null;
+}
+const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/) || [null])[0];
+const clean = v => String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+
+/* Колонка достаётся ровно одному полю: сначала точные совпадения заголовка, потом
+   вхождение подстроки. Иначе «Цена» и «Цена покупки» дерутся за одно поле. */
+const MONEY = new Set(["qty", "costTotal", "costPrice", "price", "value", "commission"]);
+function mapHeaders(rowCells){
+  const low = rowCells.map(h => clean(h).toLowerCase());
+  const map = {}, taken = new Set();
+  // Колонка с процентом — ставка, а не деньги: «Fee product %» это TER фонда, и принимать
+  // её за комиссию сделки нельзя.
+  const fits = (f, h, ix) => !taken.has(ix) && h && !(MONEY.has(f) && h.includes("%"));
+  for(const [f, syn] of Object.entries(HEAD)){
+    const i = low.findIndex((h, ix) => fits(f, h, ix) && syn.some(x => h === x));
+    if(i >= 0){ map[f] = i; taken.add(i); }
+  }
+  for(const [f, syn] of Object.entries(HEAD)){
+    if(map[f] != null) continue;
+    const i = low.findIndex((h, ix) => fits(f, h, ix) && syn.some(x => h.includes(x)));
+    if(i >= 0){ map[f] = i; taken.add(i); }
+  }
+  return map;
+}
+// В банковских выгрузках над таблицей часто идут шапки и пустые строки, поэтому
+// заголовок ищется по первым тридцати строкам: берём самую «колоночную».
+function findHeader(rows){
+  let best = null;
+  for(let i = 0; i < Math.min(rows.length, 30); i++){
+    const map = mapHeaders(rows[i] || []);
+    const named = map.name != null || map.ticker != null;
+    const sized = map.qty != null || map.value != null;
+    if(!named || !sized) continue;
+    const score = Object.keys(map).length;
+    if(!best || score > best.score) best = {row: i, map, score};
+  }
+  return best;
+}
+
+function loadXLSX(){
+  if(window.XLSX) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload = res; s.onerror = () => rej(new Error("не удалось загрузить чтение Excel"));
+    document.head.appendChild(s);
+  });
+}
+
+function buildDoc(rows, head, file){
+  const {row, map} = head;
+  const tag = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
+  const g = (r, f) => map[f] != null ? r[map[f]] : undefined;
+  const positions = [], totals = [], notes = [];
+  let dataRows = 0, dates = new Set();
+
+  for(let i = row + 1; i < rows.length; i++){
+    const r = rows[i] || [];
+    if(!r.length || r.every(c => c === "" || c == null)) continue;
+    const label = clean(g(r, "name")) || clean(r.find(c => clean(c)));
+    const qty = numOrNull(g(r, "qty"));
+    const price = numOrNull(g(r, "price"));
+    let value = numOrNull(g(r, "value"));
+    if(value == null && qty != null && price != null) value = round2(qty * price);
+    if(TOTAL_RE.test(label)){                       // строка итога — не позиция, а сверка
+      if(value != null) totals.push({ccy: ccy3(g(r, "ccy")) || ccy3(label), value});
+      continue;
+    }
+    if(!label && qty == null && value == null) continue;
+    dataRows++;
+
+    const ccy = ccy3(g(r, "ccy")) || "USD";
+    const kind = clean(g(r, "type")).toLowerCase();
+    const sym = clean(g(r, "ticker")).toUpperCase().replace(/\s+/g, "");
+    const occ = OCC.exec(sym);
+    const cls = kind ? classOf(kind) : null;
+    // Колонки класса нет — считаем бумагу акцией: так устроены почти все выгрузки позиций.
+    // Класс есть, но незнакомый — «прочее», выдумывать за него нельзя.
+    const type = occ ? "option" : cls || (kind ? "other" : "stock");
+    const isCash = type === "cash" || (!kind && /^(денежные средства|деньги|cash|остаток|cash balance)/i.test(label));
+    const isOption = type === "option", isFuture = type === "future";
+    const broker = clean(g(r, "broker")) || tag;
+    const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
+                  name: label || "Позиция " + i, ccy, value: value != null ? round2(value) : null};
+
+    if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || "Денежные средства"}); continue; }
+
+    const costPrice = numOrNull(g(r, "costPrice"));
+    const costTotal = numOrNull(g(r, "costTotal"));
+    const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty) : null);
+    const p = {...base, type,
+               symbol: sym || null, qty, price, priceDate: null, cost,
+               costNote: cost == null ? "нет в выгрузке" : null,
+               purchaseDate: toISO(g(r, "date")), commission: numOrNull(g(r, "commission")),
+               isin: clean(g(r, "isin")) || null};
+    if(occ){
+      p.occ = sym; p.underlying = occ[1]; p.underlyingName = occ[1]; p.right = occ[5]; p.multiplier = 100;
+      p.strike = +occ[6] / 1000;
+      p.expiry = `20${occ[2]}-${occ[3]}-${occ[4]}`;
+      p.name = label || `${occ[1]} ${occ[5] === "C" ? "колл" : "пут"} ${p.strike}`;
+    } else if(isOption || isFuture){
+      p.expiry = toISO(g(r, "expiry"));
+    }
+    if(!p.symbol && !occ){                           // тикер в скобках внутри названия: Apple Inc (AAPL)
+      const m = /\(([A-Z][A-Z0-9.]{0,9})\)/.exec(label || "");
+      if(m) p.symbol = m[1];
+    }
+    positions.push(p);
+  }
+
+  // Дата оценки: сначала шапка над таблицей («Отчёт по портфелю на 31.08.2026»),
+  // потом имя файла. Выдумывать сегодняшнюю дату молча нельзя — от неё зависит,
+  // считаются ли данные свежими.
+  let asOf = null;
+  for(let i = 0; i < row && !asOf; i++){
+    const line = (rows[i] || []).map(clean).join(" ");
+    const m = /(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d\d)|(20\d\d)[-.\/](\d{1,2})[-.\/](\d{1,2})/.exec(line);
+    if(m) asOf = m[3] ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : `${m[4]}-${pad(m[5])}-${pad(m[6])}`;
+  }
+  if(!asOf){
+    const n = /(\d{1,2})[.\-_](\d{1,2})[.\-_](20\d\d)/.exec(file.name) ;
+    if(n) asOf = `${n[3]}-${pad(n[2])}-${pad(n[1])}`;
+    else {
+      const y = /(20\d\d)[-_.]?(\d{2})[-_.]?(\d{2})/.exec(file.name);
+      if(y) asOf = `${y[1]}-${y[2]}-${y[3]}`;
+    }
+  }
+  if(!asOf){ asOf = new Date().toISOString().slice(0, 10); notes.push("даты оценки в файле нет — взята сегодняшняя"); }
+  positions.forEach(p => { if(p.priceDate == null) p.priceDate = asOf; });
+
+  if(map.price == null) notes.push("колонки текущей цены нет — цены подтянутся с рынка по тикеру");
+  if(map.costPrice == null && map.costTotal == null) notes.push("цены покупки в файле нет");
+  if(map.commission == null) notes.push("комиссий в файле нет");
+  const noSym = positions.filter(p => (p.type === "stock" || p.type === "fund") && !p.symbol).length;
+  if(noSym) notes.push(`без тикера: ${noSym} ${WL.plural(noSym, "бумага", "бумаги", "бумаг")} — живых котировок по ним не будет`);
+  const other = positions.filter(p => p.type === "other").length;
+  if(other) notes.push(`класс актива не распознан: ${other}`);
+
+  const brokers = [...new Set(positions.map(p => p.broker))];
+  const one = brokers.length === 1 ? brokers[0] : null;
+  const checks = [{label: "Строк с позициями прочитано", parsed: positions.length, stated: dataRows,
+                   ok: positions.length === dataRows, count: true}];
+  totals.forEach(t => {
+    const sum = round2(positions.filter(p => !t.ccy || p.ccy === t.ccy).reduce((a, p) => a + (p.value || 0), 0));
+    checks.push({label: `Итог в файле${t.ccy ? " " + t.ccy : ""}`, parsed: sum, stated: round2(t.value),
+                 ok: Math.abs(sum - t.value) < Math.max(1, Math.abs(t.value) * 1e-6), ccy: t.ccy || undefined});
+  });
+  if(!totals.length) notes.push("итоговой строки в файле нет — сверять сумму не с чем");
+
+  return {broker: one || `Выгрузка · ${tag}`, brokerShort: one ? positions[0].brokerShort : "Выгрузка",
+          kind: "positions", asOf, fileName: file.name, from: "sheet", note: notes.join(" · "),
+          positions, checks, transactions: []};
+}
+
+WL.parseSheet = async function(file){
+  let sheets;
+  if(/\.(csv|txt|tsv)$/i.test(file.name)){
+    sheets = [{name: "csv", rows: parseCSV(await file.text())}];
+  } else {
+    await loadXLSX();
+    const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), {type: "array", cellDates: true});
+    sheets = wb.SheetNames.map(n => ({name: n,
+      rows: XLSX.utils.sheet_to_json(wb.Sheets[n], {header: 1, defval: "", blankrows: false})}));
+  }
+  let best = null;
+  for(const sh of sheets){
+    const h = findHeader(sh.rows);
+    if(h && (!best || h.score > best.head.score)) best = {sheet: sh, head: h};
+  }
+  if(!best){
+    const first = (sheets[0] && sheets[0].rows.find(r => r.some(c => clean(c)))) || [];
+    return {unknown: true, fileName: file.name, headers: first.map(clean).filter(Boolean).slice(0, 12)};
+  }
+  const doc = buildDoc(best.sheet.rows, best.head, file);
+  if(sheets.length > 1) doc.note = [`лист «${best.sheet.name}»`, doc.note].filter(Boolean).join(" · ");
+  return doc;
+};
+
+/* Шаблон для тех, у кого выгрузки нет: понятные заголовки, точка с запятой и
+   десятичная запятая — так Excel на русской раскладке открывает файл без вопросов. */
+WL.sheetTemplate = function(){
+  return ["Брокер;Наименование;Тикер;Тип;Количество;Цена покупки;Дата покупки;Комиссия;Текущая цена;Стоимость;Валюта",
+          "Charles Schwab;Apple Inc;AAPL;акция;1000;150,25;14.03.2024;1,50;332,58;332580,00;USD",
+          "Charles Schwab;MCD пут 230;MCD260918P00230000;опцион;-100;2,99;12.05.2026;7,80;0,015;-150,00;USD",
+          "UBS;Nestle;NESN;акция;500;92,40;03.02.2025;12,00;88,10;44050,00;CHF",
+          "UBS;Денежные средства;CHF;деньги;;;;;;125000,00;CHF",
+          "Итого;;;;;;;;;501480,00;USD"].join("\n");
+};
+})();

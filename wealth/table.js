@@ -10,13 +10,13 @@ const unk = t => `<span class="unk">${esc(t)}</span>`;
 const dash = t => `<span class="unk" title="${esc(t)}">—</span>`;
 const sub = t => `<span class="sub2">${t}</span>`;
 const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
-const TYPE_ORDER = ["stock", "option", "future", "cash"];
+const TYPE_ORDER = ["stock", "fund", "bond", "note", "other", "option", "future", "cash"];
 const staleDoc = (P, d) => d && WL.days(d.asOf, P.today) > 45;
 
 function row(P, p, per){
   const k = WL.usd(P, p.ccy), cur = WL.current(P, p), doc = P.docs.find(d => d.fileName === p.source);
   const stale = staleDoc(P, doc);
-  const code = p.type === "stock" ? p.symbol : p.type === "cash" ? p.ccy : (p.occ || p.code);
+  const code = p.type === "cash" ? p.ccy : (p.occ || p.symbol || p.code || p.isin);
   let note = "";
   if(p.type === "option") note = `${p.qty < 0 ? "продан" : "куплен"} · истекает ${fmt.date(p.expiry)}`;
   if(p.type === "future") note = `последний торговый день ${fmt.date(p.expiry)}`;
@@ -26,11 +26,12 @@ function row(P, p, per){
   // Брокер — колонка, а не отдельная таблица. Дата выписки стоит здесь же: в общем списке
   // соседние строки могут быть на разные даты, и это должно быть видно в самой строке.
   td.push(`<td class="l brk">${esc(p.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td>`);
-  td.push(`<td>${p.type === "cash" ? "" : fmt.qty(p.qty) + (p.type === "stock" ? "" : sub("контр."))}</td>`);
+  const contracts = p.type === "option" || p.type === "future";
+  td.push(`<td>${p.type === "cash" || p.qty == null ? "" : fmt.qty(p.qty) + (contracts ? sub("контр.") : "")}</td>`);
 
   // Цена и дата покупки — один пункт у велса, одна колонка здесь.
   let buyMain = "", buyNote = "";
-  if(p.type === "stock"){
+  if(!contracts && p.type !== "cash"){
     if(p.cost != null && p.qty){ buyMain = fmt.px(p.cost / p.qty); buyNote = "средняя"; }
     else buyMain = unk(p.costNote || "нет в выписке");
   } else if(p.type === "option"){
@@ -54,7 +55,7 @@ function row(P, p, per){
 
   const ch = p.type === "cash" ? null : WL.change(P, p, per);
   td.push(`<td>${p.type === "cash" ? "" : ch ? `<span class="${cls(ch.abs)}">${fmt.signed(ch.abs, p.ccy)}</span>` +
-    (p.type === "stock" && ch.pct != null ? sub(`<span class="${cls(ch.abs)}">${fmt.pct(ch.pct)}</span>`) : "") : dash("нет данных за этот период")}</td>`);
+    (ch.pct != null ? sub(`<span class="${cls(ch.abs)}">${fmt.pct(ch.pct)}</span>`) : "") : dash("нет данных за этот период")}</td>`);
 
   let val, usd;
   if(cur.value != null){
@@ -68,7 +69,7 @@ function row(P, p, per){
   if(p.type === "option" && p.qty < 0 && p.multiplier){
     // Проданный колл, полностью покрытый акциями на том же счёте, — не обязательство купить что-то на рынке.
     const n = Math.abs(p.qty) * p.multiplier;
-    const held = p.right === "C" && P.positions.find(s => s.type === "stock" && s.symbol === p.underlying && s.source === p.source);
+    const held = p.right === "C" && P.positions.find(s => WL.eq(s) && s.symbol === p.underlying && s.source === p.source);
     val += sub(held && held.qty >= n ? `покрыт ${fmt.int(n)} акций`
       : `${p.right === "P" ? "обязательство купить" : "обязательство продать"} на ${fmt.short(n * p.strike, p.ccy)}`);
   }
@@ -80,7 +81,8 @@ function row(P, p, per){
 /* Единый список по всему портфелю: по умолчанию всё вместе, брокер — колонка. Внутри типа
    акции, фьючерсы и деньги идут по размеру позиции, опционы — по сроку, истёкшие в конце.
    Отдельная площадка смотрится переключателем «Брокер» и карточками вверху страницы. */
-const TYPE_LABEL = {stock: "Акции", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
+const TYPE_LABEL = {stock: "Акции", fund: "Фонды", bond: "Облигации", note: "Структурные ноты",
+  other: "Прочее", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
 function sortKey(P, p){
   if(p.type === "option") return (p.expiry && p.expiry < P.today ? "Z" : "A") + (p.expiry || "");
   const k = WL.usd(P, p.ccy), v = WL.current(P, p).value;
@@ -135,7 +137,7 @@ const WINDOW = {"1d": 30, "1m": 30, "3m": 91, "1y": 365, "5y": 1826, "all": null
 const niceStep = raw => { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || 10 * p; };
 
 WL.renderChart = function(el, P, S){
-  const stocks = P.positions.filter(p => p.type === "stock" && (P.history[p.symbol] || []).length);
+  const stocks = P.positions.filter(p => WL.eq(p) && (P.history[p.symbol] || []).length);
   const bh = P.history[S.bench] || [];
   if(!stocks.length || bh.length < 2){
     const limited = Object.values(P.historyStatus || {}).includes("limited");

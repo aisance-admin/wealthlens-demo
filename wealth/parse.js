@@ -228,6 +228,8 @@ function parseSwissquote(pages, fileName){
 }
 
 WL.parseFile = async function(file){
+  // Таблицу разбирает sheet.js: у выгрузки колонки уже размечены, и гадать не нужно.
+  if(!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return WL.parseSheet(file);
   const pages = await pdfLines(await file.arrayBuffer());
   const head = pages.slice(0, 2).flat().map(l => l.text).join("\n");
   if(/Schwab One|Charles Schwab/.test(head)) return parseSchwab(pages, file.name);

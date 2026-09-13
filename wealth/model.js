@@ -147,7 +147,7 @@ const getJSON = WL.getJSON;
 
 WL.fetchLive = async function(P){
   const opts = P.positions.filter(p => p.type === "option" && p.occ);
-  const syms = [...new Set([...P.positions.filter(p => p.type === "stock").map(p => p.symbol), ...opts.map(p => p.underlying)])];
+  const syms = [...new Set([...P.positions.filter(p => WL.eq(p) && p.symbol).map(p => p.symbol), ...opts.map(p => p.underlying)])];
   const [q, o, fx] = await Promise.all([
     syms.length ? getJSON("/market/quotes?symbols=" + syms.join(",")) : null,
     opts.length ? getJSON("/market/options?contracts=" + opts.map(p => p.occ).join(",")) : null,
@@ -163,7 +163,7 @@ WL.fetchLive = async function(P){
   P.live = {quotes, fx: fx && fx.rates ? fx.rates : null, fxDate: fx && fx.date, fxSource: fx && fx.source, at: new Date().toISOString(),
     ok: !!((q && q.quotes) || (o && o.options) || (fx && fx.rates))};   // сервер данных ответил хоть чем-то
   P.positions.forEach(p => {
-    if(p.type === "stock" && quotes[p.symbol] && quotes[p.symbol].price) {
+    if(WL.eq(p) && quotes[p.symbol] && quotes[p.symbol].price) {
       const x = quotes[p.symbol]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time};
     }
     if(p.type === "option" && p.occ){
@@ -187,9 +187,12 @@ WL.fetchHistory = async function(P, symbols){
   }
 };
 
+// Бумаги, которые ведут себя как акции: есть тикер и биржевая цена. Фонды сюда входят,
+// облигации и структурные ноты — нет, у них своей котировки у нас нет.
+WL.eq = p => p.type === "stock" || p.type === "fund";
 WL.usd = (P, ccy) => ccy === "USD" ? 1 : (P.live && P.live.fx && P.live.fx[ccy] ? 1 / P.live.fx[ccy] : null);
 WL.current = (P, p) => {
-  if(p.type === "stock" && p.live) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};
+  if(WL.eq(p) && p.live) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};
   if(p.type === "option" && p.live && p.multiplier) return {price: p.live.price, value: round2(p.qty * p.live.price * p.multiplier), live: true};
   return {price: p.price, value: p.value, live: false};
 };
@@ -209,15 +212,15 @@ WL.change = (P, p, per) => {
   const cur = WL.current(P, p);
   if(cur.value == null) return null;
   if(per === "cost"){
-    if(p.type === "stock" && p.cost != null) return {abs: round2(cur.value - p.cost), pct: p.cost ? (cur.value / p.cost - 1) * 100 : null};
-    if(p.type === "option" && p.cost != null) return {abs: round2(cur.value - p.cost), pct: null};
-    return null;
+    if(p.cost == null) return null;
+    // Процент не считаем по проданным опционам: знак премии делает отношение бессмысленным.
+    return {abs: round2(cur.value - p.cost), pct: p.type === "option" || !p.cost ? null : (cur.value / p.cost - 1) * 100};
   }
   if(per === "stmt"){
     if(p.value == null || !cur.live) return null;
     return {abs: round2(cur.value - p.value), pct: p.value ? (cur.value / p.value - 1) * 100 * Math.sign(p.value) : null, from: p.priceDate};
   }
-  if(p.type !== "stock") return null;
+  if(!WL.eq(p)) return null;
   let start = null;
   if(per === "1d") start = p.live && p.live.prevClose ? {price: p.live.prevClose} : null;
   else {

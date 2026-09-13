@@ -25,7 +25,7 @@ WL.insights = function(P){
       if(u == null) return {text, note: "текущей цены базового актива нет"};
       const itm = p.right === "C" ? u > K : u < K;
       if(itm) itmAny = true;
-      const held = P.positions.some(s => s.type === "stock" && s.symbol === p.underlying && s.brokerShort === p.brokerShort);
+      const held = P.positions.some(s => WL.eq(s) && s.symbol === p.underlying && s.brokerShort === p.brokerShort);
       let note = `${p.underlying} сейчас ${fmt.px(u)}, опцион ${itm ? "в деньгах" : "вне денег"}`;
       if(p.qty < 0 && p.right === "C") note += itm
         ? (held ? ` — ${fmt.int(n)} акций, скорее всего, заберут по ${K}` : ` — возможна поставка ${fmt.int(n)} акций`)
@@ -58,7 +58,7 @@ WL.insights = function(P){
   snapshots.forEach(d => {
     const mine = P.positions.filter(p => p.source === d.fileName);
     const total = sum(mine, p => WL.current(P, p).value);
-    const stocks = mine.filter(p => p.type === "stock").map(p => ({p, v: WL.current(P, p).value})).sort((a, b) => b.v - a.v);
+    const stocks = mine.filter(p => WL.eq(p)).map(p => ({p, v: WL.current(P, p).value})).sort((a, b) => b.v - a.v);
     if(!stocks.length || total <= 0) return;
     const top = stocks[0], share = top.v / total * 100, top3 = sum(stocks.slice(0, 3), x => x.v) / total * 100;
     if(share < 15) return;
@@ -70,10 +70,10 @@ WL.insights = function(P){
   });
 
   // 4. Что изменилось с даты выписки.
-  const live = P.positions.filter(p => (p.type === "stock" || p.type === "option") && p.live && p.value != null);
+  const live = P.positions.filter(p => (WL.eq(p) || p.type === "option") && p.live && p.value != null);
   if(live.length){
     const delta = sum(live, p => WL.current(P, p).value - p.value);
-    const movers = live.filter(p => p.type === "stock").map(p => ({p, pct: (p.live.price / p.price - 1) * 100}))
+    const movers = live.filter(p => WL.eq(p)).map(p => ({p, pct: (p.live.price / p.price - 1) * 100}))
       .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 3);
     const from = live[0].priceDate;
     out.push({level: Math.abs(delta) >= 250000 ? "watch" : "info", kind: "since",
@@ -85,12 +85,12 @@ WL.insights = function(P){
   // 5. Результат к себестоимости: лучшая и худшая бумага. Считается так же, как колонка
   // «Изменение с покупки» в таблице: по текущим ценам, если они есть, иначе по ценам выписки.
   // Иначе вывод и таблица показывали бы для одной бумаги два разных результата.
-  const withCost = P.positions.filter(p => p.type === "stock" && p.cost > 0)
+  const withCost = P.positions.filter(p => WL.eq(p) && p.cost > 0)
     .map(p => ({p, c: WL.change(P, p, "cost")})).filter(x => x.c);
   if(withCost.length >= 2){
     const s = [...withCost].sort((a, b) => b.c.abs - a.c.abs), best = s[0], worst = s[s.length - 1];
     const isLive = withCost.some(x => x.p.live);
-    const noCost = P.positions.filter(p => p.type === "stock" && p.cost == null).map(p => p.symbol);
+    const noCost = P.positions.filter(p => WL.eq(p) && p.cost == null).map(p => p.symbol);
     out.push({level: "info", kind: "pnl",
       title: `Лучший результат к покупке — ${best.p.symbol} ${fmt.signed(best.c.abs)}, худший — ${worst.p.symbol} ${fmt.signed(worst.c.abs)}`,
       text: `${best.p.name} ${fmt.pct(best.c.pct, 0)}, ${worst.p.name} ${fmt.pct(worst.c.pct, 0)} к средней цене покупки${isLive ? ", по текущим ценам" : ""}.` +
@@ -140,7 +140,7 @@ WL.insights = function(P){
 WL.missing = function(P){
   const M = [];
   P.docs.filter(d => d.kind === "positions").forEach(d => {
-    const noCost = P.positions.filter(p => p.source === d.fileName && p.type === "stock" && p.cost == null);
+    const noCost = P.positions.filter(p => p.source === d.fileName && WL.eq(p) && p.cost == null);
     M.push({broker: d.brokerShort, title: "Даты и цены покупки по лотам",
       affects: "«Цена покупки», «Дата покупки», период «С покупки»" +
                (noCost.length ? `; себестоимость ${noCost.map(p => `${p.symbol} ${p.costNote}`).join(", ")}` : ""),

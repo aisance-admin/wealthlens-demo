@@ -10,7 +10,8 @@ const now = new Date();
 const TODAY = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 const STORE = "wl_wealth_v1";
 const LEVEL = {high: "Важно", watch: "Внимание", info: "К сведению"};
-const TYPE_RU = {stock: "Акции", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
+const TYPE_RU = {stock: "Акции", fund: "Фонды", bond: "Облигации", note: "Ноты", other: "Прочее",
+  option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
 // Сверка остатков Swissquote идёт в валюте счёта: франки не должны печататься долларами.
 const ccyOf = c => c.ccy || (/Остаток ([A-Z]{3})/.exec(c.label || "") || [])[1] || "USD";
 const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: "Клиент", showPast: false};
@@ -25,21 +26,36 @@ function renderUpload(){
   $("#app").innerHTML = `<div class="drop" id="drop">
     <div class="eyebrow">WealthLens · портфель клиента</div>
     <h1>Загрузите выписки клиента</h1>
-    <p>PDF от брокеров и банков, можно сразу несколько. Сейчас распознаются Charles Schwab и Swissquote.</p>
+    <p>Можно сразу несколько файлов. PDF читается у Charles Schwab и Swissquote; выгрузка CSV или Excel — у любого брокера, колонки распознаются сами.</p>
     <button class="btn primary" id="pick" type="button">Выбрать файлы</button>
+    <button class="btn small" id="tplBtn" type="button" style="margin-left:8px">Шаблон CSV</button>
     <p class="hint">Или перетащите файлы сюда. Выписки разбираются в этом браузере и никуда не отправляются: наружу уходят только тикеры и названия компаний — для котировок и новостей.</p>
     <div class="progress" id="progress" aria-live="polite"></div></div>`;
   $("#pick").onclick = () => $("#file").click();
+  // Шаблон для тех, у кого выгрузки нет: заполнить в Excel и принести сюда.
+  $("#tplBtn").onclick = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + WL.sheetTemplate()], {type: "text/csv;charset=utf-8"}));
+    a.download = "wealthlens-шаблон.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
 }
 async function addFiles(files){
-  const list = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
-  if(!list.length){ toast("Нужны PDF-файлы выписок"); return; }
+  const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
+  if(!list.length){ toast("Нужны PDF-выписки или выгрузки CSV и Excel"); return; }
   const prog = $("#progress");
   for(const f of list){
     if(prog) prog.insertAdjacentHTML("beforeend", `<div>Читаю ${esc(f.name)}…</div>`);
     try{
       const doc = await WL.parseFile(f);
-      if(doc.unknown){ toast(`${f.name}: формат выписки пока не распознаётся`); continue; }
+      if(doc.unknown){
+        // Честно называем причину: в таблице не нашлись нужные колонки — видно, какие есть.
+        toast(doc.headers && doc.headers.length
+          ? `${f.name}: не нашёл колонки с названием и количеством или стоимостью. В файле: ${doc.headers.slice(0, 6).join(", ")}`
+          : `${f.name}: формат выписки пока не распознаётся`);
+        continue;
+      }
       S.docs = S.docs.filter(d => !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
       S.docs.push(doc);
     }catch(e){ toast(`${f.name}: не удалось прочитать файл`); }
@@ -53,7 +69,7 @@ async function addFiles(files){
 let historyTimer = null;
 async function loadHistory(attempt = 0){
   const P = S.P; if(!P) return;
-  const syms = [...new Set(P.positions.filter(p => p.type === "stock").map(p => p.symbol))];
+  const syms = [...new Set(P.positions.filter(p => WL.eq(p) && p.symbol).map(p => p.symbol))];
   await WL.fetchHistory(P, [S.bench, ...syms]);   // бенчмарк первым: график нужен даже при частичной истории
   if(P !== S.P) return;
   renderHero(); renderPositions(); renderChart();
@@ -102,7 +118,7 @@ function renderHero(){
   const byDoc = P.docs.map(d => {
     const ps = P.positions.filter(p => p.source === d.fileName);
     const usd = ps.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? a + v * k : a; }, 0);
-    const day = ps.reduce((a, p) => { const c = p.type === "stock" ? WL.change(P, p, "1d") : null; return c ? a + c.abs : a; }, 0);
+    const day = ps.reduce((a, p) => { const c = WL.eq(p) ? WL.change(P, p, "1d") : null; return c ? a + c.abs : a; }, 0);
     return {d, ps, usd, day, stale: WL.days(d.asOf, P.today) > 45, live: ps.some(p => p.live)};
   });
   const total = byDoc.reduce((a, x) => a + x.usd, 0), day = byDoc.reduce((a, x) => a + x.day, 0);
@@ -120,10 +136,11 @@ function renderHero(){
   $("#brokers").innerHTML = byDoc.map(x => {
     const bad = x.d.checks.filter(c => !c.ok).length;
     return `<div class="card broker"><div class="name">${esc(x.d.broker)}
-        <span class="pill ${bad ? "bad" : "ok"}">${bad ? `не сошлось: ${bad}` : "сверено с банком"}</span>
+        <span class="pill ${bad ? "bad" : "ok"}">${bad ? `не сошлось: ${bad}` : x.d.from === "sheet" ? "сошлось с итогом файла" : "сверено с банком"}</span>
         ${x.stale ? `<span class="pill stale">${WL.days(x.d.asOf, P.today)} дн. назад</span>` : x.live ? `<span class="pill live">цены сейчас</span>` : ""}</div>
       <div class="v">${fmt.money(x.usd, "USD", 0)}</div>
-      <div class="meta">${x.d.kind === "ledger" ? `журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}` : `выписка на ${fmt.date(x.d.asOf)}`} ·
+      <div class="meta">${x.d.kind === "ledger" ? `журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`
+        : `${x.d.from === "sheet" ? "выгрузка" : "выписка"} на ${fmt.date(x.d.asOf)}`} ·
         ${x.ps.length} ${WL.plural(x.ps.length, "позиция", "позиции", "позиций")}</div></div>`;
   }).join("");
   $("#printTitle").textContent = `${S.client} — портфель`;
@@ -139,7 +156,8 @@ function renderStructure(){
     .filter(x => x.usd != null);
   const assets = rows.reduce((a, x) => a + Math.max(x.usd, 0), 0);
   const group = key => { const m = new Map(); rows.forEach(x => m.set(key(x.p), (m.get(key(x.p)) || 0) + x.usd)); return [...m].sort((a, b) => b[1] - a[1]); };
-  const TYPE = {stock: "Акции", option: "Опционы проданные", future: "Фьючерсы", cash: "Деньги"};
+  const TYPE = {stock: "Акции", fund: "Фонды", bond: "Облигации", note: "Структурные ноты", other: "Прочее",
+    option: "Опционы проданные", future: "Фьючерсы", cash: "Деньги"};
   const block = (title, items) => `<div class="card sblock"><div class="eyebrow">${title}</div>` + items.map(([name, v]) => {
     const share = v > 0 && assets ? v / assets * 100 : null;
     return `<div class="srow"><div class="sname">${esc(name)}</div><div class="sbar">${share != null ? `<i style="width:${Math.max(share, 0.6).toFixed(1)}%"></i>` : ""}</div>` +
@@ -184,7 +202,8 @@ function renderTimeline(){
 }
 
 function renderControls(){
-  const types = ["all", ...["stock", "option", "future", "cash"].filter(t => S.P.positions.some(p => p.type === t))];
+  const types = ["all", ...["stock", "fund", "bond", "note", "other", "option", "future", "cash"]
+    .filter(t => S.P.positions.some(p => p.type === t))];
   $("#periods").innerHTML = WL.PERIODS.map(p => `<button type="button" data-per="${p.id}" aria-pressed="${S.period === p.id}">${p.label}</button>`).join("");
   $("#filters").innerHTML = types.map(t => `<button type="button" data-f="${t}" aria-pressed="${S.filter === t}">${t === "all" ? "Все" : TYPE_RU[t]}</button>`).join("");
   $("#periods").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.period = b.dataset.per; renderControls(); renderPositions(); renderChart(); };
@@ -244,7 +263,7 @@ function renderDocs(){
   const P = S.P;
   $("#docs").innerHTML = S.docs.map(d => `<div style="margin-bottom:14px">
       <div class="name" style="font-weight:600">${esc(d.broker)}</div>
-      <div class="muted" style="font-size:12.5px">${esc(d.fileName)} · ${d.kind === "ledger" ? `журнал операций, ${d.records.length} строк, ${d.trades.length} сделок${d.cancelled.length ? `, отменено банком: ${d.cancelled.length}` : ""}` : `снимок позиций на ${fmt.date(d.asOf)}`}</div>
+      <div class="muted" style="font-size:12.5px">${esc(d.fileName)} · ${d.kind === "ledger" ? `журнал операций, ${d.records.length} строк, ${d.trades.length} сделок${d.cancelled.length ? `, отменено банком: ${d.cancelled.length}` : ""}` : `${d.from === "sheet" ? "выгрузка таблицей" : "снимок"}, позиции на ${fmt.date(d.asOf)}`}${d.note ? " · " + esc(d.note) : ""}</div>
       ${d.checks.map(c => `<div class="check"><span>${c.ok ? "✓" : "✗"} ${esc(c.label)}</span><span class="num ${c.ok ? "" : "down"}">${c.count ? `${c.parsed} из ${c.stated}` : `${fmt.money(c.parsed, ccyOf(c))}${c.ok ? "" : " ≠ " + fmt.money(c.stated, ccyOf(c))}`}</span></div>`).join("")}
     </div>`).join("");
   const M = WL.missing(P);
@@ -265,8 +284,9 @@ function openDrawer(id){
   const kv = [];
   const add = (label, v) => { if(v != null && v !== "") kv.push(`<dt>${label}</dt><dd>${v}</dd>`); };
   add("Брокер", esc(p.broker));
-  if(p.type !== "cash") add("Количество", fmt.qty(p.qty) + (p.type === "stock" ? "" : " контр."));
-  if(p.type === "stock") add("Цена покупки", p.cost != null ? `${fmt.px(p.cost / p.qty)} (средняя из себестоимости ${fmt.money(p.cost)})` : `<span class="unk">${esc(p.costNote)}</span>`);
+  const contracts = p.type === "option" || p.type === "future";
+  if(p.type !== "cash" && p.qty != null) add("Количество", fmt.qty(p.qty) + (contracts ? " контр." : ""));
+  if(!contracts && p.type !== "cash") add("Цена покупки", p.cost != null ? `${fmt.px(p.cost / p.qty)} (средняя из себестоимости ${fmt.money(p.cost)})` : `<span class="unk">${esc(p.costNote || "нет в выписке")}</span>`);
   if(p.premium != null) add("Премия всего", fmt.money(p.premium, p.ccy));
   add("Дата покупки", p.purchaseDate ? fmt.date(p.purchaseDate) + (p.purchaseNote ? ` <span class="muted">(${esc(p.purchaseNote)})</span>` : "") : p.type === "cash" ? null : `<span class="unk">нет в выписке</span>`);
   if(p.type !== "cash") add("Комиссии", p.commission != null ? fmt.money(p.commission, p.ccy) : `<span class="unk">нет в выписке</span>`);
@@ -281,7 +301,7 @@ function openDrawer(id){
   if(p.expiry) add(p.type === "future" ? "Последний торговый день" : "Экспирация", fmt.date(p.expiry));
   if(p.unrealized != null) add(`Результат к покупке на ${fmt.date(p.priceDate)}`, fmt.money(p.unrealized));
   const changes = p.type === "cash" ? "" : `<h4 style="margin:18px 0 6px">Изменение за периоды</h4><table class="mini">` +
-    WL.PERIODS.map(per => { const c = WL.change(P, p, per.id); return `<tr><td class="l">${per.label}</td><td class="${c && c.abs > 0 ? "up" : c && c.abs < 0 ? "down" : ""}">${c ? fmt.signed(c.abs, p.ccy) : "<span class='unk'>нет данных</span>"}</td><td>${c && p.type === "stock" && c.pct != null ? fmt.pct(c.pct) : ""}</td></tr>`; }).join("") + `</table>`;
+    WL.PERIODS.map(per => { const c = WL.change(P, p, per.id); return `<tr><td class="l">${per.label}</td><td class="${c && c.abs > 0 ? "up" : c && c.abs < 0 ? "down" : ""}">${c ? fmt.signed(c.abs, p.ccy) : "<span class='unk'>нет данных</span>"}</td><td>${c && c.pct != null ? fmt.pct(c.pct) : ""}</td></tr>`; }).join("") + `</table>`;
   const trades = p.trades && p.trades.length ? `<h4 style="margin:18px 0 6px">Сделки из журнала: ${p.trades.length}</h4><table class="mini"><tr><th class="l">Дата</th><th class="l">Операция</th><th>Кол-во</th><th>Премия</th><th>Комиссия</th><th>Сбор</th></tr>` +
     p.trades.map(t => `<tr><td class="l">${fmt.date(t.date)}</td><td class="l">${t.assigned ? "исполнение" : t.side === "Buy" ? "покупка" : "продажа"}</td><td>${t.qty}</td><td>${t.premium ? fmt.money(t.premium, t.ccy) : ""}</td><td>${fmt.money(t.commission, t.ccy)}</td><td>${fmt.money(t.exchFees, t.ccy)}</td></tr>`).join("") + `</table>` : "";
   $("#drawer").innerHTML = `<button class="btn small" id="closeDrawer" type="button" style="float:right">Закрыть</button>
