@@ -25,9 +25,9 @@ function row(P, p, per){
   td.push(`<td class="l nm">${esc(p.name)}${sub(`<span class="code">${esc(code)}</span>${note ? " · " + esc(note) : ""}`)}</td>`);
   // Брокер — колонка, а не отдельная таблица. Дата выписки стоит здесь же: в общем списке
   // соседние строки могут быть на разные даты, и это должно быть видно в самой строке.
-  td.push(`<td class="l brk">${esc(p.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td>`);
+  td.push(`<td class="l brk" data-l="Брокер">${esc(p.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td>`);
   const contracts = p.type === "option" || p.type === "future";
-  td.push(`<td>${p.type === "cash" || p.qty == null ? "" : fmt.qty(p.qty) + (contracts ? sub("контр.") : "")}</td>`);
+  td.push(`<td class="qty" data-l="Кол-во">${p.type === "cash" || p.qty == null ? "" : fmt.qty(p.qty) + (contracts ? sub("контр.") : "")}</td>`);
 
   // Цена и дата покупки — один пункт у велса, одна колонка здесь.
   let buyMain = "", buyNote = "";
@@ -42,8 +42,8 @@ function row(P, p, per){
   } else if(p.type === "future") buyMain = unk("по сделкам");
   if(p.type !== "cash") buyNote = [buyNote, p.purchaseDate
     ? `${fmt.date(p.purchaseDate)}${p.purchaseNote ? " (" + esc(p.purchaseNote) + ")" : ""}` : ""].filter(Boolean).join(" · ");
-  td.push(`<td>${buyMain}${buyNote ? sub(buyNote) : ""}</td>`);
-  td.push(`<td>${p.type === "cash" ? "" : p.commission != null ? fmt.money(p.commission, p.ccy) : dash("нет в выписке")}</td>`);
+  td.push(`<td class="buy" data-l="Покупка">${buyMain}${buyNote ? sub(buyNote) : ""}</td>`);
+  td.push(`<td class="fee" data-l="Комиссия">${p.type === "cash" ? "" : p.commission != null ? fmt.money(p.commission, p.ccy) : dash("нет в выписке")}</td>`);
 
   let px = "";
   if(p.type !== "cash"){
@@ -51,10 +51,10 @@ function row(P, p, per){
     else if(p.price != null) px = fmt.px(p.price) + sub(`на ${fmt.date(p.priceDate)}`);
     else px = dash("нет в выписке");
   }
-  td.push(`<td>${px}</td>`);
+  td.push(`<td class="px" data-l="Цена">${px}</td>`);
 
   const ch = p.type === "cash" ? null : WL.change(P, p, per);
-  td.push(`<td>${p.type === "cash" ? "" : ch ? `<span class="${cls(ch.abs)}">${fmt.signed(ch.abs, p.ccy)}</span>` +
+  td.push(`<td class="chg" data-l="Изменение">${p.type === "cash" ? "" : ch ? `<span class="${cls(ch.abs)}">${fmt.signed(ch.abs, p.ccy)}</span>` +
     (ch.pct != null ? sub(`<span class="${cls(ch.abs)}">${fmt.pct(ch.pct)}</span>`) : "") : dash("нет данных за этот период")}</td>`);
 
   let val, usd;
@@ -73,7 +73,7 @@ function row(P, p, per){
     val += sub(held && held.qty >= n ? `покрыт ${fmt.int(n)} акций`
       : `${p.right === "P" ? "обязательство купить" : "обязательство продать"} на ${fmt.short(n * p.strike, p.ccy)}`);
   }
-  td.push(`<td>${val}</td>`, `<td>${usd}</td>`);
+  td.push(`<td class="loc" data-l="В валюте">${val}</td>`, `<td class="usd" data-l="В USD">${usd}</td>`);
   return {html: `<tr class="row" data-id="${esc(p.id)}" tabindex="0">${td.join("")}</tr>`, usd: cur.value != null && k != null ? cur.value * k : null,
           change: ch && k != null ? ch.abs * k : null, counts: p.type !== "cash"};
 }
