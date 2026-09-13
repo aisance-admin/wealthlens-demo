@@ -141,8 +141,9 @@ table.pos{width:100%; border-collapse:collapse; font-size:13px}
    а «В валюте» и «В USD» помещаются в экран без горизонтальной прокрутки. */
 .pos .sub2,.pos .unk{white-space:normal}
 .pos td.brk{color:var(--ink-2)}
-.pos td.brk .sub2{margin-left:0; max-width:none}
-.pos td:not(.nm) .sub2,.pos th .sub2{max-width:128px; margin-left:auto}
+.pos td.brk{white-space:nowrap}
+.pos td.brk .sub2{margin-left:0; max-width:none; white-space:nowrap}
+.pos td:not(.nm):not(.l) .sub2,.pos th .sub2{max-width:128px; margin-left:auto}
 .pos th:first-child,.pos td:first-child{position:sticky; left:0; z-index:1; background:var(--surface)}
 .pos th:first-child,.pos tr.foot td:first-child,.pos tr.row:hover td:first-child{background:var(--surface-2)}
 .pos tr.grp td:first-child{background:var(--ground)}
