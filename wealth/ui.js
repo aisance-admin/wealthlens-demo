@@ -343,7 +343,7 @@ function openMapper(file, sheets, pre, onDone){
       <div class="map-grid">${WL.sheetFields.map(([f, label]) => `<label>${label}
         <select data-f="${f}"><option value="">— нет —</option>${Array.from({length: width}, (_, c) =>
           `<option value="${c}"${head.map[f] === c ? " selected" : ""}>${esc(colLabel(c))}</option>`).join("")}</select></label>`).join("")}</div>
-      <div class="sec-h" style="margin:14px 0 0"><b>Получится</b><span class="aside">${esc(status)}</span><span class="spacer"></span>
+      <div class="sec-h actions"><b>Получится</b><span class="aside">${esc(status)}</span><span class="spacer"></span>
         <button class="btn small" data-x="auto" type="button">Подобрать заново</button>
         <button class="btn primary small" data-x="ok" type="button"${ready ? "" : " disabled"}>Импортировать</button></div>
       ${preview ? `<div class="table-wrap" style="margin-top:8px"><table class="prev"><tr><th>Бумага</th><th>Тип</th><th>Тикер</th><th>Кол-во</th><th>Стоимость</th><th>Брокер</th></tr>${preview}</table></div>` : ""}
