@@ -45,24 +45,28 @@ async function addFiles(files){
   const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
   if(!list.length){ toast("Нужны PDF-выписки или выгрузки CSV и Excel"); return; }
   const prog = $("#progress");
+  const pending = [];      // таблицы, которые надо разметить руками
   for(const f of list){
     if(prog) prog.insertAdjacentHTML("beforeend", `<div>Читаю ${esc(f.name)}…</div>`);
     try{
       const doc = await WL.parseFile(f);
       if(doc.unknown){
-        // Честно называем причину: в таблице не нашлись нужные колонки — видно, какие есть.
-        toast(doc.headers && doc.headers.length
-          ? `${f.name}: не нашёл колонки с названием и количеством или стоимостью. В файле: ${doc.headers.slice(0, 6).join(", ")}`
-          : `${f.name}: формат выписки пока не распознаётся`);
+        // Таблицу, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
+        if(doc.sheets){ pending.push({file: f, sheets: doc.sheets}); continue; }
+        toast(`${f.name}: формат выписки пока не распознаётся`);
         continue;
       }
+      if(doc.from === "sheet" && doc.sheets)
+        S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
       S.docs = S.docs.filter(d => !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
       S.docs.push(doc);
     }catch(e){ toast(`${f.name}: не удалось прочитать файл`); }
   }
-  if(!S.docs.length){ renderUpload(); return; }
+  const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, null, askMapping); };
+  if(!S.docs.length){ renderUpload(); askMapping(); return; }
   save();
   await refresh();
+  askMapping();
 }
 
 /* ── Портфель ─────────────────────────────────────────────────────────── */
@@ -265,7 +269,13 @@ function renderDocs(){
       <div class="name" style="font-weight:600">${esc(d.broker)}</div>
       <div class="muted" style="font-size:12.5px">${esc(d.fileName)} · ${d.kind === "ledger" ? `журнал операций, ${d.records.length} строк, ${d.trades.length} сделок${d.cancelled.length ? `, отменено банком: ${d.cancelled.length}` : ""}` : `${d.from === "sheet" ? "выгрузка таблицей" : "снимок"}, позиции на ${fmt.date(d.asOf)}`}${d.note ? " · " + esc(d.note) : ""}</div>
       ${d.checks.map(c => `<div class="check"><span>${c.ok ? "✓" : "✗"} ${esc(c.label)}</span><span class="num ${c.ok ? "" : "down"}">${c.count ? `${c.parsed} из ${c.stated}` : `${fmt.money(c.parsed, ccyOf(c))}${c.ok ? "" : " ≠ " + fmt.money(c.stated, ccyOf(c))}`}</span></div>`).join("")}
+      ${d.from === "sheet" && S_SHEETS[d.fileName] ? `<button class="btn small no-print" type="button" data-remap="${esc(d.fileName)}" style="margin-top:8px">Сопоставить колонки</button>` : ""}
     </div>`).join("");
+  $("#docs").onclick = e => {
+    const b = e.target.closest("[data-remap]"); if(!b) return;
+    const st = S_SHEETS[b.dataset.remap];
+    if(st) openMapper(st.file, st.sheets, st);
+  };
   const M = WL.missing(P);
   $("#missing").innerHTML = `<div class="sec-h" style="margin:12px 0 4px"><span class="eyebrow">Чего не хватает</span><span class="spacer"></span>
       <button class="btn small no-print" id="askBtn" type="button">Скопировать запрос</button></div>` +
@@ -275,6 +285,105 @@ function renderDocs(){
     try{ await navigator.clipboard.writeText(WL.requestText(M)); toast("Текст запроса скопирован"); }
     catch(e){ toast("Не удалось скопировать — браузер запретил доступ к буферу"); }
   };
+}
+
+/* ── Ручное сопоставление колонок ──────────────────────────────────────── */
+/* Нужно, когда заголовки в выгрузке названы по-своему. Инструмент честно говорит, что
+   не понял файл, и даёт разметить таблицу руками: это лучше, чем угадать и посчитать не
+   то. Панель показывает начало файла, выбор строки заголовков и то, что получится. */
+const S_SHEETS = {};        // строки принесённых таблиц: только в памяти сессии
+function openMapper(file, sheets, pre, onDone){
+  let si = pre && pre.sheetIndex != null ? pre.sheetIndex : 0;
+  // Если разметить сами не смогли, подсвечиваем самую заполненную из первых строк:
+  // заголовки почти всегда именно она, а не титул отчёта сверху.
+  const guessRow = rows => {
+    let best = 0, n = -1;
+    rows.slice(0, 10).forEach((r, i) => { const c = r.filter(x => String(x ?? "").trim()).length; if(c > n){ n = c; best = i; } });
+    return best;
+  };
+  const autoHead = i => WL.sheetFind(sheets[i].rows) ||
+    (r => ({row: r, map: WL.sheetMap(sheets[i].rows[r] || [])}))(guessRow(sheets[i].rows));
+  let head = pre && pre.head ? {row: pre.head.row, map: {...pre.head.map}} : autoHead(si);
+  const wrap = document.createElement("div");
+  wrap.className = "modal no-print";
+  document.body.appendChild(wrap);
+  const close = () => { wrap.remove(); document.removeEventListener("keydown", onKey); if(onDone) onDone(); };
+  const onKey = e => { if(e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+
+  function render(){
+    const rows = sheets[si].rows;
+    const width = Math.max(1, ...rows.slice(0, 60).map(r => r.length));
+    const colLabel = c => { const h = String((rows[head.row] || [])[c] ?? "").replace(/\s+/g, " ").trim();
+      return h ? h.slice(0, 30) : `Колонка ${c + 1}`; };
+    const ready = (head.map.name != null || head.map.ticker != null) && (head.map.qty != null || head.map.value != null);
+    let preview = "", status;
+    if(ready){
+      try{
+        const d = WL.sheetDoc(rows, head, file);
+        const bad = d.checks.filter(c => !c.ok).length;
+        status = `${d.positions.length} ${WL.plural(d.positions.length, "позиция", "позиции", "позиций")}` +
+          (d.checks.length > 1 ? (bad ? " · с итогом файла не сходится" : " · сходится с итогом файла") : "") +
+          (d.note ? " · " + d.note : "");
+        preview = d.positions.slice(0, 5).map(p => `<tr><td>${esc(p.name)}</td><td>${esc(TYPE_RU[p.type] || p.type)}</td>` +
+          `<td>${esc(p.symbol || "")}</td><td>${p.qty != null ? fmt.qty(p.qty) : ""}</td>` +
+          `<td>${p.value != null ? fmt.money(p.value, p.ccy, 0) : ""}</td><td>${esc(p.brokerShort)}</td></tr>`).join("");
+      }catch(e){ status = "с этим сопоставлением файл не разбирается"; }
+    } else status = "укажите наименование или тикер и количество или стоимость";
+
+    wrap.innerHTML = `<div class="card mapper">
+      <div class="sec-h"><h2>Сопоставьте колонки</h2><span class="aside">${esc(file.name)}</span>
+        <span class="spacer"></span><button class="btn small" data-x="close" type="button">Закрыть</button></div>
+      ${sheets.length > 1 ? `<div class="seg" style="margin-bottom:10px">${sheets.map((sh, i) =>
+        `<button type="button" data-sheet="${i}" aria-pressed="${i === si}">${esc(sh.name)}</button>`).join("")}</div>` : ""}
+      <p class="muted" style="margin:0 0 8px">Нажмите строку с заголовками — всё, что ниже, считается данными.</p>
+      <div class="table-wrap"><table class="prev">${rows.slice(0, 8).map((r, i) =>
+        `<tr class="hdr${i === head.row ? " on" : ""}" data-row="${i}">${Array.from({length: width},
+          (_, c) => `<td>${esc(String(r[c] ?? "").slice(0, 22))}</td>`).join("")}</tr>`).join("")}</table></div>
+      <div class="map-grid">${WL.sheetFields.map(([f, label]) => `<label>${label}
+        <select data-f="${f}"><option value="">— нет —</option>${Array.from({length: width}, (_, c) =>
+          `<option value="${c}"${head.map[f] === c ? " selected" : ""}>${esc(colLabel(c))}</option>`).join("")}</select></label>`).join("")}</div>
+      <div class="sec-h" style="margin:14px 0 0"><b>Получится</b><span class="aside">${esc(status)}</span><span class="spacer"></span>
+        <button class="btn small" data-x="auto" type="button">Подобрать заново</button>
+        <button class="btn primary small" data-x="ok" type="button"${ready ? "" : " disabled"}>Импортировать</button></div>
+      ${preview ? `<div class="table-wrap" style="margin-top:8px"><table class="prev"><tr><th>Бумага</th><th>Тип</th><th>Тикер</th><th>Кол-во</th><th>Стоимость</th><th>Брокер</th></tr>${preview}</table></div>` : ""}
+    </div>`;
+  }
+
+  wrap.addEventListener("change", e => {
+    const sel = e.target.closest("select[data-f]"); if(!sel) return;
+    const f = sel.dataset.f, v = sel.value;
+    // Одна колонка достаётся одному полю: иначе количество и стоимость смотрят в одно место.
+    if(v !== "") Object.keys(head.map).forEach(k => { if(k !== f && head.map[k] === +v) delete head.map[k]; });
+    if(v === "") delete head.map[f]; else head.map[f] = +v;
+    render();
+  });
+  wrap.addEventListener("click", async e => {
+    if(e.target === wrap) return close();
+    const tr = e.target.closest("tr.hdr");
+    if(tr){ head = {row: +tr.dataset.row, map: WL.sheetMap(sheets[si].rows[+tr.dataset.row] || [])}; return render(); }
+    const b = e.target.closest("button"); if(!b) return;
+    if(b.dataset.sheet != null){
+      si = +b.dataset.sheet;
+      head = autoHead(si);
+      return render();
+    }
+    if(b.dataset.x === "auto"){ head = {row: head.row, map: WL.sheetMap(sheets[si].rows[head.row] || [])}; return render(); }
+    if(b.dataset.x === "close") return close();
+    if(b.dataset.x === "ok"){
+      const doc = WL.sheetDoc(sheets[si].rows, head, file);
+      doc.sheetIndex = si; doc.head = {row: head.row, map: {...head.map}};
+      doc.note = [doc.note, "колонки размечены вручную"].filter(Boolean).join(" · ");
+      S_SHEETS[file.name] = {file, sheets, sheetIndex: si, head: doc.head};
+      S.docs = S.docs.filter(d => d.fileName !== doc.fileName &&
+        !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
+      S.docs.push(doc);
+      save(); close();
+      toast(`${file.name}: ${doc.positions.length} ${WL.plural(doc.positions.length, "позиция", "позиции", "позиций")}`);
+      await refresh();
+    }
+  });
+  render();
 }
 
 /* ── Детали позиции ───────────────────────────────────────────────────── */

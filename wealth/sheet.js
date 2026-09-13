@@ -254,7 +254,9 @@ function buildDoc(rows, head, file){
           positions, checks, transactions: []};
 }
 
-WL.parseSheet = async function(file){
+/* Файл читается отдельно от разбора: те же строки нужны панели ручного сопоставления,
+   если заголовки названы не так, как мы ожидали. */
+WL.readSheet = async function(file){
   let sheets;
   if(/\.(csv|txt|tsv)$/i.test(file.name)){
     sheets = [{name: "csv", rows: parseCSV(await file.text())}];
@@ -265,16 +267,31 @@ WL.parseSheet = async function(file){
       rows: XLSX.utils.sheet_to_json(wb.Sheets[n], {header: 1, defval: "", blankrows: false})}));
   }
   let best = null;
-  for(const sh of sheets){
+  sheets.forEach((sh, i) => {
     const h = findHeader(sh.rows);
-    if(h && (!best || h.score > best.head.score)) best = {sheet: sh, head: h};
-  }
+    if(h && (!best || h.score > best.head.score)) best = {sheetIndex: i, head: h};
+  });
+  return {sheets, best};
+};
+WL.sheetDoc = buildDoc;          // (строки, {row, map}, файл) → документ
+WL.sheetMap = mapHeaders;        // ячейки строки → карта колонок
+WL.sheetFind = findHeader;       // строки листа → {row, map} или null
+// Поля для панели сопоставления: порядок и подписи. Первые два — обязательный минимум.
+WL.sheetFields = [["name", "Наименование"], ["ticker", "Тикер"], ["qty", "Количество"], ["value", "Стоимость"],
+  ["price", "Текущая цена"], ["ccy", "Валюта"], ["broker", "Брокер"], ["type", "Тип актива"],
+  ["costPrice", "Цена покупки"], ["costTotal", "Себестоимость"], ["date", "Дата покупки"],
+  ["commission", "Комиссия"], ["expiry", "Экспирация"], ["isin", "ISIN"]];
+
+WL.parseSheet = async function(file){
+  const {sheets, best} = await WL.readSheet(file);
   if(!best){
     const first = (sheets[0] && sheets[0].rows.find(r => r.some(c => clean(c)))) || [];
-    return {unknown: true, fileName: file.name, headers: first.map(clean).filter(Boolean).slice(0, 12)};
+    return {unknown: true, fileName: file.name, sheets, headers: first.map(clean).filter(Boolean).slice(0, 12)};
   }
-  const doc = buildDoc(best.sheet.rows, best.head, file);
-  if(sheets.length > 1) doc.note = [`лист «${best.sheet.name}»`, doc.note].filter(Boolean).join(" · ");
+  const doc = buildDoc(sheets[best.sheetIndex].rows, best.head, file);
+  if(sheets.length > 1) doc.note = [`лист «${sheets[best.sheetIndex].name}»`, doc.note].filter(Boolean).join(" · ");
+  doc.sheetIndex = best.sheetIndex; doc.head = best.head;   // чтобы сопоставление можно было поправить руками
+  Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
   return doc;
 };
 

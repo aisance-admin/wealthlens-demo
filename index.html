@@ -173,6 +173,18 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .drawer h3{margin:4px 0 2px; font-size:19px}
 .kv{display:grid; grid-template-columns:auto 1fr; gap:7px 16px; font-size:13.5px; margin:16px 0}
 .kv dt{color:var(--muted)} .kv dd{margin:0; text-align:right}
+/* Ручное сопоставление колонок */
+.modal{position:fixed; inset:0; z-index:40; background:rgba(10,16,25,.55); display:flex; align-items:center; justify-content:center; padding:20px}
+.mapper{width:min(1020px,100%); max-height:88vh; overflow:auto; padding:18px 20px}
+.map-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px 14px; margin:14px 0 0}
+.map-grid label{font-size:12px; color:var(--muted); display:grid; gap:4px}
+.map-grid select{width:100%; padding:6px 8px; border:1px solid var(--line-2); border-radius:8px; background:var(--surface); font-size:13px}
+table.prev{width:100%; border-collapse:collapse; font-size:12px}
+.prev td,.prev th{border:1px solid var(--line); padding:4px 7px; text-align:left; white-space:nowrap; max-width:190px; overflow:hidden; text-overflow:ellipsis}
+.prev th{background:var(--surface-2); color:var(--muted); font-weight:500}
+.prev tr.hdr{cursor:pointer}
+.prev tr.hdr:hover td{background:var(--surface-2)}
+.prev tr.hdr.on td{background:var(--accent-soft); font-weight:600}
 table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 .mini th,.mini td{padding:6px 6px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap}
 .mini th{color:var(--muted); font-weight:500}
