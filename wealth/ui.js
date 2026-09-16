@@ -14,23 +14,131 @@ const TYPE_RU = {stock: "Акции", fund: "Фонды", bond: "Облигац�
   option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
 // Сверка остатков Swissquote идёт в валюте счёта: франки не должны печататься долларами.
 const ccyOf = c => c.ccy || (/Остаток ([A-Z]{3})/.exec(c.label || "") || [])[1] || "USD";
-const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: "Клиент", showPast: false};
+/* Аудитория приходит с лендинга (частный инвестор или советник): от неё зависят подписи
+   на экране загрузки и имя портфеля по умолчанию. Без лендинга — как у советника. */
+const AUDIENCE = (() => { try{ return localStorage.getItem("wl_audience") || ""; }catch(e){ return ""; } })();
+const INVESTOR = AUDIENCE === "investor";
+const DEFAULT_CLIENT = INVESTOR ? "Мой портфель" : "Клиент";
+const SUPPORT = String(window.WL_SUPPORT_EMAIL || "");
+const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: DEFAULT_CLIENT, showPast: false,
+  rid: null, demo: false};
 
-const save = () => { try{ localStorage.setItem(STORE, JSON.stringify({client: S.client, docs: S.docs})); }catch(e){} };
-const load = () => { try{ const v = JSON.parse(localStorage.getItem(STORE) || "null"); if(v && v.docs){ S.docs = v.docs; S.client = v.client || S.client; } }catch(e){} };
+const save = () => { if(S.demo) return; try{ localStorage.setItem(STORE, JSON.stringify({client: S.client, docs: S.docs, rid: S.rid})); }catch(e){} };
+const load = () => { try{ const v = JSON.parse(localStorage.getItem(STORE) || "null");
+  if(v && v.docs){ S.docs = v.docs; S.client = v.client || S.client; S.rid = v.rid || null; } }catch(e){} };
 const toast = msg => { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3200); };
+/* ── Платный отчёт ─────────────────────────────────────────────────────── */
+/* На своём домене полный отчёт открывается после оплаты; копия для партнёров (GitHub Pages)
+   и локальная работа остаются бесплатными. Выписки по-прежнему разбираются в браузере:
+   сервер видит только идентификатор отчёта и подтверждает, что за него заплатили.
+   Предпросмотр показывает заглушки вместо скрытых данных, а не размывает их: иначе цифры
+   достаются из страницы. */
+const ON_SITE = /(^|\.)euroaff\.eu$/.test(location.hostname);     // рядом лендинг и юридические страницы
+const PAYWALL = ON_SITE || new URLSearchParams(location.search).has("paywall");
+const PAY_API = "https://api.euroaff.eu";
+const PRICE = {amount: 49, currency: "EUR", label: "€49"};
+const UNLOCKS = "wl_unlock_v1";
+const newRid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(36).padStart(2, "0")).join("");
+const unlocks = () => { try{ return JSON.parse(localStorage.getItem(UNLOCKS) || "{}"); }catch(e){ return {}; } };
+const locked = () => PAYWALL && !S.demo && !(S.rid && unlocks()[S.rid]);
+const track = (name, params) => { if(WL.track) WL.track(name, params); };
+
+async function openCheckout(source){
+  if(!S.rid){ S.rid = newRid(); save(); }
+  track("InitiateCheckout", {value: PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
+  const btns = [...document.querySelectorAll("[data-buy]")];
+  btns.forEach(b => { b.disabled = true; });
+  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid: S.rid, lang: "ru", path: location.pathname});
+  let r = null;
+  try{
+    r = await fetch(PAY_API + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
+      .then(x => x.json());
+  }catch(e){}
+  if(r && r.url){ location.href = r.url; return; }
+  btns.forEach(b => { b.disabled = false; });
+  toast(r && r.error === "payments_not_configured"
+    ? (SUPPORT ? `Оплата подключается. Напишите на ${SUPPORT} — откроем отчёт вручную.` : "Оплата скоро заработает. Попробуйте, пожалуйста, чуть позже.")
+    : "Не удалось открыть оплату. Попробуйте ещё раз.");
+}
+
+async function handlePaymentReturn(){
+  const u = new URL(location.href), sid = u.searchParams.get("paid"), canceled = u.searchParams.has("canceled");
+  if(!sid && !canceled) return;
+  u.searchParams.delete("paid"); u.searchParams.delete("canceled");
+  history.replaceState(null, "", u.pathname + u.search + u.hash);
+  if(canceled){ toast("Оплата не завершена. Открыть полный отчёт можно в любой момент."); return; }
+  if(!S.rid){ toast("Оплата прошла, но выписок в этом браузере нет. Откройте отчёт там, где загружали выписки."); return; }
+  let r = null;
+  try{ r = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(sid)}&rid=${S.rid}`).then(x => x.json()); }catch(e){}
+  if(r && r.ok){
+    const m = unlocks(); m[S.rid] = r.token;
+    try{ localStorage.setItem(UNLOCKS, JSON.stringify(m)); }catch(e){}
+    const seen = "wl_purchase_" + sid.slice(-16);     // событие покупки — один раз на платёж
+    try{ if(!localStorage.getItem(seen)){ localStorage.setItem(seen, "1");
+      track("Purchase", {value: r.amount || PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); } }catch(e){}
+    toast("Оплата прошла — полный отчёт открыт");
+  } else {
+    toast(r && r.reason === "not paid" ? "Платёж ещё не подтверждён. Обновите страницу через минуту."
+                                       : "Не удалось подтвердить оплату. Напишите нам — разберёмся.");
+  }
+}
+
+function renderPaywall(){
+  const el = $("#paywall"); if(!el) return;
+  const lock = locked();
+  document.body.classList.toggle("is-locked", lock);
+  $("#printBtn").textContent = lock ? `Полный отчёт · ${PRICE.label}` : "Отчёт PDF";
+  if(!lock){ el.hidden = true; el.innerHTML = ""; return; }
+  const I = WL.insights(S.P), n = lvl => I.filter(x => x.level === lvl).length;
+  const found = [n("high") && `${n("high")} ${WL.plural(n("high"), "важный вывод", "важных вывода", "важных выводов")}`,
+                 n("watch") && `${n("watch")} ${WL.plural(n("watch"), "пункт требует", "пункта требуют", "пунктов требуют")} внимания`]
+    .filter(Boolean).join(" и ");
+  el.hidden = false;
+  el.innerHTML = `<div class="card paywall">
+    <div><div class="eyebrow">Полный отчёт</div>
+      <h2>${found ? `В портфеле ${found}` : "Откройте полный отчёт по портфелю"}</h2>
+      <ul class="pw-list">
+        <li>все выводы с суммами: обязательства по опционам, концентрация, результат по счетам;</li>
+        <li>каждая позиция: цена и дата покупки, комиссии, изменение за день, месяц, квартал, год и пять лет;</li>
+        <li>календарь экспираций и ролловеров;</li>
+        <li>сравнение с бенчмарком и отчёт в PDF.</li>
+      </ul></div>
+    <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">разово за этот портфель</div>
+      <button class="btn primary pw-btn" type="button" data-buy="paywall">Открыть полный отчёт</button>
+      <div class="muted pw-note">Оплата через Stripe. Выписки не загружаются на сервер — отчёт собирается в вашем браузере.</div>
+      ${ON_SITE ? `<div class="muted pw-note">Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.</div>` : ""}</div>
+  </div>`;
+}
+
+function renderDemoBar(){
+  const el = $("#demoBar"); if(!el) return;
+  el.innerHTML = S.demo ? `<div class="card demobar no-print"><span><b>Демо-отчёт</b> на вымышленном портфеле у Interactive Brokers, UBS, Charles Schwab и Saxo Bank.
+    По вашим выпискам отчёт будет таким же.</span><a class="btn primary small" href="${location.pathname}">Загрузить свои выписки</a></div>` : "";
+}
+const lockedInsight = x => `<article class="card insight lockcard"><span class="lvl ${x.level}">${LEVEL[x.level]}</span>
+  <div class="skel w90"></div><div class="skel w70"></div><div class="skel w50"></div>
+  <div class="basis">Скрыто до оплаты · <button class="linkbtn" type="button" data-buy="insight">открыть</button></div></article>`;
+
 
 /* ── Загрузка ─────────────────────────────────────────────────────────── */
 function renderUpload(){
   $("#bar").hidden = true;
   $("#app").innerHTML = `<div class="drop" id="drop">
-    <div class="eyebrow">WealthLens · портфель клиента</div>
-    <h1>Загрузите выписки клиента</h1>
+    <div class="eyebrow">${ON_SITE ? `<a class="home" href="/">WealthLens</a>` : "WealthLens"} · ${INVESTOR ? "сводный отчёт" : "портфель клиента"}</div>
+    <h1>${INVESTOR ? "Загрузите выписки брокеров" : "Загрузите выписки клиента"}</h1>
     <p>Можно сразу несколько файлов. PDF читается у Charles Schwab и Swissquote; выгрузка CSV или Excel — у любого брокера, колонки распознаются сами.</p>
     <button class="btn primary" id="pick" type="button">Выбрать файлы</button>
     <button class="btn small" id="tplBtn" type="button" style="margin-left:8px">Шаблон CSV</button>
+    <p class="demo-link"><a href="?demo=1">Посмотреть пример отчёта</a> — вымышленный портфель у четырёх брокеров</p>
     <p class="hint">Или перетащите файлы сюда. Выписки разбираются в этом браузере и никуда не отправляются: наружу уходят только тикеры и названия компаний — для котировок и новостей.</p>
-    <div class="progress" id="progress" aria-live="polite"></div></div>`;
+    <details class="where"><summary>Где взять выписку</summary><ul>
+      <li><b>Interactive Brokers</b> — Portal → Performance &amp; Reports → Statements → Activity, формат CSV.</li>
+      <li><b>Charles Schwab</b> — Accounts → Statements &amp; Tax Forms → месячная выписка в PDF.</li>
+      <li><b>Swissquote</b> — раздел документов счёта → выписка о портфеле в PDF.</li>
+      <li><b>Другие банки</b> — в интернет-банке найдите позиции (Positions, Holdings, Portfolio) и экспорт в CSV или Excel.</li>
+    </ul></details>
+    <div class="progress" id="progress" aria-live="polite"></div></div>
+    ${PAYWALL ? `<p class="drop-foot muted">Итог по счетам и первый вывод — бесплатно · полный отчёт ${PRICE.label} · оплата через Stripe</p>` : ""}`;
   $("#pick").onclick = () => $("#file").click();
   // Шаблон для тех, у кого выгрузки нет: заполнить в Excel и принести сюда.
   $("#tplBtn").onclick = () => {
@@ -41,7 +149,9 @@ function renderUpload(){
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
 }
+if(INVESTOR) document.title = "Мой портфель · WealthLens";
 async function addFiles(files){
+  if(S.demo){ S.demo = false; S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; history.replaceState(null, "", location.pathname); }
   const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
   if(!list.length){ toast("Нужны PDF-выписки или выгрузки CSV и Excel"); return; }
   const prog = $("#progress");
@@ -64,6 +174,8 @@ async function addFiles(files){
   }
   const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, null, askMapping); };
   if(!S.docs.length){ renderUpload(); askMapping(); return; }
+  if(!S.rid) S.rid = newRid();
+  track("Lead", {content_name: "statements_uploaded", documents: S.docs.length});
   save();
   await refresh();
   askMapping();
@@ -73,7 +185,7 @@ async function addFiles(files){
 let historyTimer = null;
 async function loadHistory(attempt = 0){
   const P = S.P; if(!P) return;
-  const syms = [...new Set(P.positions.filter(p => WL.eq(p) && p.symbol).map(p => p.symbol))];
+  const syms = [...new Set(P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").map(p => p.symbol))];
   await WL.fetchHistory(P, [S.bench, ...syms]);   // бенчмарк первым: график нужен даже при частичной истории
   if(P !== S.P) return;
   renderHero(); renderPositions(); renderChart();
@@ -92,12 +204,17 @@ function renderApp(){
   const P = S.P;
   $("#bar").hidden = false;
   $("#client").value = S.client;
-  $("#docChips").innerHTML = S.docs.map(d => `<span class="pill ${d.checks.every(c => c.ok) ? "ok" : "bad"}" title="${esc(d.fileName)}">${esc(d.brokerShort)} · ${fmt.date(d.asOf)}</span>`).join(" ");
+  const allOk = S.docs.every(d => d.checks.every(c => c.ok)), dates = [...new Set(S.docs.map(d => fmt.date(d.asOf)))];
+  $("#docChips").innerHTML = S.docs.length > 2
+    ? `<span class="pill ${allOk ? "ok" : "bad"}" title="${esc(S.docs.map(d => `${d.brokerShort} · ${fmt.date(d.asOf)}`).join("\n"))}">${S.docs.length} ${WL.plural(S.docs.length, "выписка", "выписки", "выписок")}${dates.length === 1 ? ` · ${dates[0]}` : ""}</span>`
+    : S.docs.map(d => `<span class="pill ${d.checks.every(c => c.ok) ? "ok" : "bad"}" title="${esc(d.fileName)}">${esc(d.brokerShort)} · ${fmt.date(d.asOf)}</span>`).join(" ");
   if(!$("#insights")){
     $("#app").innerHTML = `
+      <div id="demoBar"></div>
       <div class="print-head"><h1 id="printTitle"></h1><p class="muted" id="printSub"></p></div>
       <div class="hero"><div class="card broker total" id="total"></div><div class="brokers" id="brokers"></div></div>
       <section><div class="sec-h"><h2>Главное</h2><span class="aside">выводы только по тому, что есть в выписках и котировках</span></div><div class="insights" id="insights"></div></section>
+      <section id="paywall" class="no-print" hidden></section>
       <section><div class="sec-h"><h2>Структура портфеля</h2><span class="aside" id="structAside"></span></div><div class="struct" id="structure"></div></section>
       <section><div class="sec-h"><h2>Сроки</h2><span class="aside">экспирации, ролловеры фьючерсов</span></div><div class="card tl" id="timeline"></div></section>
       <section><div class="sec-h"><h2>Позиции</h2><span class="aside" id="posAside"></span></div>
@@ -115,6 +232,7 @@ function renderApp(){
   }
   $("#bench").value = S.bench;
   renderHero(); renderInsights(); renderStructure(); renderTimeline(); renderControls(); renderPositions(); renderChart(); renderDocs();
+  renderPaywall(); renderDemoBar();
 }
 
 function renderHero(){
@@ -137,14 +255,15 @@ function renderHero(){
     ${P.live && day ? `<div class="sub" style="margin-top:6px">За день: <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">по акциям, котировки CBOE</span></div>` : ""}
     ${!P.live ? `<div class="sub muted" style="margin-top:6px">Загружаю текущие цены…</div>` : ""}
     ${warn.length ? `<div class="sub down" style="margin-top:6px">${esc(warn.join("; "))}.</div>` : ""}`;
+  $("#brokers").className = `brokers n${byDoc.length}`;
   $("#brokers").innerHTML = byDoc.map(x => {
     const bad = x.d.checks.filter(c => !c.ok).length;
     return `<div class="card broker"><div class="name">${esc(x.d.broker)}
-        <span class="pill ${bad ? "bad" : "ok"}">${bad ? `не сошлось: ${bad}` : x.d.from === "sheet" ? "сошлось с итогом файла" : "сверено с банком"}</span>
+        ${x.d.from === "demo" && !bad ? "" : `<span class="pill ${bad ? "bad" : "ok"}">${bad ? `не сошлось: ${bad}` : x.d.from === "sheet" ? "сошлось с итогом файла" : "сверено с банком"}</span>`}
         ${x.stale ? `<span class="pill stale">${WL.days(x.d.asOf, P.today)} дн. назад</span>` : x.live ? `<span class="pill live">цены сейчас</span>` : ""}</div>
       <div class="v">${fmt.money(x.usd, "USD", 0)}</div>
       <div class="meta">${x.d.kind === "ledger" ? `журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`
-        : `${x.d.from === "sheet" ? "выгрузка" : "выписка"} на ${fmt.date(x.d.asOf)}`} ·
+        : `${x.d.from === "sheet" ? "выгрузка" : x.d.from === "demo" ? "данные" : "выписка"} на ${fmt.date(x.d.asOf)}`} ·
         ${x.ps.length} ${WL.plural(x.ps.length, "позиция", "позиции", "позиций")}</div></div>`;
   }).join("");
   $("#printTitle").textContent = `${S.client} — портфель`;
@@ -174,7 +293,7 @@ function renderStructure(){
 
 function renderInsights(){
   const I = WL.insights(S.P);
-  $("#insights").innerHTML = I.length ? I.map(x => `<article class="card insight">
+  $("#insights").innerHTML = I.length ? I.map((x, i) => locked() && i > 0 ? lockedInsight(x) : `<article class="card insight">
       <span class="lvl ${x.level}">${LEVEL[x.level]}</span><h3>${esc(x.title)}</h3>
       ${x.text ? `<p>${esc(x.text)}</p>` : ""}
       ${x.lines ? `<ul>${x.lines.map(l => `<li><b>${esc(l.text)}</b><span class="note ${l.level === "high" ? "high" : ""}">${esc(l.note || "")}</span></li>`).join("")}</ul>` : ""}
@@ -199,8 +318,11 @@ function renderTimeline(){
       <span class="${d >= 0 && d <= 14 ? "down" : "muted"}">${d >= 0 ? `через ${d} ${WL.plural(d, "день", "дня", "дней")}` : "прошло"}</span>
       <span>${esc(p ? p.name : "")} <span class="muted">· ${kind} · ${esc(p ? p.brokerShort : "")}</span></span>${status}</div>`;
   };
-  $("#timeline").innerHTML = (upcoming.length ? upcoming.map(row).join("") : `<div class="tl-row"><span class="muted">Впереди сроков нет</span></div>`) +
-    (past.length ? `<div class="tl-more no-print"><button class="btn small" id="pastBtn" type="button">${S.showPast ? "Скрыть" : "Показать"} прошедшие после даты выписки: ${past.length}</button></div>` +
+  const lock = locked(), up = lock ? upcoming.slice(0, 2) : upcoming;
+  const more = up.length < upcoming.length ? `<div class="tl-row lockline"><span class="muted">Ещё ${upcoming.length - up.length} ${WL.plural(upcoming.length - up.length, "срок", "срока", "сроков")} — в полном отчёте</span>
+    <button class="btn small" type="button" data-buy="timeline">Открыть</button></div>` : "";
+  $("#timeline").innerHTML = (up.length ? up.map(row).join("") + more : `<div class="tl-row"><span class="muted">Впереди сроков нет</span></div>`) +
+    (past.length && !lock ? `<div class="tl-more no-print"><button class="btn small" id="pastBtn" type="button">${S.showPast ? "Скрыть" : "Показать"} прошедшие после даты выписки: ${past.length}</button></div>` +
       (S.showPast ? past.map(row).join("") : "") : "");
   const b = $("#pastBtn"); if(b) b.onclick = () => { S.showPast = !S.showPast; renderTimeline(); };
 }
@@ -221,6 +343,7 @@ function renderControls(){
   $("#venues").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.broker = b.dataset.b; renderControls(); renderPositions(); };
 }
 function renderPositions(){
+  S.cap = locked() ? 3 : Infinity;
   WL.renderPositions($("#positions"), S.P, S);
   const L = S.P.live;
   $("#posAside").textContent = !L ? "цены из выписок" : !L.ok ? "цены из выписок: сервер котировок не ответил" :
@@ -261,7 +384,15 @@ function renderPrintExtras(){
     <li>Новости рынка — RSS Investing.com, «Ведомости», «Коммерсантъ», CNBC и MarketWatch. Новости по бумагам клиента — Google News за неделю, отобраны по названию компании и биржевому обозначению.</li>
     <li>Отчёт носит информационный характер и не является инвестиционной рекомендацией.</li></ul></div>`;
 }
-const renderChart = () => WL.renderChart($("#chart"), S.P, S);
+const renderChart = () => {
+  if(locked()){
+    $("#chart").innerHTML = `<div class="lockblock"><div class="skel-chart"></div>
+      <p>Как акции портфеля шли против S&P 500, Nasdaq, золота и других бенчмарков — в полном отчёте.</p>
+      <button class="btn small" type="button" data-buy="chart">Открыть за ${PRICE.label}</button></div>`;
+    return;
+  }
+  WL.renderChart($("#chart"), S.P, S);
+};
 
 function renderDocs(){
   const P = S.P;
@@ -378,6 +509,7 @@ function openMapper(file, sheets, pre, onDone){
       S.docs = S.docs.filter(d => d.fileName !== doc.fileName &&
         !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
       S.docs.push(doc);
+      if(!S.rid) S.rid = newRid();
       save(); close();
       toast(`${file.name}: ${doc.positions.length} ${WL.plural(doc.positions.length, "позиция", "позиции", "позиций")}`);
       await refresh();
@@ -426,9 +558,18 @@ function closeDrawer(){ $("#drawer").classList.remove("open"); $("#scrim").class
 /* ── События ──────────────────────────────────────────────────────────── */
 $("#file").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
 $("#addBtn").onclick = () => $("#file").click();
-$("#printBtn").onclick = () => window.print();
-$("#resetBtn").onclick = () => { if(!confirm("Убрать выписки этого клиента с этого компьютера?")) return; S.docs = []; S.P = null; localStorage.removeItem(STORE); renderUpload(); };
-$("#client").oninput = e => { S.client = e.target.value.trim() || "Клиент"; save(); renderHero(); };
+$("#printBtn").onclick = () => locked() ? openCheckout("pdf") : window.print();
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-buy]");
+  if(b && !b.disabled){ e.preventDefault(); openCheckout(b.dataset.buy); }
+});
+window.addEventListener("beforeprint", () => { if(locked()) track("PrintBlocked", {}); });
+$("#resetBtn").onclick = () => {
+  if(S.demo){ location.href = location.pathname; return; }
+  if(!confirm("Убрать выписки этого клиента с этого компьютера?")) return;
+  S.docs = []; S.P = null; S.rid = null; localStorage.removeItem(STORE); renderUpload();
+};
+$("#client").oninput = e => { S.client = e.target.value.trim() || DEFAULT_CLIENT; save(); renderHero(); };
 $("#scrim").onclick = closeDrawer;
 document.addEventListener("keydown", e => {
   if(e.key === "Escape") closeDrawer();
@@ -439,7 +580,17 @@ document.addEventListener("click", e => { const r = e.target.closest && e.target
 window.addEventListener("dragleave", e => { if(!e.relatedTarget){ const d = $("#drop"); if(d) d.classList.remove("over"); } });
 window.addEventListener("drop", e => { e.preventDefault(); const d = $("#drop"); if(d) d.classList.remove("over"); if(e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
 
-WL.app = {addFiles, state: S};
-load();
-if(S.docs.length) refresh(); else renderUpload();
+WL.app = {addFiles, state: S, locked, openCheckout};
+(async function boot(){
+  if(new URLSearchParams(location.search).has("demo") && WL.demoDocs){
+    S.demo = true; S.client = "Демо-клиент"; S.docs = WL.demoDocs("ru");
+    track("ViewContent", {content_name: "demo_report"});
+    return refresh();
+  }
+  load();
+  await handlePaymentReturn();
+  if(!S.docs.length) return renderUpload();
+  if(locked()) track("ViewContent", {content_name: "report_preview", value: PRICE.amount, currency: PRICE.currency});
+  return refresh();
+})();
 })();

@@ -147,7 +147,9 @@ const getJSON = WL.getJSON;
 
 WL.fetchLive = async function(P){
   const opts = P.positions.filter(p => p.type === "option" && p.occ);
-  const syms = [...new Set([...P.positions.filter(p => WL.eq(p) && p.symbol).map(p => p.symbol), ...opts.map(p => p.underlying)])];
+  // CBOE — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем:
+  // у Roche в франках тикер ROG, а в США ROG — это Rogers Corp.
+  const syms = [...new Set([...P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").map(p => p.symbol), ...opts.map(p => p.underlying)])];
   const [q, o, fx] = await Promise.all([
     syms.length ? getJSON("/market/quotes?symbols=" + syms.join(",")) : null,
     opts.length ? getJSON("/market/options?contracts=" + opts.map(p => p.occ).join(",")) : null,
@@ -163,7 +165,7 @@ WL.fetchLive = async function(P){
   P.live = {quotes, fx: fx && fx.rates ? fx.rates : null, fxDate: fx && fx.date, fxSource: fx && fx.source, at: new Date().toISOString(),
     ok: !!((q && q.quotes) || (o && o.options) || (fx && fx.rates))};   // сервер данных ответил хоть чем-то
   P.positions.forEach(p => {
-    if(WL.eq(p) && quotes[p.symbol] && quotes[p.symbol].price) {
+    if(WL.eq(p) && p.ccy === "USD" && quotes[p.symbol] && quotes[p.symbol].price) {
       const x = quotes[p.symbol]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time};
     }
     if(p.type === "option" && p.occ){

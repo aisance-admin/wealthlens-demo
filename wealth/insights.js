@@ -8,6 +8,7 @@ const {fmt, days, plural} = WL;
 const sum = (a, f) => a.reduce((s, x) => s + (f(x) || 0), 0);
 const nextDay = s => new Date(+new Date(s + "T00:00:00Z") + 864e5).toISOString().slice(0, 10);
 const times = v => v.toFixed(1).replace(".", ",");
+const tick = p => String(p.symbol || p.name || "").replace(/\.[A-Z]{2,}$/, "");
 
 WL.insights = function(P){
   const out = [], T = P.today;
@@ -48,26 +49,32 @@ WL.insights = function(P){
     const cash = sum(mine.filter(p => p.type === "cash"), p => p.value);
     const mv = sum(puts, p => WL.current(P, p).value);
     out.push({level: obl > cash ? "high" : "watch", kind: "obligation",
-      title: `Проданные путы обязывают купить акций на ${fmt.short(obl)}`,
+      title: `${puts.length === 1 ? "Проданный пут обязывает" : "Проданные путы обязывают"} купить акций на ${fmt.short(obl)}`,
       text: `${cash > 0 ? `Это в ${times(obl / cash)} раза больше денег на счёте ${d.brokerShort} (${fmt.short(cash)}). ` : ""}` +
-            `В стоимости портфеля эти ${puts.length} ${plural(puts.length, "позиция", "позиции", "позиций")} видны всего как ${fmt.short(mv)}.`,
+            (puts.length === 1 ? `В стоимости портфеля эта позиция видна всего как ${fmt.short(mv)}.`
+              : `В стоимости портфеля эти ${puts.length} ${plural(puts.length, "позиция", "позиции", "позиций")} видны всего как ${fmt.short(mv)}.`),
       basis: `выписка ${d.brokerShort} на ${fmt.date(d.asOf)}`});
   });
 
-  // 3. Концентрация.
-  snapshots.forEach(d => {
-    const mine = P.positions.filter(p => p.source === d.fileName);
-    const total = sum(mine, p => WL.current(P, p).value);
-    const stocks = mine.filter(p => WL.eq(p)).map(p => ({p, v: WL.current(P, p).value})).sort((a, b) => b.v - a.v);
-    if(!stocks.length || total <= 0) return;
-    const top = stocks[0], share = top.v / total * 100, top3 = sum(stocks.slice(0, 3), x => x.v) / total * 100;
-    if(share < 15) return;
-    out.push({level: share >= 25 ? "watch" : "info", kind: "concentration",
-      title: `${top.p.name} — ${Math.round(share)}% счёта ${d.brokerShort}`,
-      text: `Три крупнейшие бумаги (${stocks.slice(0, 3).map(x => x.p.symbol).join(", ")}) — ${Math.round(top3)}% стоимости счёта.` +
-            (top.p.costNote ? ` Себестоимость ${top.p.symbol} ${top.p.costNote}: результат по крупнейшей позиции посчитать нельзя.` : ""),
-      basis: P.live ? "текущие цены CBOE" : `выписка ${d.brokerShort} на ${fmt.date(d.asOf)}`});
-  });
+  // 3. Концентрация — по всему портфелю в долларах. Смысл сводного отчёта в том, чтобы видеть
+  // риск целиком: доля бумаги в одном счёте ничего не говорит, если у клиента четыре брокера.
+  // Считаем одиночные акции и структурные ноты: фонд и госбумага сами по себе не концентрация.
+  // Валюты пересчитываются по курсу ЕЦБ; без курса позиция в доли не входит.
+  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? v * k : null; };
+  const assets = P.positions.filter(p => p.type !== "option" && p.type !== "future")
+    .map(p => ({p, v: usdOf(p)})).filter(x => x.v != null && x.v > 0);
+  const totalUsd = sum(assets, x => x.v);
+  const single = assets.filter(x => ["stock", "note", "other"].includes(x.p.type)).sort((a, b) => b.v - a.v);
+  if(single.length && totalUsd > 0){
+    const top = single[0], share = top.v / totalUsd * 100, top3 = sum(single.slice(0, 3), x => x.v) / totalUsd * 100;
+    const where = [...new Set(P.positions.filter(p => (p.symbol || p.name) === (top.p.symbol || top.p.name)).map(p => p.brokerShort))];
+    if(share >= 10) out.push({level: share >= 25 ? "watch" : "info", kind: "concentration",
+      title: `${top.p.name} — ${Math.round(share)}% всего портфеля`,
+      text: `Держится у ${where.join(", ")}. Три крупнейшие позиции (${single.slice(0, 3).map(x => tick(x.p)).join(", ")}) — ` +
+            `${Math.round(top3)}% стоимости портфеля в долларах.` +
+            (top.p.costNote ? ` Себестоимость ${top.p.symbol || top.p.name} ${top.p.costNote}: результат по крупнейшей позиции посчитать нельзя.` : ""),
+      basis: `все счета${P.live && P.live.fx ? " · курсы ЕЦБ" : ""}`});
+  }
 
   // 4. Что изменилось с даты выписки.
   const live = P.positions.filter(p => (WL.eq(p) || p.type === "option") && p.live && p.value != null);
@@ -85,14 +92,17 @@ WL.insights = function(P){
   // 5. Результат к себестоимости: лучшая и худшая бумага. Считается так же, как колонка
   // «Изменение с покупки» в таблице: по текущим ценам, если они есть, иначе по ценам выписки.
   // Иначе вывод и таблица показывали бы для одной бумаги два разных результата.
+  // Сравниваем в долларах: результат по франковой бумаге в франках рядом с долларовым —
+  // несопоставимые числа, а подпись со знаком доллара была бы неправдой.
   const withCost = P.positions.filter(p => WL.eq(p) && p.cost > 0)
-    .map(p => ({p, c: WL.change(P, p, "cost")})).filter(x => x.c);
+    .map(p => { const c = WL.change(P, p, "cost"), k = WL.usd(P, p.ccy); return c && k != null ? {p, c, usd: c.abs * k} : null; })
+    .filter(Boolean);
   if(withCost.length >= 2){
-    const s = [...withCost].sort((a, b) => b.c.abs - a.c.abs), best = s[0], worst = s[s.length - 1];
+    const s = [...withCost].sort((a, b) => b.usd - a.usd), best = s[0], worst = s[s.length - 1];
     const isLive = withCost.some(x => x.p.live);
     const noCost = P.positions.filter(p => WL.eq(p) && p.cost == null).map(p => p.symbol);
     out.push({level: "info", kind: "pnl",
-      title: `Лучший результат к покупке — ${best.p.symbol} ${fmt.signed(best.c.abs)}, худший — ${worst.p.symbol} ${fmt.signed(worst.c.abs)}`,
+      title: `Лучший результат к покупке — ${tick(best.p)} ${fmt.signed(best.usd)}, худший — ${tick(worst.p)} ${fmt.signed(worst.usd)}`,
       text: `${best.p.name} ${fmt.pct(best.c.pct, 0)}, ${worst.p.name} ${fmt.pct(worst.c.pct, 0)} к средней цене покупки${isLive ? ", по текущим ценам" : ""}.` +
             (noCost.length ? ` Без себестоимости в выписке: ${noCost.join(", ")}.` : ""),
       basis: isLive ? `выписка ${best.p.brokerShort} · текущие цены CBOE с задержкой` : `выписка ${best.p.brokerShort} на ${fmt.date(best.p.priceDate)}`});

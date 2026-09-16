@@ -96,6 +96,9 @@ WL.renderPositions = function(el, P, S){
   const only = S.broker && brokers.includes(S.broker) ? S.broker : "all";
   const shown = P.positions.filter(p => (S.filter === "all" || p.type === S.filter) && (only === "all" || p.brokerShort === only));
   let body = "", covered = 0, countable = 0, change = 0, grand = 0;
+  // Предпросмотр до оплаты: первые строки видны, остальные не попадают в страницу вовсе.
+  const cap = S.cap == null ? Infinity : S.cap;
+  let vis = 0, hiddenRows = 0;
   for(const t of TYPE_ORDER){
     const ps = shown.filter(p => p.type === t)
       .sort((a, b) => { const ka = sortKey(P, a), kb = sortKey(P, b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
@@ -103,15 +106,18 @@ WL.renderPositions = function(el, P, S){
     let sum = 0, rows = "", anyUsd = false;
     for(const p of ps){
       const r = row(P, p, per.id);
-      rows += r.html;
+      if(vis < cap){ rows += r.html; vis++; } else hiddenRows++;
       if(r.usd != null){ sum += r.usd; anyUsd = true; }
       if(r.counts){ countable++; if(r.change != null){ covered++; change += r.change; } }
     }
     grand += sum;
     const label = t === "option" && ps.every(p => p.qty < 0) ? "Опционы проданные" : TYPE_LABEL[t];
-    body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.plural(ps.length, "позиция", "позиции", "позиций")}</span></td>` +
+    if(rows) body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.plural(ps.length, "позиция", "позиции", "позиций")}</span></td>` +
       `<td>${anyUsd ? fmt.money(sum, "USD", 0) : t === "future" ? unk("в деньгах счёта") : dash("нет текущих цен")}</td></tr>` + rows;
   }
+  if(hiddenRows) body += `<tr class="lockrow"><td class="l" colspan="9">Ещё ${hiddenRows} ${WL.plural(hiddenRows, "позиция", "позиции", "позиций")}
+    с ценой и датой покупки, комиссиями и изменением за восемь периодов — в полном отчёте
+    <button class="btn small" type="button" data-buy="positions">Открыть</button></td></tr>`;
   const docs = P.docs.filter(d => only === "all" || d.brokerShort === only);
   const mixed = docs.some(d => staleDoc(P, d));
   el.innerHTML = `<table class="pos"><thead><tr>

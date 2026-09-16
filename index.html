@@ -55,7 +55,7 @@ button{cursor:pointer}
 .client:hover{border-color:var(--line-2)}
 .client:focus{border-color:var(--accent); outline:none; background:var(--surface)}
 .spacer{flex:1}
-.btn{display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line-2); background:var(--surface); border-radius:9px; padding:8px 14px; font-weight:500; white-space:nowrap}
+.btn{display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line-2); background:var(--surface); border-radius:9px; padding:8px 14px; font-weight:500; white-space:nowrap; text-decoration:none; color:inherit}
 .btn:hover{border-color:var(--ink-2)}
 .btn.primary{background:var(--ink); color:var(--surface); border-color:var(--ink)}
 .btn.small{padding:5px 10px; font-size:13px}
@@ -74,6 +74,7 @@ button{cursor:pointer}
 .total .value{font-size:40px; font-weight:600; letter-spacing:-.015em; line-height:1.1; margin:8px 0 6px}
 .total .sub{color:var(--ink-2); font-size:13.5px}
 .brokers{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px}
+.brokers.n4{grid-template-columns:repeat(auto-fit,minmax(max(230px,40%),1fr))}
 .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow)}
 .broker{padding:14px 16px}
 .broker .name{font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
@@ -117,6 +118,7 @@ section{margin:30px 0}
 .tl-row.past{color:var(--muted)}
 .tl-row.past .tl-date{font-weight:500}
 .tl-more{padding:10px 18px; border-top:1px solid var(--line)}
+.tl-row > .muted:only-child{grid-column:1 / -1}   /* «Впереди сроков нет» — на всю ширину, а не в колонке даты */
 
 /* Позиции */
 .toolbar{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:0 0 10px}
@@ -168,11 +170,54 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 /* Шторка позиции */
 .scrim{position:fixed; inset:0; background:rgba(8,14,24,.36); opacity:0; pointer-events:none; transition:opacity .2s; z-index:39}
 .scrim.open{opacity:1; pointer-events:auto}
-.drawer{position:fixed; top:0; right:0; bottom:0; width:min(560px,100%); background:var(--surface); box-shadow:-12px 0 40px rgba(0,0,0,.18); transform:translateX(102%); transition:transform .22s ease; z-index:40; overflow-y:auto; padding:22px 24px 40px}
-.drawer.open{transform:none}
+.drawer{position:fixed; top:0; right:0; bottom:0; width:min(560px,100%); background:var(--surface); box-shadow:-12px 0 40px rgba(0,0,0,.18); transform:translateX(102%); visibility:hidden; transition:transform .22s ease, visibility 0s linear .22s; z-index:40; overflow-y:auto; padding:22px 24px 40px}
+/* закрытая панель не должна отбрасывать тень на край страницы и попадать в обход с клавиатуры */
+.drawer.open{transform:none; visibility:visible; transition:transform .22s ease}
 .drawer h3{margin:4px 0 2px; font-size:19px}
 .kv{display:grid; grid-template-columns:auto 1fr; gap:7px 16px; font-size:13.5px; margin:16px 0}
 .kv dt{color:var(--muted)} .kv dd{margin:0; text-align:right}
+/* Платный отчёт: предпросмотр, заглушки, демо, согласие на cookies */
+.paywall{display:grid; grid-template-columns:minmax(0,1.6fr) minmax(230px,1fr); gap:24px; padding:20px 22px; border-color:var(--accent)}
+.paywall h2{font-size:20px; line-height:1.3; margin:6px 0 10px; text-wrap:balance}
+.pw-list{margin:0; padding-left:18px; color:var(--ink-2)}
+.pw-list li{margin:4px 0}
+.pw-buy{display:flex; flex-direction:column; gap:8px; justify-content:center; align-items:flex-start; border-left:1px solid var(--line); padding-left:22px}
+.pw-price{font-size:36px; font-weight:700; letter-spacing:-.015em; line-height:1}
+.pw-btn{padding:11px 18px; font-size:15px}
+.pw-note{font-size:12.5px; max-width:34ch}
+.pw-note a,.drop .eyebrow a.home{color:inherit}
+.skel{height:11px; border-radius:6px; background:var(--line); margin:10px 0}
+.skel.w90{width:90%} .skel.w70{width:70%} .skel.w50{width:50%}
+.lockcard h3{display:none}
+.linkbtn{border:0; background:none; padding:0; color:var(--accent); text-decoration:underline; font:inherit; cursor:pointer}
+.tl-row.lockline{display:flex; justify-content:space-between; align-items:center; background:var(--surface-2)}
+.pos tr.lockrow td{background:var(--surface-2); color:var(--ink-2); text-align:left; padding:12px 14px; white-space:normal}
+.pos tr.lockrow .btn{margin-left:10px}
+.lockblock{padding:18px; display:grid; gap:10px; justify-items:start}
+.lockblock p{margin:0; color:var(--ink-2)}
+.skel-chart{width:100%; height:150px; border-radius:10px; background:repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 38px), var(--surface-2)}
+.demobar{display:flex; gap:16px; align-items:center; justify-content:space-between; padding:12px 16px; margin:18px 0 0; border-color:var(--info)}
+.demo-link{font-size:13.5px; margin:16px auto 0}
+.where{margin:18px auto 0; max-width:480px; text-align:left; font-size:13px; color:var(--ink-2)}
+.where summary{cursor:pointer; color:var(--muted); text-align:center; list-style:none}
+.where summary::-webkit-details-marker{display:none}
+.where summary::after{content:" ▾"}
+.where[open] summary::after{content:" ▴"}
+.where ul{margin:10px 0 0; padding-left:18px; display:grid; gap:6px}
+.drop-foot{text-align:center; font-size:12.5px; margin:14px auto 0; max-width:620px}
+.print-lock{display:none}
+.consent{position:fixed; left:16px; right:16px; bottom:16px; z-index:60; max-width:760px; margin:0 auto; display:flex; gap:14px; align-items:center;
+  justify-content:space-between; padding:12px 14px; background:var(--surface); border:1px solid var(--line-2); border-radius:12px; box-shadow:var(--shadow); font-size:13px}
+.consent p{margin:0; color:var(--ink-2)}
+.consent div{display:flex; gap:8px; flex-shrink:0}
+.consent button{border:1px solid var(--line-2); background:var(--surface); color:var(--ink); border-radius:8px; padding:6px 10px; font-size:13px}
+.consent button.primary{background:var(--ink); color:var(--surface); border-color:var(--ink)}
+@media (max-width:760px){
+  .paywall{grid-template-columns:1fr}
+  .pw-buy{border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:14px}
+  .demobar{flex-direction:column; align-items:flex-start}
+  .consent{flex-direction:column; align-items:stretch}
+}
 /* Ручное сопоставление колонок */
 .modal{position:fixed; inset:0; z-index:40; background:rgba(10,16,25,.55); display:flex; align-items:center; justify-content:center; padding:20px}
 .mapper{width:min(1020px,100%); max-height:88vh; overflow:auto; padding:18px 20px}
@@ -196,7 +241,7 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 /* Структура портфеля */
 .struct{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px}
 .sblock{padding:14px 16px}
-.srow{display:grid; grid-template-columns:minmax(84px,1.1fr) 2fr auto 36px; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:13px}
+.srow{display:grid; grid-template-columns:minmax(84px,1.6fr) minmax(32px,1.4fr) auto 36px; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:13px}
 .sblock .eyebrow + .srow{border-top:0; margin-top:6px}
 .sbar{height:8px; background:var(--surface-2); border-radius:4px; overflow:hidden}
 .sbar i{display:block; height:100%; background:var(--series-1); border-radius:4px}
@@ -277,6 +322,8 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 @media (prefers-reduced-motion:reduce){ *{transition:none !important} }
 @media print{
   @page{size:A4 landscape; margin:11mm}
+  body.is-locked #app, body.is-locked .bar{display:none !important}
+  body.is-locked .print-lock{display:block !important; padding:60px 20px; font-size:18px; text-align:center}
   /* На бумаге всегда светлая палитра, даже если у велса тёмная тема. */
   :root,:root:not([data-theme="light"]),:root[data-theme="dark"]{
     --ground:#FFFFFF; --surface:#FFFFFF; --surface-2:#F5F6F8; --ink:#0E1A2B; --ink-2:#35455B; --muted:#5D6A7B;
@@ -330,11 +377,12 @@ ul.notes li{margin:5px 0; color:var(--ink-2)}
     <span id="docChips"></span>
     <span class="spacer"></span>
     <button class="btn small" id="addBtn" type="button">Добавить выписку</button>
-    <button class="btn small" id="resetBtn" type="button">Новый клиент</button>
+    <button class="btn small" id="resetBtn" type="button">Новый отчёт</button>
     <button class="btn small primary" id="printBtn" type="button">Отчёт PDF</button>
   </div>
 </header>
 <main class="wrap" id="app"></main>
+<div class="print-lock">Полный отчёт в PDF открывается после оплаты на wealth.euroaff.eu</div>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Детали позиции"></aside>
 <input type="file" id="file" accept=".pdf,.csv,.tsv,.txt,.xlsx,.xls,application/pdf" multiple hidden>
@@ -353,8 +401,11 @@ WL.apiReady = (async () => {
   return WL.API_BASE = String(api).replace(/\/+$/, "");
 })();
 </script>
+<script>window.WL_PIXEL_ID = ""; window.WL_SUPPORT_EMAIL = "";   /* подставляет publish.sh из site/config.json; пустой пиксель не грузится */</script>
+<script src="wealth/track.js"></script>
 <script src="wealth/parse.js"></script>
 <script src="wealth/sheet.js"></script>
+<script src="wealth/demo.js"></script>
 <script src="wealth/model.js"></script>
 <script src="wealth/insights.js"></script>
 <script src="wealth/table.js"></script>

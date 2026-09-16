@@ -228,7 +228,7 @@ function buildDoc(rows, head, file){
     const ccy = ccy3(g(r, "ccy")) || "USD";
     const kind = clean(g(r, "type")).toLowerCase();
     const ib = ibOption(symRaw) || ibOption(nameCol.toUpperCase());
-    const sym = ib ? ib.occ : symRaw.replace(/\s+/g, "").replace(/\.[A-Z]{3,}$/, "");
+    const sym = ib ? ib.occ : symRaw.replace(/\s+/g, "").replace(/\.(NASDAQ|NYSE|NYSEARCA|ARCA|AMEX|BATS|NMS|US)$/, "");
     const occ = OCC.exec(sym);
     const cls = kind ? classOf(kind) : null;
     // Колонки класса нет — считаем бумагу акцией: так устроены почти все выгрузки позиций.
@@ -242,9 +242,13 @@ function buildDoc(rows, head, file){
 
     if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || "Денежные средства"}); continue; }
 
+    // Цена опциона указана за одну бумагу, а контракт — это 100 бумаг: без множителя стоимость
+    // и себестоимость расходятся с живой ценой в сто раз.
+    const mult = occ ? 100 : 1;
+    if(occ && numOrNull(g(r, "value")) == null && qty != null && price != null) base.value = round2(qty * price * mult);
     const costPrice = numOrNull(g(r, "costPrice"));
     const costTotal = numOrNull(g(r, "costTotal"));
-    const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty) : null);
+    const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty * mult) : null);
     const p = {...base, type,
                symbol: sym || null, code: symRaw !== sym ? symRaw : null, qty, price, priceDate: null, cost,
                costNote: cost == null ? "нет в выгрузке" : null,

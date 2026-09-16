@@ -95,7 +95,7 @@ const noisy = it => NOISE.some(r => r.test(it.title || ""));
    которые истекают в ближайшие 45 дней. */
 function holdingTickers(P){
   const set = new Map();
-  P.positions.filter(p => WL.eq(p) && p.symbol).forEach(p => set.set(p.symbol, {why: "в портфеле", name: p.name}));
+  P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").forEach(p => set.set(p.symbol, {why: "в портфеле", name: p.name}));
   P.positions.filter(p => p.type === "option" && p.occ && p.expiry >= P.today && WL.days(P.today, p.expiry) <= 45)
     .forEach(p => { if(!set.has(p.underlying)) set.set(p.underlying, {why: "опцион истекает скоро", name: p.underlyingName}); });
   return [...set].map(([sym, v]) => ({sym, why: v.why, name: v.name, kws: keywords(sym, v.name)}));
