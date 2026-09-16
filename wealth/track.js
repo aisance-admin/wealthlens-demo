@@ -64,8 +64,8 @@ function notice(force){
   b.className = "consent";
   b.setAttribute("role", "region"); b.setAttribute("aria-label", "Cookies");
   const text = ask
-    ? (EN ? "May we use cookies to measure our ads? Your statements never leave your browser either way." : "Разрешите cookies для оценки рекламы? Выписки в любом случае не покидают браузер.")
-    : (EN ? "We use cookies to measure our ads. Your statements never leave your browser." : "Мы используем cookies для оценки рекламы. Выписки не покидают браузер.");
+    ? (EN ? "May we use cookies to measure our ads? Cookies have nothing to do with your statements." : "Разрешите cookies для оценки рекламы? К выпискам cookies отношения не имеют.")
+    : (EN ? "We use cookies to measure our ads. Cookies have nothing to do with your statements." : "Мы используем cookies для оценки рекламы. К выпискам cookies отношения не имеют.");
   const [yes, no] = ask ? (EN ? ["Allow", "No, thanks"] : ["Разрешить", "Не нужно"]) : (EN ? ["OK", "Opt out"] : ["Хорошо", "Отказаться"]);
   b.innerHTML = `<p>${text} <a href="${EN ? "/en/legal/privacy/" : "/legal/privacy/"}">${EN ? "Details" : "Подробнее"}</a></p>
     <div><button type="button" data-c="necessary">${no}</button><button type="button" data-c="all" class="primary">${yes}</button></div>`;

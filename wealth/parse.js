@@ -500,8 +500,77 @@ WL.parseFile = async function(file){
   // Узнанной шапки нет: разметку предлагаем, только если в файле правда есть таблица с числами —
   // иначе договор или письмо откроются «таблицей» из дат, номеров пунктов и страниц.
   const tabular = sh => sh.rows.filter(r => r.filter(c => c && NUMLIKE.test(c)).length >= 2 && r.some(c => c && !NUMLIKE.test(c))).length >= 3;
-  if(!doc || (doc.unknown && !doc.sheets.some(tabular))) return {unknown: true, fileName: file.name, pdf: true};
+  if(!doc || (doc.unknown && !doc.sheets.some(tabular))){
+    // plain — в файле нет даже двух строк с числами в разных колонках: договор или письмо. Такой файл незачем отдавать ИИ.
+    const numericRows = pages.flat().filter(L => lineCells(L).filter(isNumCell).length >= 2).length;
+    return {unknown: true, fileName: file.name, pdf: true, plain: numericRows < 2};
+  }
   return doc;
+};
+/* ── Текст для распознавания ИИ ────────────────────────────────────────────
+   Уходит на сервер только по согласию пользователя и только когда выписку не удалось прочитать здесь.
+   Не отправляем шапку первой страницы (имя и адрес клиента) и короткие строки, повторяющиеся на многих
+   страницах (колонтитулы с именем и номером портфеля); шапки таблиц оставляем — без них не понять колонки.
+   Номера счетов, IBAN, почту и телефоны маскируем; имя файла не уходит. Числа текста запоминаем, чтобы
+   проверить ответ: сумма, которой нет в выписке, — выдумка, и такой разбор не принимаем. */
+const MASK = "▇";
+function parseAmount(tok){
+  let t = String(tok).replace(/[\s'’ ]/g, "");
+  const neg = /^\(.*\)$/.test(t) || /^[-−]/.test(t);
+  t = t.replace(/[()\-−+]/g, "");
+  if(!/^\d[\d.,]*$/.test(t)) return null;
+  const c = t.includes(","), d = t.includes(".");
+  if(c && d) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  else if(c) t = /^\d{1,3}(,\d{3})+$/.test(t) ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
+  else if(d && (t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
+  const v = parseFloat(t);
+  return isFinite(v) ? (neg ? -v : v) : null;
+}
+function maskLine(line){
+  return line
+    .replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g, MASK)                  // IBAN
+    .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, MASK)                                                       // почта
+    .replace(/\+\d[\d ()-]{7,}\d/g, MASK)                                                             // телефон
+    .replace(/\b\d{3,}(?:[./-]\d+){2,}\b/g, (m, at, str) =>                                            // номера счетов: 537630.120.6
+      /^(19|20)\d\d[./-]\d{1,2}[./-]\d{1,2}$/.test(m) || /^,\d{2}/.test(str.slice(at + m.length)) ? m : MASK)
+    .replace(/\b\d{8,}\b/g, (m, at, str) => /^[.,]\d{2}\b/.test(str.slice(at + m.length)) ? m : MASK); // длинные номера
+}
+WL.pdfAiText = async function(file){
+  const pages = await pdfLines(await file.arrayBuffer());
+  const p1 = pages[0] || [];
+  const first = p1.findIndex(L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); });
+  const top = p1.slice(0, first < 0 ? 12 : Math.min(first, 12)).map(l => l.text);
+  // Шапку таблицы на незнакомом языке («Bezeichnung | Stück | Kurswert») мы не узнаём, и первой найдётся строка
+  // с числами. Шапку и заголовок раздела прямо над ней отправляем: без них ИИ не поймёт колонок. Строки с цифрами
+  // (адрес, номер портфеля, дата) и длинный текст сюда не попадают.
+  let cut = first;
+  if(first > 0 && !headKeyOf(lineCells(p1[first]))){
+    while(cut > 0 && first - cut < 3){
+      const L = p1[cut - 1];
+      if(/\d/.test(L.text) || !(lineCells(L).length >= 2 || L.text.length <= 24)) break;
+      cut--;
+    }
+  }
+  const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top)};
+  const norm = t => t.replace(/\d/g, "#").replace(/\s+/g, " ").trim();
+  const freq = new Map();
+  pages.forEach(ls => new Set(ls.map(l => norm(l.text))).forEach(k => freq.set(k, (freq.get(k) || 0) + 1)));
+  const out = [], numbers = new Set();
+  pages.forEach((ls, pi) => {
+    const rows = [];
+    ls.forEach((L, li) => {
+      if(pi === 0 && (cut < 0 || li < cut)) return;                      // шапка документа
+      const cells = lineCells(L);
+      const running = cells.length <= 2 && !headKeyOf(cells) && pages.length >= 3 && freq.get(norm(L.text)) >= Math.max(2, pages.length * 0.34);
+      if(running) return;                                                 // колонтитул
+      rows.push(maskLine(cells.map(c => c.s).join(" | ")));
+    });
+    if(!rows.length) return;
+    out.push(`--- page ${pi + 1} ---`, ...rows);
+  });
+  const text = out.join("\n");
+  (text.match(/[(\-−]?\d[\d'’ .,]*\d\)?|\d/g) || []).forEach(tok => { const v = parseAmount(tok.trim()); if(v != null) numbers.add(Math.round(Math.abs(v) * 100)); });
+  return {text, ctx, numbers};
 };
 WL.util = {num, dmy, iso, pad, round2, titleCase};
 })();

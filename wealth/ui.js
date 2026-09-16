@@ -160,8 +160,8 @@ function renderPaywall(){
       </ul></div>
     <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>
       <button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button>
-      <div class="muted pw-note">${t("Оплата через Stripe. Выписки не загружаются на сервер — отчёт собирается в вашем браузере.",
-        "Payment via Stripe. Statements are not uploaded to a server — the report is built in your browser.")}</div>
+      <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается в вашем браузере, выписки на сервере не хранятся.",
+        "Payment via Stripe. The report is built in your browser; statements are not stored on a server.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
         `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}
       ${SUPPORT ? `<div class="muted pw-note">${t("Вопрос по оплате:", "Payment question:")} ${supportLink()}</div>` : ""}</div>
@@ -193,8 +193,8 @@ function renderUpload(){
     <button class="btn small" id="tplBtn" type="button">${t("Шаблон CSV", "CSV template")}</button></div>
     <p class="demo-link">${t(`<a href="?demo=1">Посмотреть пример отчёта</a> — вымышленный портфель у четырёх брокеров`,
       `<a href="?demo=1&amp;lang=en">See a sample report</a> — a fictional portfolio across four brokers`)}</p>
-    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере и никуда не отправляются: наружу уходят только тикеры и названия компаний — для котировок и новостей.",
-      "Or drop files here. Statements are processed in this browser and are not sent anywhere: only tickers and company names leave it, to fetch quotes and news.")}</p>
+    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере: наружу уходят только тикеры и названия компаний — для котировок и новостей. Если файл не прочитается, его таблицу можно распознать с помощью ИИ — только с вашего согласия и без имён и номеров счетов.",
+      "Or drop files here. Statements are processed in this browser: only tickers and company names leave it, to fetch quotes and news. If a file can't be read, its table can be read with AI — only with your consent, without names or account numbers.")}</p>
     ${SUPPORT ? `<p class="hint">${t(`Выписка не читается или нужен другой банк — напишите на ${supportLink()}. Сами выписки присылать не нужно, достаточно названия банка.`,
       `Statement not read, or need another bank? Email ${supportLink()}. No need to send the statement itself — the bank's name is enough.`)}</p>` : ""}
     <p class="hint lang-link"><a href="${esc(langUrl(EN ? "ru" : "en"))}" hreflang="${EN ? "ru" : "en"}" lang="${EN ? "ru" : "en"}">${EN ? "Русский" : "English"}</a></p>
@@ -229,41 +229,61 @@ async function addFiles(files){
   if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
   const prog = $("#progress");
   const pending = [];      // таблицы, которые надо разметить руками
+  const hard = [];         // PDF, которые здесь не прочитались: их можно отдать ИИ (с согласия) или разметить руками
+  const isPdf = f => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
   for(const f of list){
     if(prog) prog.insertAdjacentHTML("beforeend", `<div>${t("Читаю", "Reading")} ${esc(f.name)}…</div>`);
     try{
       const doc = await WL.parseFile(f);
       if(doc.unknown){
-        // Таблицу, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
-        if(doc.sheets){ pending.push({file: f, sheets: doc.sheets}); continue; }
-        toast(doc.ops
-          ? t(`${f.name}: это выписка операций — в ней движение денег, а не позиции. Для отчёта нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
-              `${f.name}: this is a transaction statement — cash movements, not positions. The report needs a portfolio statement (Portfolio, Holdings, Valuation).`)
-          : doc.scan
-          ? t(`${f.name}: это скан — в PDF нет текста. Нужна электронная выписка из интернет-банка или выгрузка CSV или Excel.`,
-              `${f.name}: this is a scan with no text layer. Download an electronic statement from online banking, or a CSV or Excel export.`)
-          : doc.pdf
-          ? t(`${f.name}: в PDF не нашлось таблицы позиций. Если это выписка, загрузите выгрузку позиций в CSV или Excel.`,
-              `${f.name}: no positions table found in this PDF. If it is a statement, upload a CSV or Excel export of positions.`)
-          : t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
+        if(doc.ops){ toast(t(`${f.name}: это выписка операций — в ней движение денег, а не позиции. Для отчёта нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
+          `${f.name}: this is a transaction statement — cash movements, not positions. The report needs a portfolio statement (Portfolio, Holdings, Valuation).`)); continue; }
+        if(doc.scan){ toast(t(`${f.name}: это скан — в PDF нет текста. Нужна электронная выписка из интернет-банка или выгрузка CSV или Excel.`,
+          `${f.name}: this is a scan with no text layer. Download an electronic statement from online banking, or a CSV or Excel export.`)); continue; }
+        const manual = doc.sheets ? {file: f, sheets: doc.sheets} : null;
+        if(doc.plain){ toast(t(`${f.name}: в PDF нет таблиц с суммами — похоже, это не выписка. Нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
+          `${f.name}: this PDF has no tables with amounts — it does not look like a statement. Upload a portfolio statement (Portfolio, Holdings, Valuation).`)); continue; }
+        if(isPdf(f)){ hard.push({file: f, manual}); continue; }
+        // Таблицу CSV или Excel, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
+        if(manual){ pending.push(manual); continue; }
+        toast(t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
         continue;
       }
       // Таблица из PDF другого банка. Уверенный разбор — сразу в отчёт: ничего не упало в сверке, у позиций есть
-      // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — на проверку колонок.
+      // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — ИИ или ручная разметка.
       if(doc.fromPdf){
         const m = doc.head.map, totals = doc.checks.filter(c => !c.count);
         const valued = doc.positions.filter(p => p.value != null).length;
         const sure = doc.checks.every(c => c.ok) && doc.positions.length >= 2 && m.value != null && (m.name != null || m.ticker != null) &&
           (totals.some(c => c.ok) || valued >= doc.positions.length * 0.8);
-        if(!sure){ pending.push({file: f, sheets: doc.sheets, pre: {sheetIndex: doc.sheetIndex || 0, head: doc.head, pdf: true}}); continue; }
+        if(!sure){ hard.push({file: f, manual: {file: f, sheets: doc.sheets, pre: {sheetIndex: doc.sheetIndex || 0, head: doc.head, pdf: true}}}); continue; }
         doc.note = [doc.note, t("таблица найдена в PDF автоматически — если что-то не так, «Сопоставить колонки» ниже",
           "table found in the PDF automatically — use “Map columns” below if something is off")].filter(Boolean).join(" · ");
       }
-      if(doc.from === "sheet" && doc.sheets)
-        S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
-      S.docs = S.docs.filter(d => !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
-      S.docs.push(doc);
+      addDoc(doc, f);
     }catch(e){ toast(t(`${f.name}: не удалось прочитать файл`, `${f.name}: could not read the file`)); }
+  }
+  if(hard.length){
+    const choice = await askAi(hard);
+    if(choice === "ai"){
+      for(let i = 0; i < hard.length; i++){
+        const h = hard[i];
+        aiProgress(t(`Распознаю ${i + 1} из ${hard.length}: ${h.file.name}. Обычно это занимает до минуты.`,
+                     `Reading ${i + 1} of ${hard.length}: ${h.file.name}. This usually takes up to a minute.`));
+        try{
+          const doc = await aiRead(h.file);
+          addDoc(doc, h.file);
+          track("AiRecognized", {positions: doc.positions.length});
+          toast(t(`${h.file.name}: ИИ распознал ${doc.positions.length} ${WL.pl(doc.positions.length, ["позицию", "позиции", "позиций"], ["position", "positions"])}`,
+                  `${h.file.name}: AI read ${doc.positions.length} ${WL.pl(doc.positions.length, ["position", "positions"], ["position", "positions"])}`));
+        }catch(e){
+          track("AiFailed", {reason: String(e.message || e).slice(0, 40)});
+          toast(`${h.file.name}: ${aiErrorText(e.message)}`);
+          if(h.manual && !/^(transactions|rate_limited)$/.test(e.message)) pending.push(h.manual);
+        }
+      }
+      aiProgress(null);
+    } else if(choice === "manual") hard.forEach(h => { if(h.manual) pending.push(h.manual); });
   }
   const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, p.pre || null, askMapping); };
   if(!S.docs.length){ renderUpload(); askMapping(); return; }
@@ -272,6 +292,104 @@ async function addFiles(files){
   save();
   await refresh();
   askMapping();
+}
+function addDoc(doc, f){
+  if(doc.from === "sheet" && doc.sheets)
+    S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
+  S.docs = S.docs.filter(d => d.fileName !== doc.fileName && !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
+  S.docs.push(doc);
+}
+
+/* ── Распознавание с помощью ИИ ───────────────────────────────────────────
+   Запасной путь для PDF, которые не прочитались в браузере, и только с согласия, которое спрашиваем
+   на каждую загрузку. Что уходит на сервер и что нет — см. WL.pdfAiText в parse.js. Ответ ИИ не
+   принимаем на веру: каждая сумма и количество должны найтись в тексте выписки, а итоги файла
+   сверяются тем же разбором, что и у таблиц. */
+function askAi(hard){
+  return new Promise(resolve => {
+    const canManual = hard.some(h => h.manual);
+    const wrap = document.createElement("div");
+    wrap.className = "modal no-print";
+    wrap.innerHTML = `<div class="card aimodal" role="dialog" aria-modal="true" aria-labelledby="aiTitle">
+      <div class="eyebrow">${t("Распознавание", "Recognition")}</div>
+      <h2 id="aiTitle">${hard.length === 1 ? t("Файл не прочитался автоматически", "This file could not be read automatically")
+                                           : t("Не все файлы прочитались автоматически", "Some files could not be read automatically")}</h2>
+      <ul class="ai-files">${hard.map(h => `<li>${esc(h.file.name)}</li>`).join("")}</ul>
+      <p>${t(`Таблицу позиций можно распознать с помощью ИИ. Для этого текст таблиц из файла уйдёт на наш сервер и в модель Claude компании Anthropic.
+        Шапку документа с именем и адресом мы не отправляем, номера счетов, IBAN, почту и телефоны маскируем. Ни файл, ни текст не сохраняются.`,
+        `The positions table can be read with AI. The text of the file's tables will be sent to our server and to Anthropic's Claude model.
+        The document header with names and addresses is not sent; account numbers, IBANs, emails and phone numbers are masked. Neither the file nor the text is stored.`)}</p>
+      <div class="ai-actions" data-ai-actions>
+        <button class="btn primary" type="button" data-ai="ai">${t("Распознать с помощью ИИ", "Read with AI")}</button>
+        ${canManual ? `<button class="btn" type="button" data-ai="manual">${t("Разметить колонки вручную", "Map columns manually")}</button>` : ""}
+        <button class="btn" type="button" data-ai="cancel">${t("Отмена", "Cancel")}</button>
+      </div>
+      <p class="ai-status muted" data-ai-status hidden></p>
+      ${ON_SITE ? `<p class="muted ai-more"><a href="${t("/legal/privacy/", "/en/legal/privacy/")}" target="_blank" rel="noopener">${t("Как мы обращаемся с данными", "How we handle data")}</a></p>` : ""}
+    </div>`;
+    document.body.appendChild(wrap);
+    wrap.querySelector('[data-ai="ai"]').focus();
+    const done = choice => {
+      document.removeEventListener("keydown", onKey);
+      if(choice === "ai"){ wrap.querySelector("[data-ai-actions]").hidden = true; activeAi = wrap; resolve(choice); return; }
+      wrap.remove(); resolve(choice);
+    };
+    const onKey = e => { if(e.key === "Escape") done("cancel"); };
+    document.addEventListener("keydown", onKey);
+    wrap.addEventListener("click", e => { const b = e.target.closest("[data-ai]"); if(b) done(b.dataset.ai); });
+  });
+}
+let activeAi = null;
+function aiProgress(text){
+  if(!activeAi) return;
+  if(text == null){ activeAi.remove(); activeAi = null; return; }
+  const st = activeAi.querySelector("[data-ai-status]");
+  st.hidden = false; st.innerHTML = `<span class="spin" aria-hidden="true"></span>${esc(text)}`;
+}
+function aiErrorText(code){
+  return ({
+    ai_not_configured: t("распознавание ИИ ещё подключается — разметьте колонки вручную или напишите нам", "AI recognition is not set up yet — map the columns manually or contact us"),
+    rate_limited: t("слишком много распознаваний подряд — попробуйте через 10 минут", "too many recognitions in a row — try again in 10 minutes"),
+    too_large: t("файл слишком большой для распознавания", "the file is too large to read"),
+    transactions: t("это выписка операций — позиций в ней нет", "this is a transaction statement with no positions"),
+    no_positions: t("ИИ не нашёл в файле позиций", "AI found no positions in the file"),
+    unverified: t("часть сумм из ответа ИИ не нашлась в выписке — такой разбор не принят", "some amounts in the AI result are not in the statement, so it was rejected"),
+  })[code] || t("не удалось распознать файл", "could not read the file");
+}
+async function aiRead(file){
+  const prep = await WL.pdfAiText(file);
+  if(prep.numbers.size < 2) throw new Error("no_positions");        // отправлять нечего: в тексте нет чисел
+  if(prep.text.length > 160000) throw new Error("too_large");
+  let r, data = {};
+  try{
+    r = await fetch(PAY_API + "/ai/extract", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: prep.text})});
+    data = await r.json();
+  }catch(e){ throw new Error("network"); }
+  if(!r.ok || data.error) throw new Error(data.error || "http_" + r.status);
+  if(data.document_kind === "transactions") throw new Error("transactions");
+  const ps = (data.positions || []).filter(p => p && p.name && (p.market_value != null || p.quantity != null));
+  if(!ps.length) throw new Error("no_positions");
+  const found = v => v == null || prep.numbers.has(Math.round(Math.abs(v) * 100));
+  const doubtful = ps.filter(p => !found(p.market_value) || !found(p.quantity));
+  if(doubtful.length > Math.max(1, ps.length * 0.25)) throw new Error("unverified");
+  // Ответ собираем в таблицу с заголовками шаблона и читаем тем же разбором, что CSV: классы активов,
+  // опционы, сверка итогов и пометки о пропусках работают одинаково.
+  const TYPE = {stock: "Stock", fund: "Fund", bond: "Bond", structured_note: "Structured note", cash: "Cash"};
+  const ccy = v => (String(v || "").toUpperCase().match(/[A-Z]{3}/) || [""])[0];
+  const broker = prep.ctx.broker || String(data.institution || "").slice(0, 60);
+  const rows = [["Broker", "Name", "Ticker", "ISIN", "Type", "Quantity", "Average cost price", "Current price", "Market value", "Currency"],
+    ...ps.map(p => [broker, p.name, p.ticker || "", p.isin || "", TYPE[p.asset_class] || "Other", p.quantity ?? "", p.cost_price ?? "", p.price ?? "", p.market_value ?? "", ccy(p.currency)]),
+    ...(data.totals || []).filter(x => x && typeof x.value === "number").map(x => ["", `Total ${ccy(x.currency)}`.trim(), "", "", "", "", "", "", x.value, ccy(x.currency)])];
+  const ctx = {broker: broker || null, asOf: prep.ctx.asOf || (/^\d{4}-\d{2}-\d{2}$/.test(data.as_of || "") ? data.as_of : null)};
+  const head = WL.sheetFind(rows);
+  const doc = WL.sheetDoc(rows, head, file, ctx);
+  doc.fromAi = true;
+  doc.note = [doc.note, t("распознано ИИ по тексту таблиц — сверьте суммы с выпиской", "read by AI from the table text — check the amounts against the statement"),
+    doubtful.length ? t(`не найдено в тексте выписки: ${doubtful.map(p => p.name).slice(0, 3).join(", ")}`, `not found in the statement text: ${doubtful.map(p => p.name).slice(0, 3).join(", ")}`) : ""]
+    .filter(Boolean).join(" · ");
+  doc.sheetIndex = 0; doc.head = head;
+  Object.defineProperty(doc, "sheets", {value: [{name: t("Распознано ИИ", "AI result"), rows, ctx}], enumerable: false});
+  return doc;
 }
 
 /* ── Портфель ─────────────────────────────────────────────────────────── */
