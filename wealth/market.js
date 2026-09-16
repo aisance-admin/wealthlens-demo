@@ -100,8 +100,10 @@ const noisy = it => NOISE.some(r => r.test(it.title || ""));
    которые истекают в ближайшие 45 дней. */
 function holdingTickers(P){
   const set = new Map();
-  P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").forEach(p => set.set(p.symbol, {why: WL.t("в портфеле", "in the portfolio"), name: p.name}));
-  P.positions.filter(p => p.type === "option" && p.occ && p.expiry >= P.today && WL.days(P.today, p.expiry) <= 45)
+  // Новости — только по бумагам, личность которых подтверждена (WL.idOf): по тикеру BETA иначе пришли бы новости чужой компании.
+  P.positions.filter(p => WL.eq(p) && p.ccy === "USD").forEach(p => { const sym = WL.quoteSymbol(P, p);
+    if(sym) set.set(sym, {why: WL.t("в портфеле", "in the portfolio"), name: p.name}); });
+  P.positions.filter(p => p.type === "option" && p.occ && p.expiry >= P.today && WL.days(P.today, p.expiry) <= 45 && WL.idOf(P, p).ok)
     .forEach(p => { if(!set.has(p.underlying)) set.set(p.underlying, {why: WL.t("опцион истекает скоро", "option expiring soon"), name: p.underlyingName}); });
   return [...set].map(([sym, v]) => ({sym, why: v.why, name: v.name, kws: keywords(sym, v.name)}));
 }

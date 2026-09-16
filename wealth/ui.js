@@ -34,7 +34,7 @@ const supportLink = () => SUPPORT ? `<a href="mailto:${esc(SUPPORT)}">${esc(SUPP
 const langUrl = l => { const u = new URL(location.href); u.searchParams.set("lang", l); return u.pathname + u.search + u.hash; };
 const HOME = location.pathname + t("", "?lang=en");
 const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: DEFAULT_CLIENT, showPast: false,
-  rid: null, demo: false};
+  rid: null, demo: false, basis: (() => { try{ return localStorage.getItem("wl_basis") === "stmt" ? "stmt" : "now"; }catch(e){ return "now"; } })()};
 
 /* Отчёт живёт в хранилище браузера, и открыт он может быть в нескольких вкладках. Пока одна вкладка занята
    (читает выписки, ждёт ответа в окне), другая может его поменять. Тогда при сохранении правки складываются:
@@ -116,7 +116,33 @@ const TOKEN = /^[a-f0-9]{40}$/;
 const unlockOf = rid => { const v = rid && unlocks()[rid];
   if(typeof v === "string") return TOKEN.test(v) ? {t: v} : null;
   return v && typeof v === "object" && typeof v.t === "string" && TOKEN.test(v.t) ? v : null; };
-const confirmedAccess = u => !!(u && typeof u.v === "number" && isFinite(u.v));
+/* Доступ открывает разрешение, подписанное сервером (ECDSA P-256), со сроком действия (g: {exp, sig}): подпись браузер
+   проверяет открытым ключом сам, поэтому доступ работает и без связи, а подделать его правкой хранилища нельзя. Ключ вшит
+   в страницу при выкладке (WL_ACCESS_KEY); если его нет, берётся с сервера и держится только в памяти. В течение сеанса,
+   в котором сервер подтвердил оплату, доступ открыт и без разрешения — на случай, если сервер его не выдал. */
+const GRANTS = new Map();                 // «номер отчёта|сессия|срок|подпись» → подпись верна
+let accessKeyP = null;
+const grantId = (rid, u) => `${rid}|${u.s || ""}|${u.g.exp}|${u.g.sig}`;
+const b64u = x => Uint8Array.from(atob(String(x).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(x).length / 4) * 4, "=")), c => c.charCodeAt(0));
+function accessKey(){
+  return accessKeyP = accessKeyP || (async () => {
+    const jwk = window.WL_ACCESS_KEY && window.WL_ACCESS_KEY.x ? window.WL_ACCESS_KEY : await fetch(PAY_API + "/unlock/key").then(x => x.json());
+    return crypto.subtle.importKey("jwk", {kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y}, {name: "ECDSA", namedCurve: "P-256"}, false, ["verify"]);
+  })().catch(e => { accessKeyP = null; throw e; });
+}
+async function primeGrant(rid = S.rid){
+  const u = rid && unlockOf(rid);
+  if(!u || !u.g || typeof u.g.sig !== "string" || !Number.isFinite(u.g.exp)) return false;
+  const id = grantId(rid, u);
+  if(GRANTS.has(id)) return GRANTS.get(id);
+  let ok = false;
+  try{ ok = u.g.exp * 1000 > Date.now() && await crypto.subtle.verify({name: "ECDSA", hash: "SHA-256"}, await accessKey(), b64u(u.g.sig),
+    new TextEncoder().encode(`wl-grant|${rid}|${u.s || ""}|${u.g.exp}`)); }catch(e){ return false; }   // ключ не загрузился — не запоминаем
+  GRANTS.set(id, ok);
+  return ok;
+}
+const sessionConfirmed = (rid, u) => { try{ return sessionStorage.getItem("wl_unlock_ok") === `${rid}|${u.t}`; }catch(e){ return false; } };
+const confirmedAccess = (u, rid = S.rid) => !!(u && ((u.g && u.g.exp * 1000 > Date.now() && GRANTS.get(grantId(rid, u)) === true) || sessionConfirmed(rid, u)));
 /* Оплата — за портфель, а не за номер отчёта: если в отчёте не осталось ни одной выписки оплаченных счетов, а новые
    выписки — других счетов, это отчёт по другому клиенту. Выписки без номера счёта правило не трогают: лучше пропустить
    переиспользование, чем закрыть отчёт тому, кто заплатил. */
@@ -184,8 +210,9 @@ async function openCheckout(source){
     title: t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),
     body: `<p>${t("Разовая оплата через Stripe. Отчёт откроется в этом браузере сразу после оплаты. Выписки этого портфеля можно добавлять и потом — платить снова не нужно.",
         "A one-off payment via Stripe. The report unlocks in this browser right after payment. You can add statements of this portfolio later at no extra cost.")}</p>
-      ${unverifiedDocs().length ? `<p class="muted">${t(`Сверить с итогом банка нельзя: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))}. Позиции из ${unverifiedDocs().length === 1 ? "неё" : "них"} войдут в отчёт как прочитаны.`,
-        `These cannot be reconciled with a bank total: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))}. Their positions are included as read.`)}</p>` : ""}
+      ${unverifiedDocs().length ? `<div class="muted pw-reasons">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
+        <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
+        ${t(`Позиции из ${unverifiedDocs().length === 1 ? "неё" : "них"} войдут в отчёт как прочитаны.`, "Their positions are included as read.")}</div>` : ""}
       <label class="ai-remember waiver"><input type="checkbox" data-waiver> ${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</label>
       ${ON_SITE ? `<p class="ai-more">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
@@ -218,7 +245,7 @@ async function openCheckout(source){
     try{ v = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(pend.sid)}&rid=${rid}`).then(x => x.json()); }catch(e){}
     if(stale()) return;
     if(v && v.ok){
-      unlockWith(pend.sid, v); checkoutBusy = false;
+      await unlockWith(pend.sid, v); checkoutBusy = false;
       toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked"));
       renderApp(); return;
     }
@@ -245,14 +272,16 @@ async function openCheckout(source){
     : t("Не удалось открыть оплату. Попробуйте ещё раз.", "Could not open checkout. Please try again."));
 }
 
-function unlockWith(sid, r, restored){
-  const m = unlocks(); m[S.rid] = {t: r.token, s: r.sid || sid || null, a: [...new Set(S.docs.flatMap(d => d.accts || []))], v: Date.now()};
+async function unlockWith(sid, r, restored){
+  const m = unlocks(); m[S.rid] = {t: r.token, s: r.sid || sid || null, a: [...new Set(S.docs.flatMap(d => d.accts || []))], g: r.grant || null};
   setUnlocks(m);
   try{ localStorage.removeItem(PENDING); sessionStorage.setItem("wl_unlock_ok", `${S.rid}|${r.token}`); }catch(e){}
+  await primeGrant();
   if(restored) return;
   const seen = "wl_purchase_" + sid.slice(-16);     // событие покупки — один раз на платёж
   try{ if(!localStorage.getItem(seen)){ localStorage.setItem(seen, "1");
-    track("Purchase", {value: r.amount || PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); } }catch(e){}
+    // Сумма 0 (скидка 100%) — тоже сумма: цену по умолчанию подставляем, только если сервер суммы не прислал.
+    track("Purchase", {value: typeof r.amount === "number" ? r.amount : PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); } }catch(e){}
 }
 
 /* Доступ сверяется с сервером раз за сеанс: подпись должна быть настоящей, а оплата — не возвращённой. Пока сервер не подтвердил
@@ -263,7 +292,8 @@ async function checkUnlock(){
   const u = unlockOf(S.rid);
   if(!u){ const m = unlocks(); if(S.rid in m){ delete m[S.rid]; setUnlocks(m); } return; }
   const key = `${S.rid}|${u.t}`;
-  try{ if(confirmedAccess(u) && sessionStorage.getItem("wl_unlock_ok") === key) return; }catch(e){}
+  await primeGrant();
+  if(sessionConfirmed(S.rid, u)) return;                  // в этом сеансе сервер уже подтвердил
   let r = null;
   try{ r = await fetch(`${PAY_API}/unlock/check?rid=${encodeURIComponent(S.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }
   catch(e){
@@ -273,9 +303,12 @@ async function checkUnlock(){
   const now = unlockOf(S.rid);
   if(!r || !now || u.t !== now.t) return;
   if(r.ok){
-    const m = unlocks(); m[S.rid] = {...now, v: Date.now()}; setUnlocks(m);
-    try{ sessionStorage.setItem("wl_unlock_ok", key); }catch(e){}
-    if(!confirmedAccess(u) && S.P) renderApp();
+    const was = confirmedAccess(u);
+    // Новое разрешение (срок продлевается при каждом подтверждении); если сервер его не выдал — прежнее остаётся.
+    if(r.grant){ const m = unlocks(); m[S.rid] = {...now, g: r.grant}; setUnlocks(m); }
+    if(!r.unverified) try{ sessionStorage.setItem("wl_unlock_ok", key); }catch(e){}
+    await primeGrant();
+    if(!was && S.P) renderApp();
     return;
   }
   if(r.ok === false){
@@ -293,7 +326,7 @@ async function restoreAccess(btn){
   let r = null;
   try{ r = await fetch(PAY_API + "/unlock/restore", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rid: S.rid})}).then(x => x.json()); }catch(e){}
   if(btn) btn.disabled = false;
-  if(r && r.ok){ unlockWith(r.sid, r, true); toast(t("Оплата найдена — полный отчёт открыт", "Payment found — the full report is unlocked")); renderApp(); return; }
+  if(r && r.ok){ await unlockWith(r.sid, r, true); toast(t("Оплата найдена — полный отчёт открыт", "Payment found — the full report is unlocked")); renderApp(); return; }
   toast(SUPPORT ? t(`Оплату этого отчёта не нашли. Напишите на ${SUPPORT} и укажите номер отчёта ${S.rid}.`, `No payment was found for this report. Email ${SUPPORT} with report number ${S.rid}.`)
     : t(`Оплату этого отчёта не нашли. Номер отчёта: ${S.rid}.`, `No payment was found for this report. Report number: ${S.rid}.`));
 }
@@ -308,7 +341,7 @@ async function recoverPendingPayment(){
   if(!p || p.rid !== S.rid || !p.sid || Date.now() - p.at > 2 * 864e5) return;
   let r = null;
   try{ r = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(p.sid)}&rid=${S.rid}`).then(x => x.json()); }catch(e){}
-  if(r && r.ok){ unlockWith(p.sid, r); toast(t("Оплата прошла — полный отчёт открыт", "Payment received — full report unlocked")); }
+  if(r && r.ok){ await unlockWith(p.sid, r); toast(t("Оплата прошла — полный отчёт открыт", "Payment received — full report unlocked")); }
 }
 
 async function handlePaymentReturn(){
@@ -322,7 +355,7 @@ async function handlePaymentReturn(){
   let r = null;
   try{ r = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(sid)}&rid=${S.rid}`).then(x => x.json()); }catch(e){}
   if(r && r.ok){
-    unlockWith(sid, r);
+    await unlockWith(sid, r);
     toast(t("Оплата прошла — полный отчёт открыт", "Payment received — full report unlocked"));
   } else {
     toast(r && r.reason === "not paid" ? t("Платёж ещё не подтверждён. Обновите страницу через минуту.", "Payment is not confirmed yet. Refresh the page in a minute.")
@@ -387,8 +420,9 @@ function renderPaywall(){
       </ul></div>
     <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>
       <button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button>
-      ${unverifiedDocs().length ? `<div class="muted pw-note pw-warn">${t(`Не с чем сверить: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))} — в ${unverifiedDocs().length === 1 ? "выписке нет итога" : "выписках нет итога"} для сверки. Отчёт покажет прочитанное как есть.`,
-        `Nothing to reconcile against: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))} — no total to check. The report shows what was read as is.`)}</div>` : ""}
+      ${unverifiedDocs().length ? `<div class="muted pw-note pw-warn">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
+        <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
+        ${t("Позиции из них войдут в отчёт как прочитаны.", "Their positions are included as read.")}</div>` : ""}
       <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
         "Payment via Stripe. The report is built and kept in this browser, and statements are not stored on a server, so open the report here.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
@@ -402,11 +436,19 @@ function renderPaywall(){
 }
 
 // Почему выписку не с чем сверить — из пометок разбора; общий ответ, если причина не записана.
+// Конкретная причина — разные случаи требуют разных действий: итога нет, итог есть, но в другой валюте и без курсов выписки.
 const unverifiedWhy = d => /в валюте отчёта по бумагам в разных валютах|reference currency across several currencies/.test(d.note || "")
-  ? t("итог в файле — в валюте отчёта по бумагам в разных валютах: без курсов выписки его не сверить", "the file total is in the reference currency across several currencies and cannot be reconciled without the statement's rates")
+  ? t("итог в файле есть, но посчитан в валюте отчёта по бумагам в разных валютах: без курсов самой выписки его не сверить", "the file has a total, but in the reference currency across several currencies: it cannot be reconciled without the statement's own rates")
+  : d.fromAi ? t("в тексте выписки не нашлось строки итога, с которой сошлась бы сумма позиций", "no total line in the statement text to reconcile the positions against")
   : t("итоговой строки в файле нет — сумму сверять не с чем", "the file has no total row, so there is nothing to reconcile the sum against");
+// Плашки пересобираются при каждом обновлении цен: раскрытое человеком пояснение не должно захлопываться.
+const keepOpen = (el, render) => { const was = el.querySelector("details.q-more"), open = was ? was.open : null; render();
+  const now = el.querySelector("details.q-more"); if(now && open != null) now.open = open; };
 function renderQuality(){
   const el = $("#qualityBar"); if(!el) return;
+  keepOpen(el, () => renderQualityInto(el));
+}
+function renderQualityInto(el){
   const all = S.docs.map(d => ({d, q: WL.quality(d)}));
   const bad = all.filter(x => x.q.status === "partial"), open = all.filter(x => x.q.status === "unverified" && x.d.kind === "positions" && x.d.from !== "demo");
   el.innerHTML = (!bad.length ? "" : `<div class="card quality" role="status">
@@ -421,13 +463,58 @@ function renderQuality(){
   </div>`) + (!open.length ? "" : `<div class="card quality soft" role="note">
     <div class="q-top"><span class="lvl info">${t("К сведению", "Note")}</span>
       <h2>${open.length === 1 ? t("Одну выписку не с чем сверить", "One statement has no total to reconcile") : t(`${open.length} выписки не с чем сверить`, `${open.length} statements have no total to reconcile`)}</h2></div>
+    <details class="q-more"><summary>${t("Почему и какие выписки", "Why, and which statements")}</summary>
     <p>${t("Противоречий в них не нашлось, и позиции показаны как прочитаны, но подтвердить полноту суммы итогом банка нельзя.",
       "No contradictions were found and the positions are shown as read, but the completeness of the sum cannot be confirmed by a bank total.")}</p>
     <ul class="q-list">${open.map(x => `<li><div><b>${esc(x.d.brokerShort || x.d.broker)}</b> <span class="muted">· ${esc(x.d.fileName)}</span>
-      <div class="q-why">${esc(unverifiedWhy(x.d))}</div></div></li>`).join("")}</ul>
+      <div class="q-why">${esc(unverifiedWhy(x.d))}</div></div></li>`).join("")}</ul></details>
   </div>`);
 }
 document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-q-remove]"); if(b) removeDoc(b.dataset.qRemove); });
+/* Бумаги, которые не удалось сопоставить с биржей: текущая цена к ним не подставлена, новости и история не грузятся.
+   Показываем, что торгуется под тикером на бирже США, и даём подтвердить, что это та же бумага. */
+const secKey = p => `${p.type === "option" ? "opt" : "eq"}|${String(p.type === "option" ? p.underlying : p.symbol || "").toUpperCase()}|${String(p.type === "option" ? p.underlyingName || "" : p.name || "").toLowerCase()}`;
+function renderIdentity(){
+  const el = $("#idBar"); if(!el) return;
+  keepOpen(el, () => renderIdentityInto(el));
+}
+function renderIdentityInto(el){
+  const P = S.P;
+  if(!P || S.demo || P.basis === "stmt"){ el.innerHTML = ""; return; }
+  const seen = new Map(); let failed = false;
+  P.positions.forEach(p => { const id = WL.idOf(P, p);
+    if(id.how === "error") failed = true;
+    if((id.how === "mismatch" || id.how === "notfound") && !seen.has(secKey(p))) seen.set(secKey(p), {p, id}); });
+  // Опцион на ту же бумагу, что уже в списке акцией, отдельной строкой не повторяем.
+  const eqTicks = new Set([...seen.values()].filter(x => x.p.type !== "option").map(x => String(x.p.symbol || "").toUpperCase()));
+  const list = [...seen.values()].filter(x => x.p.type !== "option" || !eqTicks.has(String(x.p.underlying || "").toUpperCase()));
+  if(!list.length && !failed){ el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="card quality soft ids" role="note">
+    <div class="q-top"><span class="lvl info">${t("К сведению", "Note")}</span>
+      <h2>${list.length ? t(`Текущая цена не подставлена ${list.length === 1 ? "одной бумаге" : `${list.length} бумагам`}`, `No current price for ${list.length} ${list.length === 1 ? "holding" : "holdings"}`)
+        : t("Бумаги пока не сопоставлены с биржей", "Holdings are not matched to exchange listings yet")}</h2></div>
+    <details class="q-more"${list.some(x => x.id.how === "mismatch") ? " open" : ""}><summary>${t("Почему и какие бумаги", "Why, and which holdings")}</summary>
+    <p>${t("Тикер в выписке ещё не доказывает, что это та же бумага: под тем же тикером на бирже может торговаться другая компания. Пока бумага не сопоставлена, её стоимость — из выписки, а новости и история цен по ней не загружаются.",
+      "A ticker in a statement does not prove it is the same security: another company may trade under the same ticker. Until a holding is matched, its value comes from the statement, and no news or price history is loaded for it.")}
+      ${failed ? t(" Справочник бумаг сейчас не ответил — повторим при следующем обновлении цен.", " The securities reference did not respond — we will retry on the next price update.") : ""}</p>
+    ${list.length ? `<ul class="q-list">${list.map(({p, id}) => { const opt = p.type === "option", sym = opt ? p.underlying : p.symbol, name = opt ? `${t("опционы на", "options on")} ${sym}` : p.name;
+      return `<li><div><b>${esc(name)}</b> <span class="muted">· ${esc(sym)} · ${esc(p.brokerShort)}</span>
+        <div class="q-why">${id.how === "notfound" ? t("на биржах США бумаги с таким тикером не нашлось — стоимость из выписки", "no US-listed security with this ticker — the value comes from the statement")
+          : t(`под этим тикером на бирже США: ${esc(id.market.name)}`, `listed under this ticker in the US: ${esc(id.market.name)}`)}</div></div>
+        ${id.how === "mismatch" ? `<button class="btn small no-print" type="button" data-id-confirm="${esc(p.id)}">${t("Это та же бумага", "Same security")}</button>` : ""}</li>`; }).join("")}</ul>` : ""}</details>
+  </div>`;
+}
+// Подтверждение человека сохраняется в выписках отчёта — у всех позиций этой бумаги (тот же тикер и название).
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-id-confirm]"); if(!b || !S.P) return;
+  const p = S.P.positions.find(x => x.id === b.dataset.idConfirm); if(!p) return;
+  const id = WL.idOf(S.P, p); if(!id.market) return;
+  const key = secKey(p), mark = {ticker: p.type === "option" ? p.underlying : p.symbol, name: id.market.name};
+  S.docs.forEach(d => (d.positions || []).forEach(q => { if(secKey(q) === key) q.idUser = mark; }));
+  save();
+  toast(t(`${mark.ticker}: сопоставлено с ${mark.name} — подставляю текущую цену`, `${mark.ticker}: matched to ${mark.name} — loading the current price`));
+  renderNow(); liveSoon(0);
+});
 function renderDemoBar(){
   const el = $("#demoBar"); if(!el) return;
   // ?shot — снимок для лендинга (site/shots.py): там своя подпись, полоса демо не нужна
@@ -650,7 +737,7 @@ function addFiles(files){
   if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
   if(S.demo) leaveDemo();
   list.forEach(f => Q.items.push({id: ++Q.seq, file: f, name: f.name, state: "queued", text: t("в очереди", "queued")}));
-  Q.hidden = false;
+  Q.hidden = false; Q.trayOpen = false;
   renderTray(true);
   if(Q.running) readQueued(Q.gen);
   runQueue();
@@ -1231,6 +1318,7 @@ function renderTray(show){
       const x = e.target.closest("button"); if(!x) return;
       if(x.dataset.tray === "close") closeTray();
       if(x.dataset.tray === "add") $("#file").click();
+      if(x.dataset.tray === "toggle"){ Q.trayOpen = !Q.trayOpen; renderTray(); }
       if(x.dataset.cancel){ const it = Q.items.find(i => i.id === +x.dataset.cancel);
         if(it && it.abort && !it.abort.signal.aborted){ it.abort.abort(); it.text = t("отменяю…", "cancelling…"); renderTray(); } }
     });
@@ -1241,8 +1329,15 @@ function renderTray(show){
   const bad = items.some(x => x.state === "error" || x.state === "partial");
   const title = active ? t(`Загружаю выписки · ${items.length - active} из ${items.length}`, `Uploading statements · ${items.length - active} of ${items.length}`)
     : ok ? t(`Добавлено ${ok} из ${items.length}`, `Added ${ok} of ${items.length}`) : t("Ничего не добавлено", "Nothing was added");
-  el.innerHTML = `<div class="ut-head"><b>${esc(title)}</b><span class="spacer"></span>
-      ${active ? "" : `<button class="btn small" type="button" data-tray="add">${t("Добавить ещё", "Add more")}</button>`}
+  // Загрузка закончилась — лоток сворачивается в строку, чтобы не закрывать кнопки отчёта; ошибки видны по счётчику.
+  const errs = items.filter(x => x.state === "error").length, warns = items.filter(x => x.state === "partial").length;
+  const compact = !active && !Q.trayOpen;
+  el.classList.toggle("compact", compact);
+  el.innerHTML = `<div class="ut-head"><b>${esc(title)}</b>
+      ${!active && errs ? `<span class="ut-count err">${errs} ${WL.pl(errs, ["ошибка", "ошибки", "ошибок"], ["error", "errors"])}</span>` : ""}
+      ${!active && warns ? `<span class="ut-count warn">${warns} ${t("с пометкой", "flagged")}</span>` : ""}<span class="spacer"></span>
+      ${active ? "" : `<button class="btn small" type="button" data-tray="toggle" aria-expanded="${!compact}">${compact ? t("Подробнее", "Details") : t("Свернуть", "Collapse")}</button>`}
+      ${active || compact ? "" : `<button class="btn small" type="button" data-tray="add">${t("Добавить ещё", "Add more")}</button>`}
       <button class="ut-x" type="button" data-tray="close" aria-label="${t("Скрыть", "Hide")}">×</button></div>
     ${active ? `<div class="ut-bar"><i style="width:${Math.round((items.length - active) / items.length * 100)}%"></i></div>` : ""}
     <ul class="ut-list">${items.map(x => `<li class="ut-item ${x.state}">
@@ -1300,7 +1395,8 @@ function leaveDemo(){
 let historyTimer = null;
 async function loadHistory(attempt = 0){
   const P = S.P; if(!P) return;
-  const syms = [...new Set(P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").map(p => p.symbol))];
+  // История цен — только подтверждённых бумаг: график «как шли акции портфеля» не должен рисовать чужую компанию.
+  const syms = [...new Set(P.positions.filter(p => WL.eq(p) && p.ccy === "USD").map(p => WL.quoteSymbol(P, p)).filter(Boolean))];
   await WL.fetchHistory(P, [S.bench, ...syms]);   // бенчмарк первым: график нужен даже при частичной истории
   if(P !== S.P) return;
   renderHero(); renderPositions(); renderChart();
@@ -1330,8 +1426,19 @@ function renderNow(){
   S.P = buildSafe();
   if(!S.docs.length){ S.P = null; renderUpload(); return; }
   if(prev){ S.P.history = prev.history || {}; S.P.historyStatus = prev.historyStatus; }
+  // Демо живёт на текущих ценах: у вымышленных выписок нет своих цен, и снимок показал бы пустой портфель.
+  S.P.basis = S.demo ? "now" : S.basis;
   WL.applyLiveCache(S.P);
   renderApp();
+}
+// Основание оценки: «оценка сейчас» или «снимок выписок». Запоминается в браузере; в снимке нужны курсы на дату выписки.
+function setValuation(b){
+  if(!S.P || (b !== "now" && b !== "stmt") || S.basis === b) return;
+  S.basis = b; S.P.basis = b;
+  try{ localStorage.setItem("wl_basis", b); }catch(e){}
+  renderApp();
+  if(b === "stmt"){ const P = S.P; WL.fetchFxAt(P).then(() => { if(P === S.P) renderApp(); }); }
+  announce(b === "stmt" ? t("Показан снимок выписок", "Showing the statement snapshot") : t("Показана оценка сейчас", "Showing the current valuation"));
 }
 function liveSoon(ms = 600){
   clearTimeout(liveTimer);
@@ -1364,6 +1471,7 @@ function renderApp(){
     $("#app").innerHTML = `
       <div id="demoBar"></div>
       <div id="qualityBar"></div>
+      <div id="idBar"></div>
       <div class="print-head"><h1 id="printTitle"></h1><p class="muted" id="printSub"></p></div>
       <div class="hero"><div class="card broker total" id="total"></div><div class="brokers" id="brokers"></div></div>
       <section><div class="sec-h"><h2>${t("Главное", "Key findings")}</h2><span class="aside">${t("выводы только по тому, что есть в выписках и котировках", "based only on what the statements and quotes show")}</span></div><div class="insights" id="insights"></div></section>
@@ -1390,7 +1498,7 @@ function renderApp(){
   }
   $("#bench").value = S.bench;
   renderHero(); renderInsights(); renderStructure(); renderTimeline(); renderControls(); renderPositions(); renderChart(); renderDocs();
-  renderPaywall(); renderDemoBar(); renderQuality();
+  renderPaywall(); renderDemoBar(); renderQuality(); renderIdentity();
   setBuyDisabled(checkoutBusy);
   // Открытая карточка позиции показывает свежие данные, а не цены до пересборки.
   if(S.drawerId && $("#drawer").classList.contains("open")){
@@ -1398,17 +1506,58 @@ function renderApp(){
   }
 }
 
+/* Основание суммы — одна строка для заголовка, карточек, структуры и PDF. Оценка сейчас честно называет себя смешанной,
+   если хоть одна цена или курс уже не из выписки, а часть сумм — ещё из выписок, независимо от доли и знака позиций.
+   Рядом — контрольный итог самих выписок (цены выписок, курс ЕЦБ на дату выписки): с ним сверяется банк. */
+function valuation(P){
+  const stmt = P.basis === "stmt", dates = [...new Set(S.docs.map(d => fmt.date(d.asOf)))].join(", ");
+  const priced = P.positions.filter(p => p.type !== "cash" && WL.current(P, p).value != null);
+  const live = priced.filter(p => WL.current(P, p).live), fromStmt = priced.length - live.length;
+  const foreign = P.positions.filter(p => p.ccy && p.ccy !== "USD" && WL.current(P, p).value != null);
+  const missingFx = [...new Set(foreign.filter(p => WL.usd(P, p.ccy, p) == null).map(p => p.ccy))];
+  const liveAt = live.length && P.live && P.live.at ? new Date(P.live.at) : null;
+  const hhmm = liveAt ? `${pad(liveAt.getHours())}:${pad(liveAt.getMinutes())}` : "";
+  const fxNowDate = P.live && P.live.fxDate ? fmt.date(P.live.fxDate) : null;
+  const fxStmtDates = [...new Set(foreign.map(p => P.fxAt && P.fxAt[p.asOf] && P.fxAt[p.asOf].date).filter(Boolean))].map(fmt.date).join(", ");
+  const n = k => `${k} ${WL.pl(k, ["позиции", "позиций", "позиций"], ["position", "positions"])}`;
+  let mode, line;
+  if(stmt){
+    mode = "stmt";
+    // Позиции без стоимости в самой выписке (выгрузка только с количеством) в снимок не входят — так и пишем.
+    const noValue = P.positions.filter(p => p.type !== "cash" && !p.accruedLine && p.value == null).length;
+    line = t(`Снимок выписок на ${dates}${foreign.length ? ` · валюты по курсу ЕЦБ${fxStmtDates ? ` на ${fxStmtDates}` : ""}` : ""}${noValue ? ` · без стоимости в выписке: ${n(noValue)}` : ""}`,
+             `Statement snapshot as of ${dates}${foreign.length ? ` · currencies at ECB rates${fxStmtDates ? ` as of ${fxStmtDates}` : ""}` : ""}${noValue ? ` · no value in the statement: ${n(noValue)}` : ""}`);
+  } else if(!live.length && !foreign.length){
+    mode = "stmt-only";
+    line = t(`По ценам выписок на ${dates}: текущих цен для этих бумаг нет`, `At statement prices as of ${dates}: no current prices for these holdings`);
+  } else if(live.length && !fromStmt && !foreign.length){
+    mode = "live";
+    line = t(`По текущим ценам CBOE${hhmm ? `, получены в ${hhmm}` : ""}`, `At current CBOE prices${hhmm ? `, retrieved at ${hhmm}` : ""}`);
+  } else {
+    mode = "mixed";
+    line = t(`Смешанная оценка: ${live.length ? `текущие цены CBOE для ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `цены выписок на ${dates} для ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}валюты по текущему курсу ЕЦБ${fxNowDate ? ` на ${fxNowDate}` : ""}` : ""}`,
+             `Mixed valuation: ${live.length ? `current CBOE prices for ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `statement prices as of ${dates} for ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}currencies at the current ECB rate${fxNowDate ? ` as of ${fxNowDate}` : ""}` : ""}`);
+  }
+  // Контрольный итог выписок: стоимости из выписок, валюты по курсу ЕЦБ на дату выписки.
+  let control = 0, controlGap = [], controlMissing = 0;
+  P.positions.forEach(p => { if(p.value == null){ if(p.type !== "cash") controlMissing++; return; }
+    if(p.ccy === "USD"){ control += p.value; return; }
+    const f = P.fxAt && P.fxAt[p.asOf]; if(f && f.rates[p.ccy]) control += p.value / f.rates[p.ccy]; else controlGap.push(p.ccy); });
+  return {mode, line, missingFx, control, controlGap: [...new Set(controlGap)], controlMissing, live: live.length};
+}
 function renderHero(){
   const P = S.P;
   const byDoc = P.docs.map(d => {
     const ps = P.positions.filter(p => p.source === d.fileName);
-    const usd = ps.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? a + v * k : a; }, 0);
+    const usd = ps.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? a + v * k : a; }, 0);
+    // Доля в портфеле — от активов (положительных позиций), как в «Структуре»: проданный опцион — обязательство.
+    const pos = ps.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null && v * k > 0 ? a + v * k : a; }, 0);
     const day = ps.reduce((a, p) => { const c = WL.eq(p) ? WL.change(P, p, "1d") : null; return c ? a + c.abs : a; }, 0);
-    return {d, ps, usd, day, stale: WL.days(d.asOf, P.today) > 45, live: ps.some(p => p.live)};
+    const priced = ps.filter(p => p.type !== "cash" && WL.current(P, p).value != null), nLive = priced.filter(p => WL.current(P, p).live).length;
+    return {d, ps, usd, pos, day, stale: WL.days(d.asOf, P.today) > 45, nLive, allLive: priced.length > 0 && nLive === priced.length};
   });
   const total = byDoc.reduce((a, x) => a + x.usd, 0), day = byDoc.reduce((a, x) => a + x.day, 0);
-  // Доли — от суммы положительных позиций, как в «Структуре»: проданный опцион — обязательство, а не часть состава.
-  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? v * k : null; };
+  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? v * k : null; };
   const assets = P.positions.reduce((a, p) => a + Math.max(usdOf(p) || 0, 0), 0);
   const pctLabel = v => v < 1 ? "<1%" : Math.round(v) + "%";
   const MIX = [["stock", t("Акции", "Stocks")], ["fund", t("Фонды", "Funds")], ["bond", t("Облигации", "Bonds")],
@@ -1420,24 +1569,25 @@ function renderHero(){
   const mixHtml = mix.length < 2 ? "" : `<div class="mix" role="img" aria-label="${esc(t("Состав портфеля: ", "Portfolio mix: ") + mix.map(m => `${m.label} ${pctLabel(m.share)}`).join(", "))}">
       <div class="mix-bar">${mix.map(m => `<i style="flex-grow:${m.share.toFixed(3)};--c:var(--cls-${m.k})" title="${esc(m.label)} · ${pctLabel(m.share)}"></i>`).join("")}</div>
       <ul class="mix-legend" aria-hidden="true">${mix.map(m => `<li><span class="k" style="--c:var(--cls-${m.k})"></span>${esc(m.label)} <b>${pctLabel(m.share)}</b></li>`).join("")}</ul></div>`;
-  const mixed = byDoc.some(x => x.stale) && byDoc.some(x => !x.stale);
-  // «По текущим ценам» — только если это правда: у облигаций, нот и бумаг без тикера цена из выписки.
-  const liveUsd = P.positions.reduce((a, p) => { const c = WL.current(P, p), k = WL.usd(P, p.ccy); return c.live && c.value > 0 && k != null ? a + c.value * k : a; }, 0);
-  const liveShare = assets > 0 ? liveUsd / assets : 0, stmtDates = [...new Set(S.docs.map(d => fmt.date(d.asOf)))].join(", ");
-  const priced = !P.live || liveShare < 0.005 ? t(`по ценам выписок на ${stmtDates}`, `at statement prices as of ${stmtDates}`)
-    : liveShare >= 0.995 ? t("по текущим ценам", "at current prices")
-    : t(`${Math.round(liveShare * 100)}% стоимости — по текущим ценам, остальное — по ценам выписок`, `${Math.round(liveShare * 100)}% of the value at current prices, the rest at statement prices`);
+  const V = valuation(P), stmt = P.basis === "stmt";
   // Без связи с сервером данных суммы честно считаются по выпискам, а позиции в других
   // валютах не пересчитать — об этом надо сказать, а не молча выкинуть их из итога.
-  const warn = !P.live ? [] : [!P.live.ok && t("Сервер котировок не ответил: суммы по ценам из выписок", "Quote server did not respond: amounts use statement prices"),
-    !P.live.fx && P.positions.some(p => p.ccy !== "USD") && t("курсы валют не загрузились: позиции не в долларах в итог не вошли", "exchange rates did not load: non-USD positions are left out of the total")].filter(Boolean);
-  $("#total").innerHTML = `<div class="eyebrow">${t("Всего в долларах", "Total in USD")}</div>
+  const warn = [!stmt && P.live && !P.live.ok && t("Сервер котировок не ответил: суммы по ценам из выписок", "Quote server did not respond: amounts use statement prices"),
+    V.missingFx.length && (stmt ? t(`курс ЕЦБ на дату выписки для ${V.missingFx.join(", ")} не загрузился: эти позиции в итог не вошли`, `the ECB rate on the statement date for ${V.missingFx.join(", ")} did not load: those positions are left out of the total`)
+      : P.live ? t(`курсы валют не загрузились: позиции в ${V.missingFx.join(", ")} в итог не вошли`, `exchange rates did not load: positions in ${V.missingFx.join(", ")} are left out of the total`) : "")].filter(Boolean);
+  const showControl = !S.demo && !stmt && V.mode !== "stmt-only" && Math.abs(V.control - total) >= 1;
+  $("#total").innerHTML = `<div class="total-top"><div class="eyebrow">${t("Всего в долларах", "Total in USD")}</div>
+      <div class="seg basis no-print" role="group" aria-label="${t("Основание оценки", "Valuation basis")}"${S.demo ? " hidden" : ""}>
+        <button type="button" data-basis="now" aria-pressed="${!stmt}">${t("Оценка сейчас", "Value now")}</button>
+        <button type="button" data-basis="stmt" aria-pressed="${stmt}">${t("Снимок выписок", "Statement snapshot")}</button></div></div>
     <div class="value">${fmt.money(total, "USD", 0)}</div>
-    <div class="sub">${mixed ? byDoc.map(x => `${esc(x.d.brokerShort)} — ${x.stale ? t("на ", "as of ") + fmt.date(x.d.asOf) : t("сейчас", "now")}`).join(" · ") : priced}</div>
-    ${P.live && day ? `<div class="sub" style="margin-top:6px">${t("За день:", "Day change:")} <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">${t("по акциям, котировки CBOE", "on stocks, CBOE quotes")}</span></div>` : ""}
-    ${!P.live ? `<div class="sub muted" style="margin-top:6px">${t("Загружаю текущие цены…", "Loading current prices…")}</div>` : ""}
+    <div class="sub basis-line ${V.mode}">${esc(V.line)}</div>
+    ${showControl ? `<div class="sub muted control">${t("Итог самих выписок", "Statements' own total")}: <b>${fmt.money(V.control, "USD", 0)}</b>${V.controlGap.length ? t(` без позиций в ${V.controlGap.join(", ")}`, ` excluding ${V.controlGap.join(", ")} positions`) : ""}${V.controlMissing ? t(`; у ${V.controlMissing} ${WL.pl(V.controlMissing, ["позиции", "позиций", "позиций"], ["position", "positions"])} стоимости в выписке нет`, `; ${V.controlMissing} ${WL.pl(V.controlMissing, ["", "", ""], ["position has", "positions have"])} no value in the statement`) : ""}</div>` : ""}
+    ${!stmt && P.live && day ? `<div class="sub" style="margin-top:6px">${t("За день:", "Day change:")} <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">${t("по акциям, котировки CBOE", "on stocks, CBOE quotes")}</span></div>` : ""}
+    ${!stmt && !P.live ? `<div class="sub muted" style="margin-top:6px">${t("Загружаю текущие цены…", "Loading current prices…")}</div>` : ""}
     ${warn.length ? `<div class="sub down" style="margin-top:6px">${esc(warn.join("; "))}.</div>` : ""}
     ${mixHtml}`;
+  $("#total").querySelectorAll("[data-basis]").forEach(b => { b.onclick = () => setValuation(b.dataset.basis); });
   $("#brokers").className = `brokers n${byDoc.length}`;
   $("#brokers").innerHTML = byDoc.map(x => {
     // Карточка счёта говорит то же, что «Документы» и плашка над отчётом: сверено, итога нет или есть пропуски.
@@ -1445,15 +1595,19 @@ function renderHero(){
     const chip = q.status === "partial" ? `<span class="pill bad" title="${esc(q.issues.map(i => typeof i === "string" ? i : i.label).join("; "))}">${t("есть пропуски", "gaps found")}</span>`
       : q.status === "unverified" ? `<span class="pill">${t("итог не сверен", "total not reconciled")}</span>`
       : `<span class="pill ok">${x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`;
+    // Основание суммы карточки — то же, что у заголовка: снимок, текущие цены или смешанная оценка.
+    const basisPill = stmt ? `<span class="pill">${t("снимок выписки", "statement snapshot")}</span>`
+      : x.allLive ? `<span class="pill live">${t("цены сейчас", "live prices")}</span>`
+      : x.nLive ? `<span class="pill live">${t("смешанная оценка", "mixed valuation")}</span>` : "";
     return `<div class="card broker" data-file="${esc(x.d.fileName)}"><div class="name">${esc(x.d.broker)}
         ${x.d.from === "demo" && q.status !== "partial" ? "" : chip}
-        ${x.stale ? `<span class="pill stale">${t(`${WL.days(x.d.asOf, P.today)} дн. назад`, `${WL.days(x.d.asOf, P.today)} days old`)}</span>` : x.live ? `<span class="pill live">${t("цены сейчас", "live prices")}</span>` : ""}</div>
+        ${x.stale ? `<span class="pill stale">${t(`${WL.days(x.d.asOf, P.today)} дн. назад`, `${WL.days(x.d.asOf, P.today)} days old`)}</span>` : ""}${basisPill}</div>
       <div class="v">${fmt.money(x.usd, "USD", 0)}</div>
       <div class="meta">${x.d.kind === "ledger" ? t(`журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`, `transaction log ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`)
         : t(`${x.d.from === "sheet" ? "выгрузка" : x.d.from === "demo" ? "данные" : "выписка"} на ${fmt.date(x.d.asOf)}`,
             `${x.d.from === "sheet" ? "export" : x.d.from === "demo" ? "data" : "statement"} as of ${fmt.date(x.d.asOf)}`)} ·
         ${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</div>
-      ${byDoc.length > 1 && assets > 0 && x.usd > 0 ? `<div class="share" title="${esc(t("доля в портфеле", "share of the portfolio"))}"><span class="trk"><i style="width:${Math.min(100, Math.max(x.usd / assets * 100, 1)).toFixed(1)}%"></i></span><b>${pctLabel(x.usd / assets * 100)}</b></div>` : ""}</div>`;
+      ${byDoc.length > 1 && assets > 0 && x.pos > 0 ? `<div class="share" title="${esc(t("доля в активах портфеля (без обязательств)", "share of portfolio assets (excluding liabilities)"))}"><span class="trk"><i style="width:${Math.min(100, Math.max(x.pos / assets * 100, 1)).toFixed(1)}%"></i></span><b>${pctLabel(x.pos / assets * 100)}</b></div>` : ""}</div>`;
   }).join("");
   keepFlash();
   $("#printTitle").textContent = t(`${S.client} — портфель`, `${S.client} — portfolio`);
@@ -1461,27 +1615,32 @@ function renderHero(){
     `Report as of ${fmt.date(TODAY)} · ${S.docs.map(d => `${d.brokerShort}: ${d.kind === "ledger" ? "transaction log to" : "statement as of"} ${fmt.date(d.asOf)}`).join(" · ")}`);
 }
 
-/* Структура: куда разложены деньги клиента — по брокерам, типам и валютам. Доли считаются
-   от суммы положительных позиций; проданные опционы имеют отрицательную стоимость и
-   показываются суммой без доли. Фьючерсы учтены через деньги счёта. */
+/* Структура: куда разложены активы клиента — по брокерам, типам и валютам. Доли — от активов (положительных позиций),
+   поэтому один брокер или одна валюта — это 100%. Обязательства (проданные опционы, отрицательные остатки) в доли не
+   входят и показываются отдельной строкой со своей суммой: смешивать чистую стоимость и активы в одной доле нельзя.
+   Фьючерсы учтены через деньги счёта. */
 function renderStructure(){
   const P = S.P, el = $("#structure"); if(!P || !el) return;
-  const rows = P.positions.map(p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return {p, usd: v != null && k != null ? v * k : null}; })
+  const rows = P.positions.map(p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return {p, usd: v != null && k != null ? v * k : null}; })
     .filter(x => x.usd != null);
-  const assets = rows.reduce((a, x) => a + Math.max(x.usd, 0), 0);
-  const group = key => { const m = new Map(); rows.forEach(x => m.set(key(x.p), (m.get(key(x.p)) || 0) + x.usd)); return [...m].sort((a, b) => b[1] - a[1]); };
+  const assets = rows.reduce((a, x) => a + Math.max(x.usd, 0), 0), liabilities = rows.reduce((a, x) => a + Math.min(x.usd, 0), 0);
+  const group = key => { const m = new Map(); rows.forEach(x => { if(x.usd > 0) m.set(key(x.p), (m.get(key(x.p)) || 0) + x.usd); }); return [...m].sort((a, b) => b[1] - a[1]); };
   // Один ряд — одна сущность, и цвет у типа тот же, что в сводке и в группах таблицы; брокеры и валюты — одним золотом.
   const TYPE = {stock: t("Акции", "Stocks"), fund: t("Фонды", "Funds"), bond: t("Облигации", "Bonds"), note: t("Структурные ноты", "Structured notes"), other: t("Прочее", "Other"),
-    option: t("Опционы проданные", "Short options"), future: t("Фьючерсы", "Futures"), cash: t("Деньги", "Cash")};
-  const block = (title, items, color) => `<div class="card sblock"><div class="eyebrow">${title}</div>` + items.map(([key, v]) => {
-    const share = v > 0 && assets ? v / assets * 100 : null, name = color ? TYPE[key] || key : key;
-    return `<div class="srow"><div class="sname">${esc(name)}</div><div class="sbar">${share != null ? `<i style="width:${Math.max(share, 0.6).toFixed(1)}%${color ? `;--c:var(--cls-${WL.clsKey(key)})` : ""}"></i>` : ""}</div>` +
-      `<div class="sval ${v < 0 ? "down" : ""}">${fmt.short(v)}</div><div class="spct">${share != null ? Math.round(share) + "%" : "—"}</div></div>`;
-  }).join("") + `</div>`;
+    option: t("Опционы", "Options"), future: t("Фьючерсы", "Futures"), cash: t("Деньги", "Cash")};
+  const row = (name, v, share, color) => `<div class="srow"><div class="sname">${esc(name)}</div><div class="sbar">${share != null ? `<i style="width:${Math.max(share, 0.6).toFixed(1)}%${color ? `;--c:var(--cls-${color})` : ""}"></i>` : ""}</div>` +
+    `<div class="sval ${v < 0 ? "down" : ""}">${fmt.short(v)}</div><div class="spct">${share != null ? (share < 1 ? "<1%" : Math.round(share) + "%") : "—"}</div></div>`;
+  const debts = rows.filter(x => x.usd < 0);
+  const debtRow = debts.length ? `<div class="srow debt"><div class="sname">${t("Обязательства", "Liabilities")}</div><div class="sbar"></div>` +
+    `<div class="sval down">${fmt.short(liabilities)}</div><div class="spct" title="${esc(t("в доли активов не входят", "not included in asset shares"))}">—</div></div>` : "";
+  const block = (title, items, color) => `<div class="card sblock"><div class="eyebrow">${title}</div>` +
+    items.map(([key, v]) => row(color ? TYPE[key] || key : key, v, assets ? v / assets * 100 : null, color ? WL.clsKey(key) : null)).join("") + debtRow + `</div>`;
   el.innerHTML = block(t("По брокерам", "By broker"), group(p => p.brokerShort)) + block(t("По типам", "By type"), group(p => p.type), true) + block(t("По валютам", "By currency"), group(p => p.ccy));
-  const stale = P.docs.filter(d => WL.days(d.asOf, P.today) > 45);
-  $("#structAside").textContent = t(`в долларах${stale.length ? `; ${stale.map(d => `${d.brokerShort} — на ${fmt.date(d.asOf)}`).join(", ")}` : " по текущим ценам"}; фьючерсы учтены через деньги счёта`,
-    `in USD${stale.length ? `; ${stale.map(d => `${d.brokerShort} as of ${fmt.date(d.asOf)}`).join(", ")}` : " at current prices"}; futures are counted through account cash`);
+  const V = valuation(P), stale = P.docs.filter(d => WL.days(d.asOf, P.today) > 45);
+  const basis = V.mode === "stmt" ? t("снимок выписок", "statement snapshot") : V.mode === "live" ? t("по текущим ценам", "at current prices")
+    : V.mode === "mixed" ? t("смешанная оценка", "mixed valuation") : t("по ценам выписок", "at statement prices");
+  $("#structAside").textContent = t(`в долларах, ${basis}; доли — от активов ${fmt.short(assets)}${debts.length ? `, обязательства ${fmt.short(liabilities)} — отдельно` : ""}${stale.length ? `; ${stale.map(d => `${d.brokerShort} — на ${fmt.date(d.asOf)}`).join(", ")}` : ""}; фьючерсы учтены через деньги счёта`,
+    `in USD, ${basis}; shares of assets ${fmt.short(assets)}${debts.length ? `, liabilities ${fmt.short(liabilities)} shown separately` : ""}${stale.length ? `; ${stale.map(d => `${d.brokerShort} as of ${fmt.date(d.asOf)}`).join(", ")}` : ""}; futures are counted through account cash`);
 }
 
 function renderInsights(){
@@ -1501,7 +1660,7 @@ function renderTimeline(){
   const row = e => {
     const p = posById.get(e.posId), d = WL.days(T, e.date);
     let status = "";
-    if(d >= 0 && p && p.type === "option" && p.underlyingLive != null){
+    if(d >= 0 && p && p.type === "option" && p.underlyingLive != null && S.P.basis !== "stmt"){
       const itm = p.right === "C" ? p.underlyingLive > p.strike : p.underlyingLive < p.strike;
       status = `<span class="pill ${itm ? "bad" : "ok"}">${itm ? t("в деньгах", "in the money") : t("вне денег", "out of the money")}</span>`;
     }
@@ -1545,9 +1704,12 @@ function renderControls(){
 function renderPositions(){
   S.cap = locked() ? 3 : Infinity;
   WL.renderPositions($("#positions"), S.P, S);
-  const L = S.P.live;
-  $("#posAside").textContent = !L ? t("цены из выписок", "statement prices") : !L.ok ? t("цены из выписок: сервер котировок не ответил", "statement prices: quote server did not respond") :
-    `${t("текущие цены CBOE с задержкой", "delayed CBOE prices")} · ${L.fxDate ? t(`курсы ЕЦБ на ${fmt.date(L.fxDate)}`, `ECB rates as of ${fmt.date(L.fxDate)}`) : t("курсы валют не загрузились", "exchange rates did not load")}`;
+  const L = S.P.live, V = valuation(S.P);
+  // Подпись таблицы — то же основание, что у итога: снимок, текущие цены или смешанная оценка.
+  $("#posAside").textContent = S.P.basis === "stmt" ? t("снимок выписок: цены выписок, курсы ЕЦБ на дату выписки", "statement snapshot: statement prices, ECB rates on the statement date")
+    : !L ? t("цены из выписок", "statement prices") : !L.ok ? t("цены из выписок: сервер котировок не ответил", "statement prices: quote server did not respond")
+    : `${V.mode === "mixed" ? t("смешанная оценка: текущие цены CBOE с задержкой там, где бумага сопоставлена с биржей, остальное — из выписок", "mixed valuation: delayed CBOE prices where the holding is matched to a listing, statement prices elsewhere")
+        : V.mode === "live" ? t("текущие цены CBOE с задержкой", "delayed CBOE prices") : t("цены из выписок", "statement prices")} · ${L.fxDate ? t(`курсы ЕЦБ на ${fmt.date(L.fxDate)}`, `ECB rates as of ${fmt.date(L.fxDate)}`) : t("курсы валют не загрузились", "exchange rates did not load")}`;
   renderPrintExtras();
 }
 
@@ -1564,7 +1726,7 @@ function renderPrintExtras(){
     let abs = 0, covered = 0, countable = 0;
     P.positions.filter(p => p.type !== "cash").forEach(p => {
       countable++;
-      const c = WL.change(P, p, per.id), k = WL.usd(P, p.ccy);
+      const c = WL.change(P, p, per.id), k = WL.usd(P, p.ccy, p);
       if(c && k != null){ covered++; abs += c.abs * k; }
     });
     return {per, abs, covered, countable};
@@ -1577,7 +1739,11 @@ function renderPrintExtras(){
   const at = !liveAt ? null : EN
     ? `${fmt.date(`${liveAt.getFullYear()}-${pad(liveAt.getMonth() + 1)}-${pad(liveAt.getDate())}`)}, ${pad(liveAt.getHours())}:${pad(liveAt.getMinutes())}`
     : liveAt.toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"});
-  pn.innerHTML = `<div class="sec-h"><h2>${t("Источники и оговорки", "Sources and caveats")}</h2></div><div class="card doc"><ul class="notes">${t(`
+  const V = valuation(P);
+  const basisNote = `<li><b>${t("Основание оценки:", "Valuation basis:")}</b> ${esc(V.line)}.${!S.demo && P.basis !== "stmt" && Math.abs(V.control - P.positions.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? a + v * k : a; }, 0)) >= 1
+    ? t(` Итог самих выписок: ${fmt.money(V.control, "USD", 0)}.`, ` The statements' own total: ${fmt.money(V.control, "USD", 0)}.`) : ""} ${t("Текущая цена подставляется только бумагам, сопоставленным с биржей США по ISIN, названию, выписке американского брокера или вашему подтверждению; остальные — по выпискам.",
+      "A current price is used only for holdings matched to a US listing by ISIN, name, a US broker's statement or your confirmation; the rest use statement values.")}</li>`;
+  pn.innerHTML = `<div class="sec-h"><h2>${t("Источники и оговорки", "Sources and caveats")}</h2></div><div class="card doc"><ul class="notes">${basisNote}${t(`
     <li>Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».</li>
     <li>${at ? `Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}. ${P.live.fxDate ? `Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.` : "Курсы валют не загрузились."}` : "Текущие цены не загружались: все суммы — по данным выписок."}</li>
     <li>История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.</li>
@@ -1799,7 +1965,7 @@ function openDrawer(id, quiet){
   const P = S.P, p = P && P.positions.find(x => x.id === id); if(!p) return;
   const hadFocus = $("#drawer").contains(document.activeElement);
   S.drawerId = id;
-  const cur = WL.current(P, p), k = WL.usd(P, p.ccy);
+  const cur = WL.current(P, p), k = WL.usd(P, p.ccy, p);
   const kv = [];
   const add = (label, v) => { if(v != null && v !== "") kv.push(`<dt>${label}</dt><dd>${v}</dd>`); };
   const NOT_IN = t("нет в выписке", "not in statement");
@@ -1828,6 +1994,22 @@ function openDrawer(id, quiet){
   if(p.coupon != null) add(t("Купон", "Coupon"), `${fmt.dec(p.coupon, 3).replace(/[,.]?0+$/, "")}%`);
   if(p.accruedRef != null) add(t("Накопленный купонный доход", "Accrued interest"), fmt.money(p.accruedRef, p.refCcy || p.ccy));
   if(p.isin) add("ISIN", esc(p.isin));
+  // Какая бумага стоит за тикером и почему ей подставлена (или нет) текущая цена.
+  const idn = (WL.eq(p) || p.type === "option") && p.ccy === "USD" ? WL.idOf(P, p) : null;
+  if(idn && idn.how !== "none"){
+    const mk = idn.market ? `${esc(idn.market.name)}${idn.market.ticker ? ` · ${esc(idn.market.ticker)}` : ""}` : "";
+    add(t("Бумага на бирже", "Exchange listing"), ({
+      source: t("тикер биржи США из выписки брокера", "US exchange ticker from the broker's statement"),
+      isin: t(`${mk} — сопоставлено по ISIN`, `${mk} — matched by ISIN`),
+      name: t(`${mk} — совпало название`, `${mk} — the name matches`),
+      user: t(`${mk} — подтверждено вами`, `${mk} — confirmed by you`),
+      underlying: t("базовый актив сопоставлен в отчёте", "the underlying is matched in this report"),
+      mismatch: `<span class="unk">${t(`под тикером на бирже — ${mk}; не подтверждено, цена из выписки`, `listed under this ticker: ${mk}; not confirmed, statement price used`)}</span>`,
+      notfound: `<span class="unk">${t("на биржах США не найдена — цена из выписки", "not found on US exchanges — statement price used")}</span>`,
+      pending: `<span class="unk">${t("сопоставляю с биржей…", "matching to exchange listings…")}</span>`,
+      error: `<span class="unk">${t("справочник бумаг не ответил — цена из выписки", "the securities reference did not respond — statement price used")}</span>`,
+    })[idn.how]);
+  }
   if(p.purchaseNote) add(t("Последняя покупка", "Last purchase"), esc(p.purchaseNote));
   if(p.expiry) add(p.type === "future" ? t("Последний торговый день", "Last trading day") : t("Экспирация", "Expiry"), fmt.date(p.expiry) + (p.type === "option" ? unconf("maturity") : ""));
   if(p.type === "option" && !p.occ && p.strike != null) add(t("Страйк", "Strike"), fmt.px(p.strike) + unconf("strike"));
@@ -1869,7 +2051,9 @@ document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest("[data-buy]");
   if(b && !b.disabled){ e.preventDefault(); openCheckout(b.dataset.buy); }
 });
-window.addEventListener("beforeprint", () => { if(locked()) track("PrintBlocked", {}); });
+// В PDF пояснения к плашкам раскрыты: закрытое <details> не печатается.
+window.addEventListener("beforeprint", () => { if(locked()) track("PrintBlocked", {}); document.querySelectorAll("details.q-more:not([open])").forEach(d => { d.open = true; d.dataset.printOpened = "1"; }); });
+window.addEventListener("afterprint", () => { document.querySelectorAll("details.q-more[data-print-opened]").forEach(d => { d.open = false; delete d.dataset.printOpened; }); });
 $("#resetBtn").onclick = () => {
   if(S.demo){ location.href = HOME; return; }
   const paid = !!(S.rid && unlocks()[S.rid]);
@@ -1916,7 +2100,7 @@ window.addEventListener("pageshow", e => { if(!e.persisted) return; leaving = fa
 // Тот же отчёт открыт в другой вкладке и там его поменяли: показываем актуальное, а не перезаписываем чужие изменения.
 window.addEventListener("storage", e => {
   if(S.demo) return;
-  if(e.key === UNLOCKS){ if(S.P) renderApp(); return; }
+  if(e.key === UNLOCKS){ primeGrant().then(() => { if(S.P) renderApp(); }); return; }
   if(e.key !== STORE) return;
   if(Q.running || MODALS.length){ toast(t("Отчёт изменили в другой вкладке. Обновите страницу, когда закончите здесь.", "The report was changed in another tab. Reload the page when you are done here.")); return; }
   S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; Q.aiOk = false;
@@ -1938,6 +2122,8 @@ WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
   if(S.rid && !S.docs.length) setAiAllowed(false);
   await handlePaymentReturn();
   if(!S.docs.length) return renderUpload();
+  // Разрешение на доступ проверяется до первой отрисовки: оплаченный отчёт не мигает пейволлом.
+  await primeGrant();
   await recoverPendingPayment();
   if(locked()) track("ViewContent", {content_name: "report_preview", value: PRICE.amount, currency: PRICE.currency});
   checkUnlock();

@@ -18,7 +18,7 @@ const NO_DATA = () => WL.t("нет данных за этот период", "no
 const IN_CASH = () => WL.t("в деньгах счёта", "in account cash");
 
 function row(P, p, per){
-  const k = WL.usd(P, p.ccy), cur = WL.current(P, p), doc = P.docs.find(d => d.fileName === p.source);
+  const k = WL.usd(P, p.ccy, p), cur = WL.current(P, p), doc = P.docs.find(d => d.fileName === p.source);
   const stale = staleDoc(P, doc);
   const code = p.type === "cash" ? p.ccy : (p.occ || p.symbol || p.code || p.isin);
   let note = "";
@@ -93,7 +93,7 @@ const TYPE_LABEL = {stock: WL.t("Акции", "Stocks"), fund: WL.t("Фонды"
   other: WL.t("Прочее", "Other"), option: WL.t("Опционы", "Options"), future: WL.t("Фьючерсы", "Futures"), cash: WL.t("Деньги", "Cash")};
 function sortKey(P, p){
   if(p.type === "option") return (p.expiry && p.expiry < P.today ? "Z" : "A") + (p.expiry || "");
-  const k = WL.usd(P, p.ccy), v = WL.current(P, p).value;
+  const k = WL.usd(P, p.ccy, p), v = WL.current(P, p).value;
   const usd = v != null && k != null ? v * k : (p.notional != null && k != null ? p.notional * k : 0);
   return -Math.abs(usd);
 }
@@ -153,12 +153,18 @@ const MON_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const niceStep = raw => { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || 10 * p; };
 
 WL.renderChart = function(el, P, S){
-  const stocks = P.positions.filter(p => WL.eq(p) && (P.history[p.symbol] || []).length);
+  // Только бумаги, сопоставленные с биржей (WL.idOf): историю чужой компании под тем же тикером не рисуем.
+  const symOf = new Map(P.positions.filter(p => WL.eq(p)).map(p => [p, WL.quoteSymbol(P, p)]));
+  const stocks = P.positions.filter(p => WL.eq(p) && symOf.get(p) && (P.history[symOf.get(p)] || []).length);
   const bh = P.history[S.bench] || [];
-  // История грузится только по американским тикерам (см. loadHistory): без них ждать нечего.
-  if(!P.positions.some(p => WL.eq(p) && p.symbol && p.ccy === "USD")){
-    el.innerHTML = `<p class="muted">${WL.t("Для сравнения нужны акции или фонды с американским тикером — в выписках таких нет.",
-                                            "The comparison needs stocks or funds with a US ticker — the statements have none.")}</p>`;
+  // История грузится только по подтверждённым американским тикерам (см. loadHistory): без них ждать нечего.
+  if(!P.positions.some(p => WL.eq(p) && symOf.get(p))){
+    const waiting = P.positions.some(p => WL.eq(p) && p.ccy === "USD" && (p.symbol || p.isin));
+    el.innerHTML = `<p class="muted">${waiting
+      ? WL.t("Сравнение появится, когда бумаги портфеля будут сопоставлены с биржей: до этого не ясно, чью историю цен брать.",
+             "The comparison appears once the holdings are matched to exchange listings: until then it is unclear whose price history to use.")
+      : WL.t("Для сравнения нужны акции или фонды с американским тикером — в выписках таких нет.",
+             "The comparison needs stocks or funds with a US ticker — the statements have none.")}</p>`;
     return;
   }
   if(!stocks.length || bh.length < 2){
@@ -170,24 +176,24 @@ WL.renderChart = function(el, P, S){
   }
   const spec = WINDOW[S.period];
   const start = spec === "stmt" ? stocks[0].priceDate
-    : spec == null ? stocks.map(p => P.history[p.symbol][0][0]).sort()[0]
+    : spec == null ? stocks.map(p => P.history[symOf.get(p)][0][0]).sort()[0]
     : new Date(+new Date(P.today + "T00:00:00Z") - spec * 864e5).toISOString().slice(0, 10);
   const dates = bh.map(x => x[0]).filter(d => d >= start);
   if(dates.length < 2){ el.innerHTML = `<p class="muted">${WL.t("За этот период мало данных для графика.", "Not enough data to chart this period.")}</p>`; return; }
-  const weight = new Map(stocks.map(p => [p.symbol, Math.max(WL.current(P, p).value, 0)]));
-  const maps = new Map(stocks.map(p => [p.symbol, new Map(P.history[p.symbol])]));
+  const weight = new Map(stocks.map(p => [p, Math.max(WL.current(P, p).value, 0)]));
+  const maps = new Map(stocks.map(p => [p, new Map(P.history[symOf.get(p)])]));
   const bmap = new Map(bh), b0 = bmap.get(dates[0]);
   const port = [100], bench = [100];
   for(let i = 1; i < dates.length; i++){
     let n = 0, d = 0;
     for(const p of stocks){
-      const m = maps.get(p.symbol), a = m.get(dates[i - 1]), c = m.get(dates[i]);
-      if(a && c){ const w = weight.get(p.symbol); n += w * (c / a - 1); d += w; }
+      const m = maps.get(p), a = m.get(dates[i - 1]), c = m.get(dates[i]);
+      if(a && c){ const w = weight.get(p); n += w * (c / a - 1); d += w; }
     }
     port.push(port[i - 1] * (1 + (d ? n / d : 0)));
     bench.push(bmap.get(dates[i]) / b0 * 100);
   }
-  const startCover = stocks.filter(p => maps.get(p.symbol).has(dates[0])).length;
+  const startCover = stocks.filter(p => maps.get(p).has(dates[0])).length;
   /* Форма «акцент»: портфель — золотая линия с лёгкой заливкой, бенчмарк — серая линия для сравнения.
      Значения на концах линий подписаны текстом, а не цветом серии; при наведении — перекрестие и точки на обеих линиях. */
   // На телефоне рисуем в масштабе экрана: иначе viewBox шириной 1000 ужимает подписи осей до трёх пикселей.

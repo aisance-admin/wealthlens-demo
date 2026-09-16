@@ -209,7 +209,9 @@ WL.build = function(docs, today){
     // брокера совпадают id («SCHW:AAPL»), и строка таблицы открывает чужую позицию.
     const key = d.fileName + "|";
     if(d.kind === "positions"){
-      d.positions.forEach(p => P.positions.push({...p, id: key + p.id, asOf: d.asOf, source: d.fileName}));
+      // Бумаги, записанные американским брокером (разбор Schwab) или демо-портфелем, — сразу биржевые тикеры США.
+      const us = d.from === "demo" || d.brokerShort === "Schwab" && !d.from;
+      d.positions.forEach(p => P.positions.push({...p, id: key + p.id, asOf: d.asOf, source: d.fileName, listing: p.listing || (us ? "US" : undefined)}));
       d.positions.filter(p => p.type === "option" && p.expiry).forEach(p =>
         P.events.push({date: p.expiry, kind: "expiry", posId: key + p.id, text: t(`${p.name}: экспирация`, `${p.name}: expiry`)}));
     }
@@ -234,6 +236,97 @@ WL.getJSON = async (path, ms = 90000) => {
 };
 const getJSON = WL.getJSON;
 
+/* ── Какая бумага стоит за тикером ─────────────────────────────────────────
+   Текущую цену подставляем, только если бумага из выписки — та же, что торгуется под тикером на бирже США:
+   source — так её записал американский брокер (разбор Schwab) или демо; isin — ISIN из выписки на бирже США означает
+   именно этот тикер; name — название в выписке совпало с названием бумаги в справочнике OpenFIGI (значимые слова в обе
+   стороны); underlying — опцион на бумагу, уже подтверждённую в отчёте; user — сопоставление подтвердил человек.
+   Иначе остаются цена и стоимость из выписки: вымышленная «Beta Corp» с тикером BETA не станет BETA Technologies. */
+const ID = {};                       // "t:BETA" / "i:US…" → ответ справочника (или ошибка с временем); в памяти страницы
+const GENERIC_WORD = /^(inc|incorporated|corp|corporation|co|company|companies|ltd|limited|plc|ag|sa|nv|se|llc|lp|the|of|and|class|cl|shares?|shs|common|stock|ord|ordinary|adr|ads|sponsored|spon|registered|reg|new|del|holding|holdings|hldgs|group|grp|trust|tr|fund|etf|etp|ucits|acc|dist|us|usa|ss|a|b|c|n|v)$/;
+const ABBR = {intl: "international", tot: "total", stk: "stock", mkt: "market", idx: "index", govt: "government", tech: "technologies", technology: "technologies",
+  mfg: "manufacturing", svcs: "services", svc: "services", sys: "systems", fin: "financial", finl: "financial", natl: "national", amer: "american",
+  pharma: "pharmaceuticals", pharm: "pharmaceuticals", inds: "industries", ind: "industries", mgmt: "management", comm: "communications",
+  commun: "communications", ent: "entertainment", res: "resources", props: "properties", engy: "energy", hlth: "health", ins: "insurance", elec: "electric", chem: "chemical"};
+const nameWords = x => [...new Set(String(x || "").toLowerCase().replace(/s\s*&\s*p/g, "sp").replace(/&/g, " ")
+  .split(/[^a-z0-9]+/).filter(Boolean).map(w => ABBR[w] || w).filter(w => !GENERIC_WORD.test(w)))];
+// Названия совпадают, если каждое значимое слово одного есть в другом (или одно — начало другого: TOT → TOTAL) и наоборот.
+WL.sameName = (a, b) => {
+  const A = nameWords(a), B = nameWords(b);
+  const eq = (x, y) => x === y || (x.length >= 3 && y.startsWith(x)) || (y.length >= 3 && x.startsWith(y));
+  return A.length > 0 && B.length > 0 && A.every(x => B.some(y => eq(x, y))) && B.every(y => A.some(x => eq(x, y)));
+};
+const tick = x => String(x || "").toUpperCase().replace(/[\/\s]+/g, ".");
+const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;
+const isUsd = p => p.ccy === "USD";
+WL.idOf = (P, p) => {
+  const opt = p.type === "option";
+  if(!(WL.eq(p) || opt) || !isUsd(p)) return {ok: false, how: "none"};
+  if(p.listing === "US") return {ok: true, how: "source"};
+  const sym = tick(opt ? p.underlying : p.symbol);
+  if(p.idUser && tick(p.idUser.ticker) === sym) return {ok: true, how: "user", market: p.idUser};
+  if(opt){
+    if(!p.occ || !sym) return {ok: false, how: "none"};
+    const base = P.positions.find(q => WL.eq(q) && q !== p && tick(q.symbol) === sym && WL.idOf(P, q).ok);
+    if(base) return {ok: true, how: "underlying"};
+  }
+  const isin = !opt && ISIN.test(p.isin || "") ? p.isin : null;
+  if(isin){
+    const r = ID["i:" + isin];
+    if(!r) return {ok: false, how: "pending"};
+    if(!r.error && r.matches.length){
+      const same = r.matches.find(m => tick(m.ticker) === sym);
+      if(same) return {ok: true, how: "isin", market: same};
+      // Тикера в выписке нет, а бумага американская и на бирже одна: берём её тикер.
+      if(!sym && isin.startsWith("US") && r.matches.length === 1) return {ok: true, how: "isin", market: r.matches[0], ticker: tick(r.matches[0].ticker)};
+      if(sym) return {ok: false, how: "mismatch", market: r.matches[0]};
+    }
+    if(r.error && !sym) return {ok: false, how: "error"};
+  }
+  if(!sym) return {ok: false, how: "none"};
+  const r = ID["t:" + sym];
+  if(!r) return {ok: false, how: "pending"};
+  if(r.error) return {ok: false, how: "error"};
+  if(!r.matches.length) return {ok: false, how: "notfound"};
+  const label = opt ? p.underlyingName : p.name;
+  const named = label && tick(label) !== sym ? r.matches.find(m => WL.sameName(label, m.name)) : null;
+  return named ? {ok: true, how: "name", market: named} : {ok: false, how: "mismatch", market: r.matches[0]};
+};
+// Тикер для котировки: из выписки или найденный по ISIN.
+WL.quoteSymbol = (P, p) => { const id = WL.idOf(P, p); return id.ok ? id.ticker || tick(p.type === "option" ? p.underlying : p.symbol) : null; };
+WL.identify = async function(P){
+  const now = Date.now(), want = {t: new Set(), i: new Set()};
+  const stale = k => !ID[k] || (ID[k].error && now - ID[k].at > 60000);
+  P.positions.forEach(p => {
+    const opt = p.type === "option";
+    if(!(WL.eq(p) || opt) || !isUsd(p) || p.listing === "US") return;
+    const sym = tick(opt ? p.underlying : p.symbol);
+    if(sym && /^[A-Z][A-Z0-9.]{0,9}$/.test(sym) && stale("t:" + sym)) want.t.add(sym);
+    if(!opt && ISIN.test(p.isin || "") && stale("i:" + p.isin)) want.i.add(p.isin);
+  });
+  const ts = [...want.t], is = [...want.i];
+  for(let k = 0; k < Math.max(ts.length, is.length); k += 30){
+    const r = await getJSON(`/market/identify?t=${ts.slice(k, k + 30).join(",")}&i=${is.slice(k, k + 30).join(",")}`, 45000);
+    const res = r && r.results;
+    [...ts.slice(k, k + 30).map(x => "t:" + x), ...is.slice(k, k + 30).map(x => "i:" + x)].forEach(key => {
+      const v = res && res[key];
+      ID[key] = v && !v.error ? {matches: v.matches || []} : {error: (v && v.error) || "unavailable", at: Date.now()};
+    });
+  }
+};
+
+/* ── Основание оценки ─────────────────────────────────────────────────────
+   «now» — оценка сейчас: подтверждённые бумаги по текущим ценам CBOE, остальное по выпискам, валюты по текущему курсу ЕЦБ.
+   «stmt» — снимок выписок: цены и стоимости из выписок, валюты по курсу ЕЦБ на дату выписки. Итог, карточки счетов,
+   структура, строки таблицы и PDF берут стоимость и курс из одних функций (WL.current, WL.usd), поэтому основание одно. */
+const FX_AT = {};                    // дата выписки → {rates, date}; исторический курс не меняется
+WL.fetchFxAt = async function(P){
+  const dates = [...new Set(P.positions.filter(p => p.ccy && p.ccy !== "USD" && p.asOf).map(p => p.asOf))].filter(d => !FX_AT[d]);
+  await Promise.all(dates.map(async d => { const r = await getJSON("/fx?base=USD&date=" + d, 30000); if(r && r.rates) FX_AT[d] = {rates: r.rates, date: r.date}; }));
+  P.fxAt = FX_AT;
+};
+WL.fxAtDate = d => FX_AT[d] || null;
+
 /* Последние котировки и курсы. Портфель пересобирается после каждой добавленной выписки, и без
    них итог на секунду падал бы до цен из выписок, а позиции в других валютах выпадали из суммы.
    Котировка годится 15 минут с момента, когда её получили: старше — это уже не «цена сейчас», и бумага
@@ -249,10 +342,11 @@ function applyLive(P, L){
             ok: L.ok || Object.keys(quotes).length > 0};
   P.positions.forEach(p => {
     delete p.live; delete p.underlyingLive;
-    if(WL.eq(p) && p.ccy === "USD" && quotes[p.symbol] && quotes[p.symbol].price) {
-      const x = quotes[p.symbol]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time};
+    const sym = WL.eq(p) && p.ccy === "USD" ? WL.quoteSymbol(P, p) : null;
+    if(sym && quotes[sym] && quotes[sym].price) {
+      const x = quotes[sym]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time, symbol: sym};
     }
-    if(p.type === "option" && p.occ){
+    if(p.type === "option" && p.occ && WL.idOf(P, p).ok){
       const x = options[p.occ], u = quotes[p.underlying];
       if(x && !x.error && (x.mid != null || x.last != null)) p.live = {price: x.mid ?? x.last, bid: x.bid, ask: x.ask, delta: x.delta, time: u && u.time};
       // У скорректированного контракта (FDX1: 100 FDX + 50 FDXF) поставка — не одна акция: сравнивать страйк с её ценой нельзя.
@@ -261,14 +355,15 @@ function applyLive(P, L){
     }
   });
 }
-WL.applyLiveCache = P => { if(LIVE) applyLive(P, LIVE); };
+WL.applyLiveCache = P => { if(LIVE) applyLive(P, LIVE); P.fxAt = FX_AT; };
 
 WL.fetchLive = async function(P){
   const started = Date.now();
-  const opts = P.positions.filter(p => p.type === "option" && p.occ);
-  // CBOE — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем:
-  // у Roche в франках тикер ROG, а в США ROG — это Rogers Corp.
-  const syms = [...new Set([...P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").map(p => p.symbol), ...opts.map(p => p.underlying)])];
+  // CBOE — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем (у Roche в франках тикер ROG,
+  // а в США ROG — это Rogers Corp), а бумагу в долларах — только если подтверждено, что под тикером она же (WL.idOf).
+  await WL.identify(P);
+  const opts = P.positions.filter(p => p.type === "option" && p.occ && WL.idOf(P, p).ok);
+  const syms = [...new Set([...P.positions.filter(p => WL.eq(p) && p.ccy === "USD").map(p => WL.quoteSymbol(P, p)).filter(Boolean), ...opts.map(p => p.underlying)])];
   const [q, o, fx] = await Promise.all([
     syms.length ? getJSON("/market/quotes?symbols=" + syms.join(",")) : null,
     opts.length ? getJSON("/market/options?contracts=" + opts.map(p => p.occ).join(",")) : null,
@@ -292,6 +387,7 @@ WL.fetchLive = async function(P){
     fx: fx && fx.rates ? fx.rates : LIVE && LIVE.fx || null, fxDate: fx && fx.rates ? fx.date : LIVE && LIVE.fxDate,
     fxSource: fx && fx.rates ? fx.source : LIVE && LIVE.fxSource, at: new Date().toISOString(), ok};
   applyLive(P, LIVE);        // курсы из прошлого удачного запроса лучше, чем выпавшие из итога позиции в других валютах
+  await WL.fetchFxAt(P);
 };
 /* История грузится по одной бумаге: CBOE ограничивает частоту. Неудачу не
    запоминаем как «истории нет» — при ограничении останавливаемся и повторим позже. */
@@ -312,8 +408,14 @@ WL.eq = p => p.type === "stock" || p.type === "fund";
 // Цвет класса актива один на весь отчёт (сводка, «Структура», группы таблицы): --cls-<ключ> в wealth.html.
 // Опционы, фьючерсы и незнакомые классы делят нейтральный «прочее».
 WL.clsKey = type => ["stock", "fund", "bond", "note", "cash"].includes(type) ? type : "other";
-WL.usd = (P, ccy) => ccy === "USD" ? 1 : (P.live && P.live.fx && P.live.fx[ccy] ? 1 / P.live.fx[ccy] : null);
+// Курс в доллары. Снимок выписок — по курсу ЕЦБ на дату выписки позиции (p.asOf); оценка сейчас — по текущему.
+WL.usd = (P, ccy, p) => {
+  if(ccy === "USD") return 1;
+  if(P.basis === "stmt"){ const f = p && p.asOf && P.fxAt && P.fxAt[p.asOf]; return f && f.rates[ccy] ? 1 / f.rates[ccy] : null; }
+  return P.live && P.live.fx && P.live.fx[ccy] ? 1 / P.live.fx[ccy] : null;
+};
 WL.current = (P, p) => {
+  if(P.basis === "stmt") return {price: p.price, value: p.value, live: false};
   // Без количества новая цена ничего не говорит о стоимости: null × цена дал бы ноль вместо суммы из выписки.
   if(WL.eq(p) && p.live && p.qty != null) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};
   if(p.type === "option" && p.live && p.multiplier && p.qty != null) return {price: p.live.price, value: round2(p.qty * p.live.price * p.multiplier), live: true};
@@ -343,11 +445,14 @@ WL.change = (P, p, per) => {
     if(p.value == null || !cur.live) return null;
     return {abs: round2(cur.value - p.value), pct: p.value ? (cur.value / p.value - 1) * 100 * Math.sign(p.value) : null, from: p.priceDate};
   }
-  if(!WL.eq(p)) return null;
+  // Изменение за период — рыночное: в снимке выписок его нет, и считается оно только по подтверждённой бумаге (WL.idOf).
+  if(!WL.eq(p) || P.basis === "stmt") return null;
+  const sym = WL.quoteSymbol(P, p);
+  if(!sym) return null;
   let start = null;
   if(per === "1d") start = p.live && p.live.prevClose ? {price: p.live.prevClose} : null;
   else {
-    const h = P.history[p.symbol];
+    const h = P.history[sym];
     if(per === "all") start = h && h.length ? {price: h[0][1], date: h[0][0]} : null;
     else start = WL.priceAt(h, ISO(new Date(+D(P.today) - WL.PERIODS.find(x => x.id === per).days * DAY)));
   }

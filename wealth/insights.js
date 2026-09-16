@@ -21,25 +21,26 @@ WL.insights = function(P){
   if(soon.length){
     let itmAny = false;
     const lines = soon.map(p => {
-      const u = p.underlyingLive, K = p.strike, n = Math.abs(p.qty) * (p.multiplier || 100), d = days(T, p.expiry);
+      const u = P.basis === "stmt" ? null : p.underlyingLive, K = p.strike, n = Math.abs(p.qty) * (p.multiplier || 100), d = days(T, p.expiry);
       const inDays = `${d} ${pl(d, ["день", "дня", "дней"], ["day", "days"])}`, shares = n === 1 ? "share" : "shares";
       const text = t(`${p.underlying} ${p.right === "C" ? "колл" : "пут"} ${K} · ${fmt.date(p.expiry)}, через ${inDays}`,
                      `${p.underlying} ${K} ${p.right === "C" ? "call" : "put"} · ${fmt.date(p.expiry)}, ${d === 0 ? "expires today" : "in " + inDays}`);
       if(p.adjusted) return {text, note: t(`скорректированный контракт${p.deliverable ? `: поставка ${p.deliverable}` : ""} — статус по цене одной акции не определить`,
         `adjusted contract${p.deliverable ? `: delivers ${p.deliverable}` : ""} — its status cannot be judged from one share price`)};
-      if(u == null) return {text, note: t("текущей цены базового актива нет", "no current price for the underlying")};
+      if(u == null) return {text, note: P.basis === "stmt" ? t("в снимке выписок положение к страйку по текущей цене не оценивается", "the statement snapshot does not assess the strike against the current price")
+        : t("текущей цены базового актива нет", "no current price for the underlying")};
       const itm = p.right === "C" ? u > K : u < K;
       if(itm) itmAny = true;
       const held = P.positions.some(s => WL.eq(s) && s.symbol === p.underlying && s.brokerShort === p.brokerShort);
-      let note = t(`${p.underlying} сейчас ${fmt.px(u)}, опцион ${itm ? "в деньгах" : "вне денег"}`,
-                   `${p.underlying} now at ${fmt.px(u)}, ${itm ? "in the money" : "out of the money"}`);
-      if(p.qty < 0 && p.right === "C") note += itm
-        ? (held ? t(` — ${fmt.int(n)} акций, скорее всего, заберут по ${K}`, ` — ${fmt.int(n)} ${shares} likely to be called away at ${K}`)
-                : t(` — возможна поставка ${fmt.int(n)} акций`, ` — may require delivering ${fmt.int(n)} ${shares}`))
-        : t(` — скорее всего, истечёт без исполнения${held ? ", акции останутся" : ""}`, ` — likely to expire unexercised${held ? ", leaving the shares in place" : ""}`);
-      if(p.qty < 0 && p.right === "P") note += itm
-        ? t(` — придётся купить ${fmt.int(n)} акций на ${fmt.short(n * K)}`, ` — would require buying ${fmt.int(n)} ${shares} for ${fmt.short(n * K)}`)
-        : t(" — скорее всего, истечёт без исполнения", " — likely to expire unexercised");
+      // Только наблюдаемое состояние и возможное обязательство: цена до экспирации может уйти в любую сторону,
+      // прогноза исполнения без модели и её допущений не даём.
+      let note = t(`${p.underlying} сейчас ${fmt.px(u)} — опцион ${itm ? "в деньгах" : "вне денег"}, до экспирации ${inDays}`,
+                   `${p.underlying} now at ${fmt.px(u)} — ${itm ? "in the money" : "out of the money"}, ${d === 0 ? "expires today" : inDays + " to expiry"}`);
+      if(p.qty < 0 && p.right === "C") note += held
+        ? t(`; при исполнении ${fmt.int(n)} акций будут проданы по ${K}`, `; if exercised, ${fmt.int(n)} ${shares} are sold at ${K}`)
+        : t(`; при исполнении нужно поставить ${fmt.int(n)} акций по ${K}`, `; if exercised, ${fmt.int(n)} ${shares} must be delivered at ${K}`);
+      if(p.qty < 0 && p.right === "P") note += t(`; при исполнении — купить ${fmt.int(n)} акций на ${fmt.short(n * K)}`,
+        `; if exercised — buy ${fmt.int(n)} ${shares} for ${fmt.short(n * K)}`);
       return {text, note, level: itm ? "high" : "watch"};
     });
     out.push({level: itmAny ? "high" : "watch", kind: "expiry", lines,
@@ -72,7 +73,7 @@ WL.insights = function(P){
   // риск целиком: доля бумаги в одном счёте ничего не говорит, если у клиента четыре брокера.
   // Считаем одиночные акции и структурные ноты: фонд и госбумага сами по себе не концентрация.
   // Валюты пересчитываются по курсу ЕЦБ; без курса позиция в доли не входит.
-  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? v * k : null; };
+  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? v * k : null; };
   const assets = P.positions.filter(p => p.type !== "option" && p.type !== "future")
     .map(p => ({p, v: usdOf(p)})).filter(x => x.v != null && x.v > 0);
   const totalUsd = sum(assets, x => x.v);
@@ -96,11 +97,12 @@ WL.insights = function(P){
                   ` The three largest positions (${big3}) are ${Math.round(top3)}% of the portfolio value in dollars.`) : "") +
             (top.p.costNote ? t(` Себестоимость ${top.p.symbol || top.p.name} ${top.p.costNote}: результат по крупнейшей позиции посчитать нельзя.`,
                                 ` Cost basis for ${top.p.symbol || top.p.name}: ${top.p.costNote}. The result for the largest position cannot be calculated.`) : ""),
-      basis: t(`все счета${P.live && P.live.fx ? " · курсы ЕЦБ" : ""}`, `all accounts${P.live && P.live.fx ? " · ECB rates" : ""}`)});
+      basis: P.basis === "stmt" ? t("все счета · снимок выписок, курсы ЕЦБ на дату выписки", "all accounts · statement snapshot, ECB rates on the statement date")
+        : t(`все счета${P.live && P.live.fx ? " · курсы ЕЦБ" : ""}`, `all accounts${P.live && P.live.fx ? " · ECB rates" : ""}`)});
   }
 
-  // 4. Что изменилось с даты выписки.
-  const live = P.positions.filter(p => (WL.eq(p) || p.type === "option") && p.live && p.value != null);
+  // 4. Что изменилось с даты выписки. В снимке выписок рынка нет — и вывода нет.
+  const live = P.basis === "stmt" ? [] : P.positions.filter(p => (WL.eq(p) || p.type === "option") && p.live && p.value != null);
   if(live.length){
     const delta = sum(live, p => WL.current(P, p).value - p.value);
     const movers = live.filter(p => WL.eq(p)).map(p => ({p, pct: (p.live.price / p.price - 1) * 100}))
@@ -121,11 +123,11 @@ WL.insights = function(P){
   // Сравниваем в долларах: результат по франковой бумаге в франках рядом с долларовым —
   // несопоставимые числа, а подпись со знаком доллара была бы неправдой.
   const withCost = P.positions.filter(p => WL.eq(p) && p.cost > 0)
-    .map(p => { const c = WL.change(P, p, "cost"), k = WL.usd(P, p.ccy); return c && k != null ? {p, c, usd: c.abs * k} : null; })
+    .map(p => { const c = WL.change(P, p, "cost"), k = WL.usd(P, p.ccy, p); return c && k != null ? {p, c, usd: c.abs * k} : null; })
     .filter(Boolean);
   if(withCost.length >= 2){
     const s = [...withCost].sort((a, b) => b.usd - a.usd), best = s[0], worst = s[s.length - 1];
-    const isLive = withCost.some(x => x.p.live);
+    const isLive = withCost.some(x => WL.current(P, x.p).live);
     // Бумаги из PDF банка часто без тикера — тогда по названию; длинный список обрезаем.
     const noCostAll = P.positions.filter(p => WL.eq(p) && p.cost == null).map(p => p.symbol || p.name);
     const noCost = noCostAll.length > 5 ? [...noCostAll.slice(0, 4), t(`ещё ${noCostAll.length - 4}`, `${noCostAll.length - 4} more`)] : noCostAll;
@@ -144,7 +146,7 @@ WL.insights = function(P){
     const mine = P.positions.filter(p => p.source === d.fileName);
     const derivs = mine.filter(p => p.type === "future" || p.type === "option");
     const notional = sum(mine.filter(p => p.type === "future"), p => Math.abs(p.notional || 0));
-    const cashUSD = sum(mine.filter(p => p.type === "cash"), p => p.value * (WL.usd(P, p.ccy) ?? 0));
+    const cashUSD = sum(mine.filter(p => p.type === "cash"), p => p.value * (WL.usd(P, p.ccy, p) ?? 0));
     const age = Math.round(days(d.asOf, T) / 30.44);
     const expired = derivs.filter(p => p.expiry && p.expiry < T).length;
     const ago = `${age} ${pl(age, ["месяц", "месяца", "месяцев"], ["month", "months"])}`;
