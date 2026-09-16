@@ -5,7 +5,9 @@
    самой выписки, и несошедшееся показывается, а не прячется. */
 (function(){
 const WL = window.WL = window.WL || {};
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+// PDF.js грузится модулем (см. wealth.html) и появляется чуть позже обычных скриптов: ждём его, если он ещё не готов.
+const PDFJS = () => typeof pdfjsLib !== "undefined" ? Promise.resolve(pdfjsLib)
+  : new Promise(res => window.addEventListener("pdfjs-ready", () => res(window.pdfjsLib), {once: true}));
 
 const MONTHS = {January:1, February:2, March:3, April:4, May:5, June:6, July:7, August:8,
                 September:9, October:10, November:11, December:12};
@@ -13,42 +15,133 @@ const pad = n => String(n).padStart(2, "0");
 const iso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
 const dmy = s => { const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(s || ""); return m ? `${m[3]}-${m[2]}-${m[1]}` : null; };
 const round2 = v => Math.round(v * 100) / 100;
-const isNumTok = s => /^\(?-?\$?\(?[\d,']*\d(\.\d+)?\)?%?$/.test(s);
-// 1,234.56 · (1,234.56) · ($53,921.75) · 1'234.56 · -21.86 · 3.38%
+const isNumTok = s => /^\(?[-−]?\$?\(?[\d,']*\d(\.\d+)?\)?%?$/.test(s);
+// 1,234.56 · (1,234.56) · ($53,921.75) · 1'234.56 · -21.86 · −21.86 · 3.38%
 const num = s => {
   if(s == null || !isNumTok(String(s).trim())) return null;
   const t = String(s).trim();
   const v = parseFloat(t.replace(/[^\d.]/g, ""));
-  return isNaN(v) ? null : ((t.includes("(") || t.startsWith("-")) ? -v : v);
+  return isNaN(v) ? null : ((t.includes("(") || /^[-−]/.test(t)) ? -v : v);
 };
+/* Сумма из ячейки — одно правило для всех путей: таблицы, PDF других банков, распознанные страницы, текст для ИИ.
+   Минус бывает дефисом, типографским минусом (U+2212), тире, скобками и знаком после числа («1 234,56-»); «Dr» после
+   суммы — дебет, то есть минус. Разделители: 1,234.56 · 1 234,56 · 1'234.56 · 1.234.567. Рядом с числом допустимы
+   код и знак валюты, процент и подписи единиц; текст с цифрами («Portfolio 537630.120.6») — не число. pct — был знак %:
+   цена облигации в процентах номинала считается иначе, чем цена за штуку. */
+const DASHES = /[−‒–—‐‑﹣－]/g;
+function amount(v){
+  if(v == null || v instanceof Date) return null;
+  if(typeof v === "number") return isFinite(v) ? {value: v, pct: false} : null;
+  let t = String(v).replace(/[    ]/g, " ").replace(DASHES, "-").trim();
+  if(!t || /^[-\s]+$/.test(t)) return null;
+  const pct = t.includes("%");
+  let neg = false;
+  const side = /(?<!\p{L})(dr|cr)\.?\s*$/iu.exec(t);
+  if(side){ neg = /^dr/i.test(side[1]); t = t.slice(0, side.index).trim(); }
+  t = t.replace(/(?<![A-Za-z])[A-Z]{3}(?![A-Za-z])/g, " ")
+    .replace(/(?<!\p{L})(stk|stück|pcs|shares?|units?|nom|nominal|fr|sfr|p\.?\s?a|шт|руб)(?!\p{L})\.?/giu, " ")
+    .replace(/[$€£¥₽%]/g, " ").replace(/\s+/g, " ").trim();
+  if(/\p{L}/u.test(t)) return null;
+  if(/^\(.*\)$/.test(t)){ neg = true; t = t.slice(1, -1).trim(); }
+  if(t.startsWith("-")){ neg = true; t = t.slice(1).trim(); }
+  else if(t.startsWith("+")) t = t.slice(1).trim();
+  if(t.endsWith("-")){ neg = true; t = t.slice(0, -1).trim(); }
+  if(!/^\d[\d\s'’.,]*$/.test(t)) return null;
+  t = t.replace(/[\s'’]/g, "");
+  const hasC = t.includes(","), hasD = t.includes(".");
+  if(hasC && hasD) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(/,/g, ".") : t.replace(/,/g, "");
+  else if(hasC){
+    // Запятая — разделитель разрядов, только если за ней группы ровно по три цифры, а число не
+    // начинается с нуля: 1,234 · 12,345,678. Иначе это дробь: 172,30 · 0,9860 · 0,015.
+    const groups = /^[1-9]\d{0,2}(,\d{3})+$/.test(t);
+    t = groups ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
+  }
+  else if(hasD && (t.match(/\./g) || []).length > 1){
+    // Несколько точек — разделители разрядов (1.234.567). С другими группами это номер или дата, а не сумма.
+    if(!/^\d{1,3}(\.\d{3})+$/.test(t)) return null;
+    t = t.replace(/\./g, "");
+  }
+  const n = parseFloat(t);
+  return isFinite(n) ? {value: neg ? -Math.abs(n) : n, pct} : null;
+}
 const check = (label, parsed, stated) => ({label, parsed, stated,
   ok: parsed != null && stated != null && Math.abs(parsed - stated) < 0.01});
 const KEEP_UPPER = new Set(["ETF", "ADR", "TR", "SA", "NV", "N.V.", "US", "USA", "AG", "PLC"]);
 const titleCase = s => String(s || "").split(/\s+/).map(w =>
   KEEP_UPPER.has(w) ? w : w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
 
-async function pdfLines(buf){
+// password — пароль, который человек ввёл для защищённой выписки; хранится только в памяти вкладки.
+const openPdf = async (buf, password) => (await PDFJS()).getDocument({data: buf, isEvalSupported: false, password: password || undefined}).promise;
+async function pdfLines(buf, password){
   // isEvalSupported: false — рекомендованная Mozilla защита от CVE-2024-4367 для PDF.js до 4.2.67: шрифты из чужого файла
   // не превращаются в исполняемый код.
-  const pdf = await pdfjsLib.getDocument({data: buf, isEvalSupported: false}).promise;
-  const pages = [];
-  for(let p = 1; p <= pdf.numPages; p++){
-    const page = await pdf.getPage(p);
-    const vp = page.getViewport({scale: 1});
-    const tc = await page.getTextContent();
-    const items = tc.items.filter(i => i.str.trim()).map(i => ({
-      s: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5]),
-      w: i.width || 0, h: Math.abs(i.transform[3]) || i.height || 8}));
-    items.sort((a, b) => a.y - b.y || a.x - b.x);
-    const lines = [];
-    for(const it of items){
-      const L = lines[lines.length - 1];
-      if(L && Math.abs(L.y - it.y) <= 2) L.items.push(it); else lines.push({y: it.y, page: p, items: [it]});
+  const lib = await PDFJS();
+  const pdf = await openPdf(buf, password);
+  const pages = [], meta = [];
+  try{
+    for(let p = 1; p <= pdf.numPages; p++){
+      const page = await pdf.getPage(p);
+      const vp = page.getViewport({scale: 1});
+      const tc = await page.getTextContent();
+      const items = tc.items.filter(i => i.str.trim()).map(i => ({
+        s: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5]),
+        w: i.width || 0, h: Math.abs(i.transform[3]) || i.height || 8}));
+      items.sort((a, b) => a.y - b.y || a.x - b.x);
+      const lines = [];
+      for(const it of items){
+        const L = lines[lines.length - 1];
+        if(L && Math.abs(L.y - it.y) <= 2) L.items.push(it); else lines.push({y: it.y, page: p, items: [it]});
+      }
+      lines.forEach(L => { L.items.sort((a, b) => a.x - b.x); L.text = L.items.map(i => i.s).join(" "); });
+      pages.push(lines);
+      meta.push(await pageArt(page, vp, lines, lib));
     }
-    lines.forEach(L => { L.items.sort((a, b) => a.x - b.x); L.text = L.items.map(i => i.s).join(" "); });
-    pages.push(lines);
-  }
+  } finally { pdf.destroy().catch(() => {}); }
+  Object.defineProperty(pages, "meta", {value: meta, enumerable: false});
   return pages;
+}
+/* Что на странице кроме текста. Страница без текста с картинкой — скан или закрашенная копия; картинка на месте, где нет
+   текста, — возможно, таблица, вставленная изображением. Такие места программа не читает и должна сказать об этом, а не
+   считать выписку прочитанной. Разбор операторов страницы дорогой (он раскрывает картинки), поэтому смотрим только страницы
+   без текста и страницы с большим пустым по вертикали местом, где картинке есть где поместиться. Фон под текстом
+   (бланк банка) картинкой без текста не считается: если внутри неё три строки текста и больше, это подложка. */
+async function pageArt(page, vp, lines, lib){
+  const W = vp.width, H = vp.height, info = {text: lines.length, boxes: [], blank: false};
+  if(lines.length){
+    const ys = lines.map(L => L.y).sort((a, b) => a - b);
+    let gap = Math.max(ys[0], H - ys[ys.length - 1]);
+    for(let i = 1; i < ys.length; i++) gap = Math.max(gap, ys[i] - ys[i - 1]);
+    if(gap < H * 0.3) return info;
+  }
+  // Без таблицы операторов (другая сборка PDF.js) о странице без текста ничего не известно — считаем её картинкой, не пустой.
+  const O = lib && lib.OPS;
+  if(!O) return info;
+  let list;
+  try{ list = await page.getOperatorList(); }catch(e){ return info; }
+  const fn = list.fnArray, args = list.argsArray, stack = [];
+  const mul = (A, B) => [A[0] * B[0] + A[2] * B[1], A[1] * B[0] + A[3] * B[1], A[0] * B[2] + A[2] * B[3], A[1] * B[2] + A[3] * B[3],
+    A[0] * B[4] + A[2] * B[5] + A[4], A[1] * B[4] + A[3] * B[5] + A[5]];
+  const PAINT = new Set([O.paintImageXObject, O.paintInlineImageXObject, O.paintImageMaskXObject, O.paintJpegXObject].filter(x => x != null));
+  let m = [1, 0, 0, 1, 0, 0];
+  for(let i = 0; i < fn.length; i++){
+    const f = fn[i], a = args[i];
+    if(f === O.save) stack.push(m);
+    else if(f === O.restore) m = stack.pop() || m;
+    else if(f === O.transform && a) m = mul(m, a);
+    else if(f === O.paintFormXObjectBegin){ stack.push(m); if(a && Array.isArray(a[0]) && a[0].length === 6) m = mul(m, a[0]); }
+    else if(f === O.paintFormXObjectEnd) m = stack.pop() || m;
+    else if(PAINT.has(f)){
+      const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([x, y]) => vp.convertToViewportPoint(m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+      const x0 = Math.max(0, Math.min(...pts.map(q => q[0]))), x1 = Math.min(W, Math.max(...pts.map(q => q[0])));
+      const y0 = Math.max(0, Math.min(...pts.map(q => q[1]))), y1 = Math.min(H, Math.max(...pts.map(q => q[1])));
+      if(x1 - x0 < W * 0.35 || (x1 - x0) * (y1 - y0) < W * H * 0.12) continue;           // логотип, подпись, значок
+      const inside = lines.filter(L => L.y >= y0 && L.y <= y1 && L.items.some(it => it.x >= x0 - 2 && it.x <= x1)).length;
+      if(inside >= 3) continue;                                                             // подложка под текстом
+      info.boxes.push({x0, y0, x1, y1});
+    }
+  }
+  info.blank = !lines.length && !info.boxes.length && !fn.some(f => PAINT.has(f)) && fn.length < 40;
+  return info;
 }
 
 /* ── Charles Schwab: месячный снимок позиций ─────────────────────────────── */
@@ -60,7 +153,8 @@ function parseSchwab(pages, fileName){
   const pm = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})-(\d{1,2}),\s+(\d{4})/.exec(text);
   if(pm){ doc.periodFrom = iso(pm[4], MONTHS[pm[1]], pm[2]); doc.asOf = iso(pm[4], MONTHS[pm[1]], pm[3]); }
   const nums = l => l ? l.items.map(i => i.s).filter(isNumTok).map(num) : [];
-  const lineOf = re => all.find(l => re.test(l.text));
+  // Итоги берём из текста страницы, а не из распознанной картинки: там цифра может быть прочитана с ошибкой.
+  const lineOf = re => all.find(l => re.test(l.text) && !l.ocr) || all.find(l => re.test(l.text));
   // Сводка счёта стоит в правой колонке: на той же высоте слева идёт текст про
   // обслуживание, поэтому берём только числа правее середины страницы.
   const right = l => l ? l.items.filter(i => i.x >= 600 && isNumTok(i.s)).map(i => num(i.s)) : [];
@@ -90,11 +184,12 @@ function parseSchwab(pages, fileName){
      стоит между количеством и ценой, и порядок сдвигал стоимость в цену. Шапки нет (другой шаблон) — по порядку. */
   const mid = it => it.x + (it.w || it.s.length * 4.5) / 2;
   const HEADS = [["qty", /^Quantity/], ["price", /^Price/], ["value", /^Market Value/], ["cost", /^Cost Basis/], ["unreal", /^Gain/]];
-  const heads = all.filter(l => l.items.some(i => /^Market Value/.test(i.s)) && l.items.some(i => /^Quantity/.test(i.s)))
+  const heads = all.filter(l => !l.ocr && l.items.some(i => /^Market Value/.test(i.s)) && l.items.some(i => /^Quantity/.test(i.s)))
     .map(l => ({page: l.page, y: l.y, cols: HEADS.map(([k, re]) => { const it = l.items.find(i => re.test(i.s)); return it && {k, c: mid(it)}; }).filter(Boolean)}));
   const numbersOf = (items, at) => {
     const cells = items.filter(it => it.x >= 300 && (isNumTok(it.s) || /^N\/A/.test(it.s)));
-    const h = heads.filter(x => x.page === at.page && x.y < at.y).pop();
+    // Шапка над строкой на той же странице; на распознанной картинке — шапка того же шаблона с текстовой страницы.
+    const h = heads.filter(x => x.page === at.page && x.y < at.y).pop() || (at.ocr ? heads[0] : null);
     if(!h || h.cols.length < 5){ const v = cells.map(it => /^N\/A/.test(it.s) ? null : num(it.s)); return {qty: v[0], price: v[1], value: v[2], cost: v[3], unreal: v[4]}; }
     const out = {};
     cells.forEach(it => {
@@ -110,7 +205,8 @@ function parseSchwab(pages, fileName){
 
   // Акции. Над строкой позиции стоит строка-маркер: (M) и «i» в колонке себестоимости,
   // если та неполная. Неполную себестоимость показываем как неизвестную.
-  const eq = section(/^Positions - Equities/, /^Total Equities/);
+  // Распознанная страница теряет тире в заголовке («Positions Options»): тире необязательно.
+  const eq = section(/^Positions\s*[-–—]?\s*Equities/, /^Total Equities/);
   let sumEq = 0;
   eq.forEach((l, i) => {
     if(/^Total Equities/.test(l.text)){ doc.checks.push(check(WL.t("Акции Schwab", "Schwab equities"), round2(sumEq), nums(l)[0])); return; }
@@ -124,15 +220,16 @@ function parseSchwab(pages, fileName){
     const name = items.filter(it => it.x > 40 && it.x < 300 && it.s !== "F").map(it => it.s).join(" ");
     sumEq += value || 0;
     doc.positions.push({id: "SCHW:" + sym, broker: doc.broker, brokerShort: "Schwab", type: "stock",
-      symbol: sym, name: titleCase(name), qty, price, priceDate: doc.asOf, value, ccy: "USD",
+      symbol: sym, name: titleCase(name), qty, price, priceDate: doc.asOf, value, ccy: "USD", page: l.page,
       cost: costFlag ? null : cost, costReported: cost,
       costNote: cost == null ? WL.t("нет в выписке", "not in the statement") : (costFlag ? WL.t("неполная в выписке", "incomplete in the statement") : null),
       unrealized: costFlag ? null : unreal, purchaseDate: null, commission: null});
   });
 
   // Опционы: символ и CALL/PUT в строке позиции, страйк и экспирация — строкой ниже.
-  const op = section(/^Positions - Options/, /^Total Options/);
-  let sumOp = 0;
+  const op = section(/^Positions\s*[-–—]?\s*Options/, /^Total Options/);
+  let sumOp = 0, ocrRows = 0;
+  const ocrBad = [];
   op.forEach((l, i) => {
     if(/^Total Options/.test(l.text)){ doc.checks.push(check(WL.t("Опционы Schwab", "Schwab options"), round2(sumOp), nums(l)[0])); return; }
     if(!isSym(l.items[0])) return;
@@ -141,8 +238,10 @@ function parseSchwab(pages, fileName){
     const {qty, price, value, cost, unreal} = numbersOf(items, l);
     // Страйк и экспирация — в строках под позицией. «ADJ EXP» и «REPS 100 FDX+50 FDXF» — скорректированный контракт:
     // поставка по нему не 100 акций одного тикера, и сравнивать страйк с ценой одной акции нельзя.
-    let strike = null, expiry = null, adjusted = false, deliverable = null;
+    let strike = null, expiry = null, adjusted = false, deliverable = null, strike2 = null;
     for(const n of op.filter(m => m.page === l.page && m.y > l.y + 4 && m.y <= l.y + 44 && !isSym(m.items[0]))){
+      const rp = n.items.find(it => it.x < 60 && /^\d+\.\d{2}$/.test(it.s.split(/\s+/).pop()));
+      if(rp && strike2 == null) strike2 = +rp.s.split(/\s+/).pop();
       const st = n.items.find(it => /^\$[\d.]+$/.test(it.s));
       const ex = n.items.find(it => /^(ADJ )?EXP \d{2}\/\d{2}\/\d{2}$/.test(it.s));
       if(st && ex && strike == null){ strike = num(st.s); adjusted = /^ADJ/.test(ex.s); const m = /(\d{2})\/(\d{2})\/(\d{2})/.exec(ex.s); expiry = `20${m[3]}-${m[1]}-${m[2]}`; }
@@ -151,6 +250,12 @@ function parseSchwab(pages, fileName){
     }
     const root = l.items[0].s, right = d.s.startsWith("CALL") ? "C" : "P";
     if(deliverable) adjusted = true;
+    // Страйк напечатан дважды: «$27.5» и «27.50». Если распознавание потеряло точку («$275»), верим записи с двумя знаками.
+    if(strike2 != null && (strike == null || Math.abs(strike - strike2) > 0.001)) strike = strike2;
+    let q = qty;
+    if(q == null && price && value != null){ const k = value / (price * 100); if(Math.round(k) !== 0 && Math.abs(k - Math.round(k)) < 0.02) q = Math.round(k); }
+    // Строка с картинки проходит, только если количество × цена × 100 сходится со стоимостью: иначе цифра прочитана неверно.
+    if(l.ocr){ ocrRows++; if(!(q != null && price != null && value != null && Math.abs(q * price * 100 - value) <= Math.max(1, Math.abs(value) * 0.01) && strike && expiry)) ocrBad.push(root); }
     const occ = expiry && strike != null
       ? root + expiry.slice(2, 4) + expiry.slice(5, 7) + expiry.slice(8, 10) + right + String(Math.round(strike * 1000)).padStart(8, "0")
       : null;
@@ -158,15 +263,18 @@ function parseSchwab(pages, fileName){
     doc.positions.push({id: "SCHW:" + (occ || root + i), broker: doc.broker, brokerShort: "Schwab", type: "option",
       right, underlying: adjusted ? root.replace(/\d+$/, "") : root, underlyingName: titleCase(d.s.replace(/^(CALL|PUT) /, "")), strike, expiry, occ,
       adjusted: adjusted || undefined, deliverable: deliverable || undefined,
-      multiplier: 100, qty, price, priceDate: doc.asOf, value, ccy: "USD", cost, unrealized: unreal,
+      multiplier: 100, qty: q, price, priceDate: doc.asOf, value, ccy: "USD", cost, unrealized: unreal, ocr: l.ocr || undefined, page: l.page,
       purchaseDate: null, commission: null,
       name: WL.t(`${root} ${right === "C" ? "колл" : "пут"} ${strike}`, `${root} ${strike} ${right === "C" ? "call" : "put"}`)});
   });
 
   if(cash != null) doc.positions.push({id: "SCHW:CASH:USD", broker: doc.broker, brokerShort: "Schwab", type: "cash",
     name: WL.t("Денежные средства", "Cash"), symbol: "USD", value: cash, ccy: "USD", priceDate: doc.asOf});
+  if(ocrRows) doc.checks.push({label: WL.t("Опционы со страниц-картинок: количество, цена и стоимость сходятся", "Options from image pages: quantity, price and value agree"),
+    parsed: ocrRows - ocrBad.length, stated: ocrRows, ok: !ocrBad.length, count: true});
   const total = round2(doc.positions.reduce((a, p) => a + (p.value || 0), 0));
-  doc.checks.push(check(WL.t("Итог счёта Schwab", "Schwab account total"), total, S.ending));
+  // Итог всего счёта: если он сошёлся, на непрочитанных страницах позиций нет — иначе итог бы не сошёлся.
+  doc.checks.push({...check(WL.t("Итог счёта Schwab", "Schwab account total"), total, S.ending), whole: true});
   // Страницы-картинки молча пропускать нельзя: если итог не сошёлся, на них и лежит недостающее.
   if(doc.imagePages.length && doc.checks.some(c => !c.ok))
     doc.note = WL.t(`страницы ${doc.imagePages.join(", ")} — картинки без текста, позиции на них не прочитаны`,
@@ -397,7 +505,7 @@ function parseDetailed(pages, fileName){
   const mv = Math.round(pos.reduce((a, p) => a + (p.valueRef || 0), 0) * 100) / 100;
   if(totals["total market value"] != null) doc.checks.push(check(WL.t("Рыночная стоимость без НКД", "Market value excluding accrued interest"), mv, totals["total market value"]));
   if(totals["total accrued interest"] != null) doc.checks.push(check(WL.t("Накопленный купонный доход", "Accrued interest"), accruedTotal, totals["total accrued interest"]));
-  doc.checks.push(check(WL.t(`Чистые активы счёта, ${valCcy}`, `Net assets, ${valCcy}`), Math.round((mv + accruedTotal) * 100) / 100, totals["total net assets"] ?? null));
+  doc.checks.push({...check(WL.t(`Чистые активы счёта, ${valCcy}`, `Net assets, ${valCcy}`), Math.round((mv + accruedTotal) * 100) / 100, totals["total net assets"] ?? null), whole: true});
   doc.checks.forEach(ch => { if(!ch.count) ch.ccy = valCcy; });
   doc.note = WL.t("стоимость бумаг — без НКД, НКД отдельной строкой; цены облигаций — в процентах номинала",
     "securities are valued without accrued interest, which is shown as a separate line; bond prices are in percent of nominal");
@@ -412,7 +520,7 @@ function parseDetailed(pages, fileName){
    просветами от 5 pt: у разделов и страниц своя ширина колонок, и общие полосы слипаются. Затем
    куски сводятся в одну таблицу по названиям колонок. Дальше таблицы идут в тот же разбор, что CSV
    и Excel, а пользователь проверяет колонки перед импортом. */
-const NUMLIKE = /^[(\-−+]?\s?(?:[$€£]|CHF|USD|EUR|GBP)?\s?\d[\d\s'’.,]*\)?\s?%?$/;
+const NUMLIKE = /^[(\-−–‒﹣－+]?\s?(?:[$€£]|CHF|USD|EUR|GBP)?\s?\d[\d\s'’.,]*\)?-?\s?%?$/;
 const isNumCell = c => NUMLIKE.test(c.s);
 function lineCells(L){
   const cells = [];
@@ -474,7 +582,7 @@ function place(cells, cols){
 // Куски одной таблицы (разделы, страницы) → общая сетка: колонка куска попадает в колонку с тем же
 // полем, потом с той же подписью, а без подписи — в ту, над которой стоит.
 function alignBlocks(blocks){
-  const names = [], fields = [], xs = [], out = [], titles = [];
+  const names = [], fields = [], xs = [], out = [], titles = [], rowPages = [];
   let head = 0, data = 0, lastCols = null;
   blocks.forEach((bl, bi) => {
     const band = bandsOf(bl.rows);
@@ -498,14 +606,15 @@ function alignBlocks(blocks){
       const row = [];
       cells.forEach((v, j) => { if(v) row[target[j]] = row[target[j]] ? row[target[j]] + " " + v : v; });
       if(bi === 0 && ri === bl.head) head = out.length;
-      out.push(row);
+      out.push(row); rowPages.push(bl.rows[ri].page);
     });
   });
   if(!data) return null;
   const keys = fields.filter(Boolean);
   const dated = keys.includes("date") || names.some(n => /(^|\s)(date|datum|дата|valuta|booking)(\s|$)/i.test(n));
   const page = (blocks[0].rows[blocks[0].head] || {}).page || 1;
-  const rows = out.map(r => Array.from({length: names.length}, (_, i) => r[i] || ""));
+  // Страница каждой строки едет вместе с ней: по ней видно, с каких страниц прочитаны позиции.
+  const rows = out.map((r, k) => Object.defineProperty(Array.from({length: names.length}, (_, i) => r[i] || ""), "page", {value: rowPages[k], enumerable: false}));
   rows[head] = names.map((n, i) => n || rows[head][i]);
   // Класс актива по разделам — отдельной колонкой, если своей в выписке нет.
   if(!fields.includes("type")){
@@ -521,7 +630,7 @@ function alignBlocks(blocks){
   }
   const name = [...new Set(titles.filter(Boolean))].join(" · ");
   // ops — движение денег (дата сделки, нет количества и цены): позиций в такой таблице нет.
-  return {name: name.length > 48 ? name.slice(0, 47) + "…" : name, rows, head, page, data,
+  return {name: name.length > 48 ? name.slice(0, 47) + "…" : name, rows, head, page, data, keys,
           positional: positional(keys), ops: dated && !keys.includes("qty") && !keys.includes("price")};
 }
 /* Шапка в две-три строки («MARKET» над «VALUE USD», «PORTF.» над «WEIGHT») по строкам узнаётся плохо и режет
@@ -595,7 +704,8 @@ function pdfTables(pages){
     src = src.slice(Math.max(0, first - 3));
     const band = bandsOf(src);
     if(band && band.data >= 2 && band.cols.length >= 3)
-      tables.push({name: "", rows: src.map(cells => place(cells, band.cols)), page: (src[0] || {}).page || 1, data: band.data, positional: false, ops: false});
+      tables.push({name: "", rows: src.map(cells => Object.defineProperty(place(cells, band.cols), "page", {value: cells.page, enumerable: false})),
+        page: (src[0] || {}).page || 1, data: band.data, positional: false, ops: false, keys: []});
   });
   return tables;
 }
@@ -645,10 +755,223 @@ function pdfBank(lines){
     s.split(/\s+/).length <= 6 && s.split(/\s+/).every(w => small.test(w) || /^[A-ZÀ-ÞА-ЯЁ"«(]/.test(w))) || null;
 }
 
-WL.parseFile = async function(file){
+/* Номера счёта, портфеля и договора из подписей: «ACCOUNT NUMBER: 537630», «Portfolio 537630-1», «Konto 1234 5678».
+   Нужны, чтобы узнать тот же счёт в другой выписке (в отчёте хранится только отпечаток номера) и чтобы закрыть
+   номера перед отправкой в ИИ. Даты («from 01.08.2026») номером не считаются. */
+// Номер без пробелов («537630.120.6») или группами через пробел («1234 5678 90»), но без соседней суммы («… 459,667.08»).
+const ID_LABEL = /(?<![\p{L}])(account|acct|portfolio|portefeuille|depot|konto|client|customer|kunden|relationship|mandate|contract|vertrag|cif|номер|сч[её]т|договор|портфел)[^\d\n|]{0,24}?([A-Z]{0,4}\d[\d.\/-]{2,}\d(?: \d{2,4}(?![.,]\d)){0,4})/giu;
+const DATE_LIKE = /^(\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})$/;
+// Подпись говорит, чей это номер: счёта или портфеля («Account», «Konto», «Счёт») — или клиента и договора («Client», «CIF»).
+const ACCT_WORD = /(account|acct|portfolio|portefeuille|depot|konto|сч[её]т|портфел)/i;
+function accountTokens(lines){
+  const out = [];
+  lines.forEach(L => { let m; ID_LABEL.lastIndex = 0; while((m = ID_LABEL.exec(L.text))){
+    // Дата («from 01.08.2026») и сумма («Home Depot Inc 123.45») — не номер.
+    const tok = m[2].trim(); if(DATE_LIKE.test(tok) || /^\d{1,3}(,\d{3})*[.,]\d{1,2}$|^\d+[.,]\d{2}$/.test(tok)) continue;
+    out.push({tok, kind: ACCT_WORD.test(m[0].slice(0, m[0].length - m[2].length)) ? "A" : "C"}); } });
+  return out;
+}
+/* Отпечаток счёта строится из этих значений: буквы и цифры без разделителей, с видом номера впереди.
+   A:номер — счёт или портфель без составной части.
+   S:корень/номер — составной номер («123456-1», «537630.001.1»): субсчета «123456-1» и «123456-2» — разные счета с общим корнем.
+   C:номер — номер клиента или договора: у одного клиента бывает несколько счетов, это только подсказка. */
+const digits5 = x => (x.match(/\d/g) || []).length >= 5;
+WL.accountIds = lines => [...new Set(accountTokens(lines).flatMap(({tok, kind}) => {
+  const whole = tok.replace(/[^A-Za-z0-9]/g, "").toUpperCase(), lead = (/^[A-Z]{0,4}\d{5,}/i.exec(tok) || [""])[0].toUpperCase();
+  if(!digits5(whole)) return [];
+  if(kind === "C") return ["C:" + whole];
+  return lead && lead !== whole && digits5(lead) ? ["S:" + lead + "/" + whole] : ["A:" + whole];
+}))];
+/* Сравнение номеров двух выписок (номера уже в виде отпечатков, но устроены так же).
+   different — есть субсчета одного корня, и ни один не совпал: 123456-1 против 123456-2. Это разные счета, даже если у обеих
+     выписок совпал общий «номер счёта» клиента (у EFG «Account number 537630» и «Portfolio 537630-1»).
+   same — совпал полный номер счёта или субсчёта.
+   maybe — в одной выписке только корень, в другой — субсчёт с этим корнем.
+   client — совпал только номер клиента или договора. */
+WL.compareAccounts = (a, b) => {
+  const parse = xs => { const whole = new Set(), roots = new Map(), client = new Set();
+    (xs || []).forEach(x => { const k = x.slice(0, 2), v = x.slice(2);
+      if(k === "S:"){ const [r, w] = v.split("/"); whole.add(w); if(!roots.has(r)) roots.set(r, new Set()); roots.get(r).add(w); }
+      else if(k === "C:") client.add(v);
+      else whole.add(k === "A:" ? v : x);          // старые отпечатки без вида: как раньше, полный номер
+    });
+    return {whole, roots, client, known: whole.size > 0}; };
+  const A = parse(a), B = parse(b), meet = (x, y) => [...x].some(v => y.has(v));
+  for(const [r, ws] of A.roots) if(B.roots.has(r) && !meet(ws, B.roots.get(r))) return "different";
+  if(meet(A.whole, B.whole)) return "same";
+  if(meet(A.whole, new Set(B.roots.keys())) || meet(new Set(A.roots.keys()), B.whole)) return "maybe";
+  if(A.known && B.known) return "different";
+  if(meet(A.client, B.client)) return "client";
+  return null;
+};
+/* ── Страницы-картинки: распознавание текста на этом компьютере ─────────────────
+   Закрашивание реквизитов и «печать в PDF» картинкой превращают страницу в изображение без текста. Такие страницы
+   распознаём Tesseract прямо в браузере: изображение никуда не уходит, библиотека и языковые данные — со своего адреса.
+   Это медленно, поэтому только когда без этих страниц выписка не читается или не сходится, и распознанное принимаем,
+   только если после него выписка сошлась с итогами банка: ошибка распознавания в цифре иначе стала бы ошибкой в отчёте. */
+const vendorUrl = path => new URL("wealth/vendor/" + path, document.baseURI).href;
+let tesseractLoad = null;
+function loadTesseract(){
+  if(window.Tesseract) return Promise.resolve(window.Tesseract);
+  return tesseractLoad = tesseractLoad || new Promise((res, rej) => {
+    const el = document.createElement("script");
+    el.src = vendorUrl("tesseract/tesseract.min.js");
+    el.onload = () => res(window.Tesseract);
+    el.onerror = () => { tesseractLoad = null; rej(new Error("ocr_unavailable")); };
+    document.head.appendChild(el);
+  });
+}
+// Слова распознавания → строки и ячейки в том же виде, что у PDF.js: координаты в пунктах страницы, слова одной ячейки вместе.
+function ocrLines(words, page){
+  if(!words.length) return [];
+  const hMed = words.map(w => w.h).sort((a, b) => a - b)[Math.floor(words.length / 2)] || 8;
+  words.sort((a, b) => a.y - b.y || a.x - b.x);
+  const lines = [];
+  for(const w of words){
+    const L = lines[lines.length - 1];
+    if(L && Math.abs(L.y - w.y) <= Math.max(2, hMed * 0.45)) L.words.push(w); else lines.push({y: w.y, words: [w]});
+  }
+  return lines.map(L => {
+    const items = [];
+    L.words.sort((a, b) => a.x - b.x).forEach(w => {
+      const last = items[items.length - 1];
+      if(last && w.x - last.x2 < Math.max(3.5, hMed * 0.9)){ last.s += " " + w.s; last.x2 = w.x2; last.w = last.x2 - last.x; }
+      else items.push({s: w.s, x: Math.round(w.x), x2: w.x2, y: Math.round(w.y), w: w.x2 - w.x, h: w.h});
+    });
+    return {y: Math.round(L.y), page, ocr: true, items, text: items.map(i => i.s).join(" ")};
+  });
+}
+// targets — [{n: страница, boxes}]: boxes — места картинок на странице с текстом; без них распознаётся вся страница.
+async function ocrPages(buf, targets, progress, signal, password){
+  // Каждый шаг ждём не дольше минуты и прерываем сразу по отмене: зависшая библиотека не должна держать очередь.
+  const step = (p, ms = 60000) => new Promise((res, rej) => {
+    const timer = setTimeout(() => rej(new Error("ocr_timeout")), ms);
+    const abort = () => { clearTimeout(timer); rej(new Error("aborted")); };
+    if(signal){ if(signal.aborted) return abort(); signal.addEventListener("abort", abort, {once: true}); }
+    p.then(v => { clearTimeout(timer); res(v); }, e => { clearTimeout(timer); rej(e); });
+  });
+  const T = await step(loadTesseract());
+  const pdf = await step(openPdf(buf, password));
+  const worker = await step(T.createWorker("eng", 1, {workerPath: vendorUrl("tesseract/worker.min.js"), corePath: vendorUrl("tesseract/core").replace(/\/$/, ""),
+    langPath: vendorUrl("tesseract/lang").replace(/\/$/, ""), workerBlobURL: false}));
+  try{
+    await worker.setParameters({tessedit_pageseg_mode: "11", preserve_interword_spaces: "1"});
+    const out = {};
+    for(let i = 0; i < targets.length; i++){
+      if(signal && signal.aborted) throw new Error("aborted");
+      const {n, boxes} = targets[i];
+      if(progress) progress(i, targets.length, n);
+      const page = await pdf.getPage(n), scale = 2.5, vp = page.getViewport({scale});
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      // intent "print": без кадров анимации — иначе в фоновой вкладке отрисовка встаёт до возвращения на неё.
+      await step(page.render({canvasContext: ctx, viewport: vp, intent: "print"}).promise);
+      const {data} = await step(worker.recognize(canvas, {}, {blocks: true, text: false}), 120000);
+      const words = [];
+      (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(pg => (pg.lines || []).forEach(ln => (ln.words || []).forEach(w => {
+        const t = String(w.text || "").trim();
+        if(!t || w.confidence < 30) return;
+        const x = w.bbox.x0 / scale, x2 = w.bbox.x1 / scale, y = w.bbox.y1 / scale, h = (w.bbox.y1 - w.bbox.y0) / scale;
+        // На странице с текстом берём только слова внутри картинок: остальное уже прочитано из текста страницы.
+        if(boxes && !boxes.some(b => (x + x2) / 2 >= b.x0 && (x + x2) / 2 <= b.x1 && y - h / 2 >= b.y0 && y - h / 2 <= b.y1)) return;
+        words.push({s: t, x, x2, y, h});
+      }))));
+      out[n] = ocrLines(words, n);
+      canvas.width = canvas.height = 0;
+    }
+    return out;
+  } finally {
+    worker.terminate().catch(() => {});
+    pdf.destroy().catch(() => {});
+  }
+}
+
+/* Покрытие страниц. Непрочитанная страница — картинка без текста или картинка на месте, где нет текста (кроме обложки до
+   первой таблицы), если её не распознали. Распознанная страница считается прочитанной, если из неё взяты позиции или в её
+   тексте нет строк с суммами (условия, обложка); распознанный текст со строками сумм, из которых позиций не вышло, —
+   по-прежнему пропуск. Итог выписки, сошедшийся по прочитанному, этого не отменяет — кроме итога всего счёта (см. WL.quality). */
+// Сумма в распознанном тексте: число от трёх цифр или с дробной частью; даты, годы и номера страниц суммами не считаем.
+const hasAmounts = lines => lines.some(L => (L.text.replace(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b|\b(19|20)\d\d\b/g, " ")
+  .match(/\d[\d,.' ]*\d|\d/g) || []).some(tok => (tok.match(/\d/g) || []).length >= 3 || /[.,]\d/.test(tok)));
+function coverage(doc, pages, ocr){
+  const meta = pages.meta || [], fromPage = new Set((doc.positions || []).map(p => p.page).filter(Boolean));
+  const first = fromPage.size ? Math.min(...fromPage) : 1, unread = [], read = [];
+  meta.forEach((m, i) => {
+    const n = i + 1;
+    if(!m || m.blank || (m.text && (!m.boxes.length || n < first))) return;
+    // Распознанная страница прочитана, если из неё взяты позиции или в её тексте нет сумм вовсе (условия, обложка).
+    // Суммы есть, а позиций нет — распознавание что-то потеряло: «Total USD 500» без строки бумаги.
+    if(ocr && ocr[n] && ocr[n].length && (fromPage.has(n) || !hasAmounts(ocr[n]))){ read.push(n); return; }
+    unread.push(n);
+  });
+  doc.pages = {count: pages.length, unread, ocr: read};
+  return doc;
+}
+// Страницы, которые стоит распознать: картинки без текста и картинки на месте таблицы.
+const ocrTargets = (pages, doc) => (pages.meta || []).map((m, i) => {
+  if(!m || m.blank) return null;
+  if(!m.text) return {n: i + 1, boxes: null};
+  return m.boxes.length ? {n: i + 1, boxes: m.boxes} : null;
+}).filter(Boolean).filter(x => !doc || !doc.pages || doc.pages.unread.includes(x.n) || !x.boxes);
+
+// Миниатюры страниц для вопроса «есть ли здесь позиции?»: рисуются здесь же, картинка никуда не уходит.
+WL.pageThumbs = async function(file, pageNos, opts = {}){
+  if(typeof document === "undefined") return [];
+  const pdf = await openPdf(await file.arrayBuffer(), opts.password), out = [];
+  try{
+    for(const n of pageNos){
+      const page = await pdf.getPage(n), base = page.getViewport({scale: 1}), vp = page.getViewport({scale: Math.min(1, 360 / base.width)});
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+      const ctx = canvas.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({canvasContext: ctx, viewport: vp, intent: "print"}).promise;
+      out.push({n, url: canvas.toDataURL("image/jpeg", 0.82)});
+      canvas.width = canvas.height = 0;
+    }
+  } finally { pdf.destroy().catch(() => {}); }
+  return out;
+};
+
+// opts.ocr(i, n, страница) — ход распознавания страниц-картинок; без него (Node, проверки) картинки не распознаются.
+// opts.password — пароль защищённой выписки, если человек его ввёл.
+WL.parseFile = async function(file, opts = {}){
   // Таблицу разбирает sheet.js: у выгрузки колонки уже размечены, и гадать не нужно.
   if(!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return WL.parseSheet(file);
-  const pages = await pdfLines(await file.arrayBuffer());
+  let pages = await pdfLines(await file.arrayBuffer(), opts.password);
+  let doc = await parsePdfPages(pages, file);
+  if(doc && !doc.unknown) coverage(doc, pages, null);
+  const rank = d => !d || d.unknown ? 0 : ({partial: 1, unverified: 2, ok: 3})[WL.quality ? WL.quality(d).status : "unverified"];
+  const targets = ocrTargets(pages, doc && !doc.unknown ? doc : null);
+  if(targets.length && targets.length <= 12 && opts.ocr && typeof document !== "undefined" && rank(doc) < 3){
+    try{
+      const ocr = await ocrPages(await file.arrayBuffer(), targets, opts.ocr, opts.signal, opts.password);
+      const merged = pages.map((ls, i) => { const o = ocr[i + 1]; return !o || !o.length ? ls : ls.length ? [...ls, ...o].sort((a, b) => a.y - b.y) : o; });
+      Object.defineProperty(merged, "meta", {value: pages.meta, enumerable: false});
+      const doc2 = await parsePdfPages(merged, file);
+      if(doc2 && !doc2.unknown){
+        coverage(doc2, merged, ocr);
+        // Распознанное принимаем, если выписка сошлась с итогами банка. Без итога — только если у каждой позиции с распознанной
+        // страницы есть количество, цена и стоимость, и они сходятся между собой (иначе WL.quality отметила бы противоречие).
+        const fromOcr = doc2.positions.filter(p => p.page && ocr[p.page] && ocr[p.page].length);
+        const sure = rank(doc2) === 3 || (rank(doc2) === 2 && fromOcr.length && fromOcr.every(p => p.type === "cash" || (p.qty != null && p.price != null && p.value != null)));
+        if(sure){
+          const used = doc2.pages.ocr;
+          doc = doc2; pages = merged;
+          if(used.length) doc.note = [doc.note, used.length === 1
+            ? WL.t(`страница ${used[0]} — картинка: текст распознан на этом компьютере и сверен`, `page ${used[0]} is an image: its text was recognised on this computer and checked`)
+            : WL.t(`страницы ${used.join(", ")} — картинки: текст распознан на этом компьютере и сверен`, `pages ${used.join(", ")} are images: their text was recognised on this computer and checked`)].filter(Boolean).join(" · ");
+        } else if(doc && !doc.unknown){
+          doc.note = [doc.note, WL.t("распознавание текста на страницах-картинках не помогло сверить выписку", "recognising text on the image pages did not help reconcile the statement")].filter(Boolean).join(" · ");
+        }
+      }
+    }catch(e){ if(!(opts.signal && opts.signal.aborted)) console.warn("OCR failed", e); }
+  }
+  if(doc && !doc.unknown) Object.defineProperty(doc, "accountIds", {value: WL.accountIds(pages.flat()), enumerable: false, configurable: true});
+  return doc;
+};
+async function parsePdfPages(pages, file){
   const head = pages.slice(0, 3).flat().map(l => l.text).join("\n");
   // Schwab выпускает выписки в нескольких шаблонах; имя файла «Brokerage Statement_2026-08-31_241.PDF» — их.
   // Разборщик знает один шаблон: если позиций он не нашёл, отдаём файл общему разбору таблиц, а не пустой отчёт.
@@ -692,7 +1015,7 @@ WL.parseFile = async function(file){
     return {unknown: true, fileName: file.name, pdf: true, plain: numericRows < 2};
   }
   return doc;
-};
+}
 /* ── Текст для распознавания ИИ ────────────────────────────────────────────
    Уходит на сервер только по согласию пользователя и только когда выписку не удалось прочитать здесь.
    Не отправляем шапку первой страницы (имя и адрес клиента), её повторы дальше и короткие строки, повторяющиеся
@@ -700,18 +1023,6 @@ WL.parseFile = async function(file){
    Номера счетов, IBAN, почту и телефоны маскируем; имя файла не уходит. Числа текста запоминаем, чтобы
    проверить ответ: сумма, которой нет в выписке, — выдумка, и такой разбор не принимаем. */
 const MASK = "▇";
-function parseAmount(tok){
-  let t = String(tok).replace(/[\s'’ ]/g, "");
-  const neg = /^\(.*\)$/.test(t) || /^[-−]/.test(t);
-  t = t.replace(/[()\-−+]/g, "");
-  if(!/^\d[\d.,]*$/.test(t)) return null;
-  const c = t.includes(","), d = t.includes(".");
-  if(c && d) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
-  else if(c) t = /^\d{1,3}(,\d{3})+$/.test(t) ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
-  else if(d && (t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
-  const v = parseFloat(t);
-  return isFinite(v) ? (neg ? -v : v) : null;
-}
 function maskLine(line){
   return line
     .replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g, MASK)                  // IBAN
@@ -727,8 +1038,35 @@ function maskLine(line){
 }
 // Служебные слова шапок: фразу только из них («PORTFOLIO VALUATION», «This page is intentionally left blank») именем не считаем.
 const GENERIC_HEAD = /^(portfolio|valuation|statement|report|account|accounts|summary|documents?|electronic|detailed|positions?|page|this|is|intentionally|left|blank|investment|type|risk|scoring|your|our|relationship|officer|manager|advisor|client|private|banking|wealth|management|the|of|and|for|as|at|to|in|on|a|an|confidential|period|date|overview|nickname|mandate|active|advisory|currency|valuation)$/i;
-WL.pdfAiText = async function(file){
-  const pages = await pdfLines(await file.arrayBuffer());
+// Подпись перед именем владельца: «Client», «Owner:», «Mr», «Владелец». Имя после неё закрываем в любой строке текста.
+const OWNER_LABEL = /^(account holder|beneficial owner|beneficiary|client name|name of (?:the )?client|owner|holder|client|customer|titulaire|b[ée]n[ée]ficiaire|kontoinhaber|inhaber|kunde|attn\.?|c\/o|владелец|получатель|клиент)\s*[:\-–]?\s+(.+)$/iu;
+const HONORIFIC = /^(mr|mrs|ms|miss|dr|prof|herr|frau|mme|madame|monsieur|m|sig|sra|sr|г-н|г-жа|господин|госпожа)\.?$/iu;
+const personLike = x => { const ws = x.split(/\s+/).filter(Boolean);
+  return ws.length >= 1 && ws.length <= 5 && !/\d/.test(x) && ws.some(w => !GENERIC_HEAD.test(w) && !HONORIFIC.test(w)) && ws.every(w => /^[\p{Lu}"«(]/u.test(w) || HONORIFIC.test(w) || /^(de|da|di|van|von|der|la|le|du|del|y|и)$/i.test(w)); };
+// Числа строки текста для ИИ со знаком: по ним ответ модели проверяется в строке своей бумаги. Тот же разбор — для текста,
+// который человек поправил перед отправкой: проверяется ровно то, что ушло.
+const TOK = /[(\-]?\d[\d'’ .,]*\d\)?-?|\d/g;
+function aiLines(text){
+  const lines = [], numbers = new Set();
+  let page = 1;
+  String(text || "").split("\n").forEach(raw => {
+    const pm = /^--- page (\d+) ---$/.exec(raw.trim());
+    if(pm){ page = +pm[1]; return; }
+    if(!raw.trim()) return;
+    const L = {page, text: raw, lower: raw.toLowerCase(), cells: raw.split(" | ").map(c => c.trim()), signed: new Set(), abs: new Set()};
+    (raw.replace(DASHES, "-").match(TOK) || []).forEach(tok => {
+      const a = amount(tok.trim());
+      if(!a) return;
+      const c = Math.round(Math.abs(a.value) * 100);
+      numbers.add(c); L.abs.add(c); L.signed.add(Math.sign(a.value || 1) * c);
+    });
+    lines.push(L);
+  });
+  return {lines, numbers};
+}
+WL.aiLines = aiLines;
+WL.pdfAiText = async function(file, opts = {}){
+  const pages = await pdfLines(await file.arrayBuffer(), opts.password);
   const tableLine = L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); };
   // Шапка документа — всё до первой таблицы: обложки, адрес банка, номер счёта, имена клиента и сотрудника банка.
   // У одних банков это верх первой страницы, у других — несколько страниц перед таблицами.
@@ -755,21 +1093,27 @@ WL.pdfAiText = async function(file){
   pages.forEach(ls => new Set(ls.map(l => norm(l.text))).forEach(k => freq.set(k, (freq.get(k) || 0) + 1)));
   // Строки шапки, которые повторяются дальше (шапка на каждой странице), тоже не уходят, а имя из шапки
   // («Mr Ivan Petrov») закрываем и внутри других строк. Берём только строки без сумм и без названий колонок:
-  // «Market value | 1 234 567» в сводке — подпись, а не имя, и в шапках таблиц её закрывать нельзя.
+  // «Market value | 1 234 567» в сводке — подпись, а не имя, и в шапках таблиц её закрывать нельзя. Из «Client Alice Qatest»
+  // закрываем и саму фразу, и имя без подписи: в таблице оно встречается как «Owner Alice Qatest».
   const head = new Set(headLines.map(L => norm(L.text)).filter(k => k.length >= 10));
-  const names = [...new Set(headLines.filter(L => !lineCells(L).some(isNumCell)).flatMap(L => lineCells(L).map(c => c.s.replace(/\s+/g, " ").trim()))
+  const phrases = headLines.filter(L => !lineCells(L).some(isNumCell)).flatMap(L => lineCells(L).map(c => c.s.replace(/\s+/g, " ").trim()))
     .filter(x => !/\d/.test(x) && x.length >= 5 && x.length <= 48 && /^\S+(\s+\S+){1,5}$/.test(x) && !SECTION.test(x) && !Object.keys(WL.sheetMap ? WL.sheetMap([x]) : {}).length &&
-      x.split(/[\s:.,;-]+/).filter(Boolean).some(w => !GENERIC_HEAD.test(w))))]
-    .sort((a, b) => b.length - a.length)
+      x.split(/[\s:.,;-]+/).filter(Boolean).some(w => !GENERIC_HEAD.test(w)));
+  const bare = phrases.map(x => { const m = OWNER_LABEL.exec(x); let rest = (m ? m[2] : x).split(/\s+/); while(rest.length && HONORIFIC.test(rest[0])) rest = rest.slice(1); return rest.join(" "); })
+    .filter(x => x.split(/\s+/).length >= 2 && x.length >= 5 && personLike(x));
+  const names = [...new Set([...phrases, ...bare])].sort((a, b) => b.length - a.length)
     .map(x => new RegExp(`(^|[^\\p{L}\\p{N}])${x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "giu"));
   // Номера счёта, портфеля и договора из подписей «ACCOUNT NUMBER: 537630», «PORTFOLIO 537630-1» на любой странице —
   // и дальше закрываем их везде, где они встречаются: в заголовках таблиц, описаниях счетов, ссылках.
   const ids = new Set();
-  const LABEL = /(account|acct|portfolio|portefeuille|depot|konto|client|customer|kunden|relationship|mandate|contract|vertrag|reference|cif|номер|сч[её]т|договор|портфел)[^\d\n|]{0,24}?([A-Z]{0,4}\d[\d.\/-]{2,}\d)/gi;
-  pages.flat().forEach(L => { let m; LABEL.lastIndex = 0; while((m = LABEL.exec(L.text))) (m[2].match(/\d{5,}/g) || []).forEach(d => ids.add(d)); });
+  accountTokens(pages.flat()).forEach(({tok}) => (tok.match(/\d{5,}/g) || []).forEach(d => ids.add(d)));
+  // Номера сделок и платежей («Reference FT2603560827») тоже закрываем.
+  pages.flat().forEach(L => (L.text.match(/\breference\b[^\d\n|]{0,12}?([A-Z]{0,4}\d{6,})/gi) || []).forEach(m => (m.match(/\d{6,}/g) || []).forEach(d => ids.add(d))));
   const idRe = ids.size ? new RegExp(`[A-Z]{0,4}[\\d.\\/-]*(?:${[...ids].join("|")})[\\d.\\/-]*`, "g") : null;
+  // Ячейка «Owner Alice Qatest» или «Client: A. Qatest» в любом месте текста: подпись оставляем, имя закрываем.
+  const owner = cell => { const m = OWNER_LABEL.exec(cell); return m && personLike(m[2].trim()) ? cell.slice(0, cell.length - m[2].length) + MASK : cell; };
   const hide = line => { let a = names.reduce((x, re) => x.replace(re, (m, pre) => pre + MASK), line); return idRe ? a.replace(idRe, MASK) : a; };
-  const out = [], numbers = new Set(), lines = [];
+  const out = [];
   pages.forEach((ls, pi) => {
     if(pi < fp) return;                                                  // страницы до первой таблицы
     const rows = [];
@@ -782,25 +1126,136 @@ WL.pdfAiText = async function(file){
         if(k.length >= 8 && !headKeyOf(cells) && !cells.some(isNumCell) && !SECTION.test(L.text.trim()) &&
           pages.length >= 2 && freq.get(k) >= Math.max(2, pages.length * 0.34)) return;
       }
-      rows.push(hide(maskLine(cells.map(c => c.s).join(" | "))));
+      rows.push(hide(maskLine(cells.map(c => owner(c.s)).join(" | "))));
     });
     if(!rows.length) return;
     out.push(`--- page ${pi + 1} ---`, ...rows);
-    rows.forEach(r => lines.push({page: pi + 1, text: r}));
   });
   const text = out.join("\n");
-  // Числа каждой строки со знаком: по ним ответ ИИ проверяется в строке своей бумаги, а не где-нибудь в документе.
-  const TOK = /[(\-−]?\d[\d'’ .,]*\d\)?-?|\d/g;
-  lines.forEach(L => {
-    L.lower = L.text.toLowerCase(); L.signed = new Set(); L.abs = new Set();
-    (L.text.match(TOK) || []).forEach(tok => {
-      const trailing = /\d-$/.test(tok), v = parseAmount(tok.trim().replace(/-$/, ""));
-      if(v == null) return;
-      const c = Math.round(Math.abs(v) * 100);
-      numbers.add(c); L.abs.add(c); L.signed.add((trailing ? -1 : 1) * Math.sign(v || 1) * c);
-    });
-  });
-  return {text, ctx, numbers, lines};
+  const {lines, numbers} = aiLines(text);
+  // Страницы-картинки в текст не попадают: их модель не видит, и отчёт по такому тексту неполный, пока их не распознать.
+  const unread = (pages.meta || []).map((m, i) => m && !m.blank && (!m.text || (m.boxes.length && i >= fp)) ? i + 1 : 0).filter(Boolean);
+  return {text, ctx, numbers, lines, accountIds: WL.accountIds(pages.flat()), pages: {count: pages.length, unread}};
 };
-WL.util = {num, dmy, iso, pad, round2, titleCase};
+
+/* ── Проверка ответа ИИ по тексту, который ушёл в модель ─────────────────────
+   Модель — не источник цифр, а указатель на них. Каждое число позиции должно стоять в строке этой бумаги (по ISIN, тикеру
+   или названию; если их нет — в строке, где есть и количество, и стоимость) или в её продолжении до следующей строки таблицы,
+   с тем же знаком. Сумма соседней бумаги, выдуманная себестоимость, чужая валюта так не подтвердятся. Итог берётся из строк
+   итога самого текста, не из ответа: иначе модель, пропустив бумагу, «сверилась» бы с придуманной суммой. Строки таблиц
+   позиций, которых нет в ответе, перечисляются. */
+const CCY_RE = /(?<![A-Za-z])(USD|EUR|CHF|GBP|JPY|CAD|AUD|NZD|HKD|SGD|SEK|NOK|DKK|PLN|CZK|HUF|RUB|CNY|CNH|INR|AED|ILS|TRY|ZAR|MXN|BRL|KRW|TWD|THB)(?![A-Za-z])/g;
+const CCY_SIGN = {"$": ["USD", "CAD", "AUD", "NZD", "HKD", "SGD", "MXN"], "€": ["EUR"], "£": ["GBP"], "¥": ["JPY", "CNY"], "₽": ["RUB"]};
+const ccysIn = text => { const out = new Set((String(text).toUpperCase().match(CCY_RE) || []));
+  Object.entries(CCY_SIGN).forEach(([sg, cs]) => { if(String(text).includes(sg)) cs.forEach(c => out.add(c + "?")); }); return out; };
+const TOTAL_LINE = /(?<!\p{L})(total|sub-?total|grand total|net assets|total assets|portfolio value|account value|gesamt\p{L}*|summe|totale?|итого|всего|чистые активы)(?!\p{L})/iu;
+const GENERIC_NAME = /^(inc|corp|corporation|co|ltd|limited|plc|ag|sa|nv|se|llc|lp|the|of|and|class|cl|shares?|common|stock|ord|ordinary|adr|fund|etf|ucits|acc|dist|bond|bonds|note|notes|trust|group|holdings?|company|reg|registered|put|call)$/i;
+const MONTH_RE = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*";
+function dateForms(iso){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if(!m) return null;
+  const [y, mo, d] = [m[1], m[2], m[3]], yy = y.slice(2), mon = Object.keys(MON3)[+mo - 1];
+  return [`${y}-${mo}-${d}`, `${d}.${mo}.${y}`, `${d}/${mo}/${y}`, `${mo}/${d}/${y}`, `${d}.${mo}.${yy}`, `${mo}/${d}/${yy}`, `${d}/${mo}/${yy}`,
+    `${+d} ${mon}`, `${mon} ${+d}`, `${d}${mon}${yy}`, `${mon}${yy}`].map(x => x.toLowerCase());
+}
+const DATE_ANY = new RegExp(`\\b(\\d{4}-\\d{2}-\\d{2}|\\d{1,2}[./]\\d{1,2}[./]\\d{2,4}|\\d{1,2}\\s?${MONTH_RE}\\s?\\d{2,4}|${MONTH_RE}\\s\\d{1,2},?\\s\\d{4})\\b`, "i");
+WL.aiVerify = function(prep, ps){
+  const lines = prep.lines || [];
+  const cellsOf = L => L.cells || L.text.split(" | ").map(c => c.trim());
+  const numCells = L => cellsOf(L).filter(c => NUMLIKE.test(c)).length;
+  const rowLike = L => /\p{L}{3,}/u.test(cellsOf(L)[0] || "") && numCells(L) >= 2;
+  const totalLike = L => TOTAL_LINE.test(L.text);
+  const headKeys = L => !numCells(L) && WL.sheetMap ? Object.keys(WL.sheetMap(cellsOf(L))) : [];
+  // Таблица строки — ближайшая шапка выше; шапка позиций — с названием и количеством или стоимостью, без даты сделки.
+  let tab = -1;
+  const heads = {};
+  const tableOf = lines.map((L, i) => { const k = headKeys(L); if(k.length >= 2){ tab = i; heads[i] = k; } return tab; });
+  const holdingsTable = ti => ti < 0 || (() => { const k = heads[ti] || []; return (k.includes("name") || k.includes("ticker")) && (k.includes("qty") || k.includes("value")) && !k.includes("date"); })();
+  const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const word = (text, w) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}($|[^\\p{L}\\p{N}])`, "iu").test(text);
+  const sig = p => String(p.name || "").toLowerCase().split(/[^\p{L}\p{N}&]+/u).filter(w => w.length >= 3 && !GENERIC_NAME.test(w) && !/^\d+$/.test(w));
+  const strongAt = p => lines.map((L, i) => (p.isin && L.text.toUpperCase().includes(String(p.isin).toUpperCase())) ||
+    (p.ticker && String(p.ticker).length >= 2 && word(L.text, String(p.ticker))) ? i : -1).filter(i => i >= 0);
+  const nameAt = p => { const ws = sig(p), full = String(p.name || "").toLowerCase().replace(/\s+/g, " ").trim();
+    return lines.map((L, i) => (ws.length ? ws.filter(w => word(L.lower, w)).length / ws.length >= 0.6 : full.length >= 4 && L.lower.includes(full)) ? i : -1).filter(i => i >= 0); };
+  const cents = v => Math.round(Math.abs(v) * 100);
+  const anchors = ps.map(p => {
+    let at = strongAt(p);
+    if(!at.length) at = nameAt(p);
+    if(!at.length && p.quantity != null && p.market_value != null)             // названия в тексте нет — строка, где есть оба числа
+      at = lines.map((L, i) => L.abs.has(cents(p.quantity)) && L.abs.has(cents(p.market_value)) ? i : -1).filter(i => i >= 0);
+    if(p.page){ const on = at.filter(i => lines[i].page === p.page); if(on.length) at = on; }
+    return at;
+  });
+  const owner = new Map();
+  anchors.forEach((at, k) => at.forEach(i => { if(!owner.has(i)) owner.set(i, new Set()); owner.get(i).add(k); }));
+  const other = (i, k) => owner.has(i) && [...owner.get(i)].some(q => q !== k);
+  // Строка бумаги и её продолжение. ISIN или название часто стоят в строке под числами («ISIN US…» у частных банков):
+  // тогда начало — ближайшая строка таблицы выше, если она не чужая.
+  const blockOf = (i, k) => {
+    const ok = j => lines[j].page === lines[i].page && !totalLike(lines[j]) && headKeys(lines[j]).length < 2 && !other(j, k);
+    let start = i;
+    if(!rowLike(lines[i])) for(let j = i - 1; j >= 0 && j >= i - 3 && ok(j); j--){ if(rowLike(lines[j])){ start = j; break; } }
+    const out = []; for(let j = start; j <= i; j++) out.push(j);
+    const bare = !lines[i].abs.size && start === i;
+    for(let j = i + 1; j < lines.length && j <= i + 3; j++){
+      if(!ok(j)) break;
+      if(rowLike(lines[j]) && !(bare && j === i + 1)) break;
+      out.push(j);
+    }
+    return out;
+  };
+  const allCcy = new Set(lines.flatMap(L => [...ccysIn(L.text)]).map(c => c.replace("?", "")));
+  const exact = new Set(lines.flatMap(L => (L.text.toUpperCase().match(CCY_RE) || [])));
+  const claimed = new Set();
+  const pos = ps.map((p, k) => {
+    const has = (blk, v) => blk.some(i => lines[i].signed.has(v < 0 ? -cents(v) : cents(v)));
+    const hasAbs = (blk, v) => blk.some(i => lines[i].abs.has(cents(v)));
+    const short = blk => blk.some(i => /(^|\|\s*)S(\s*\||$)|\bshort\b|\bsold\b|\bwritten\b/i.test(lines[i].text));
+    const money = (blk, v) => v == null || has(blk, v) || (v < 0 && hasAbs(blk, v) && short(blk));
+    const MONEY = ["market_value", "quantity", "price", "accrued_interest"];
+    let best = null;
+    anchors[k].forEach(i => {
+      const blk = blockOf(i, k), miss = MONEY.filter(f => !money(blk, p[f]));
+      if(!best || miss.length < best.miss.length) best = {blk, miss};
+    });
+    if(!best) return {doubt: ["row"], drop: [], block: []};
+    const blk = best.blk, text = blk.map(i => lines[i].text).join(" | ");
+    blk.forEach(i => claimed.add(i));
+    const doubt = [...best.miss], drop = [];
+    ["cost_price", "cost_value"].forEach(f => { if(p[f] != null && !hasAbs(blk, p[f])) drop.push(f); });
+    // Валюта: код в строке бумаги, в шапке её таблицы, а если во всём тексте одна валюта — она. Другой код там — противоречие;
+    // кода нет нигде — валюту спросим у человека, как в выгрузке без валюты.
+    let ccy = "ok";
+    const c = String(p.currency || "").toUpperCase(), here = ccysIn(text);
+    const headIx = tableOf[blk[0]], headC = headIx >= 0 ? ccysIn(lines[headIx].text) : new Set();
+    const fits = set => set.has(c) || set.has(c + "?");
+    if(here.size) ccy = fits(here) ? "ok" : "bad";
+    else if(headC.size) ccy = fits(headC) ? "ok" : "bad";
+    else if(exact.size === 1) ccy = exact.has(c) ? "ok" : "bad";
+    else if(!allCcy.size) ccy = "guess";
+    else ccy = allCcy.has(c) ? "guess" : "bad";
+    if(!c) ccy = allCcy.size ? "bad" : "guess";
+    if(ccy === "bad") doubt.push("currency");
+    // Даты и условия опциона: чужая дата в строке — противоречие; даты нет — поле остаётся с пометкой «не подтверждено».
+    const lower = text.toLowerCase(), forms = dateForms(p.maturity);
+    const date = !p.maturity ? null : forms && forms.some(f => lower.includes(f)) ? "ok" : DATE_ANY.test(text) ? "bad" : "unknown";
+    const strike = p.strike == null ? null : hasAbs(blk, p.strike) || String(p.name || "").includes(String(p.strike)) ? "ok" : "unknown";
+    const under = !p.underlying ? null : word(text, p.underlying) || word(String(p.name || ""), p.underlying) ? "ok" : "unknown";
+    return {doubt, drop, block: blk, ccy, date, strike, under};
+  });
+  // Итоги документа по валютам: числа строк итога.
+  const totals = [];
+  lines.forEach((L, i) => {
+    if(!totalLike(L)) return;
+    const cs = [...ccysIn(L.text)].filter(x => !x.endsWith("?"));
+    const headC = tableOf[i] >= 0 ? [...ccysIn(lines[tableOf[i]].text)].filter(x => !x.endsWith("?")) : [];
+    const ccy = cs.length === 1 ? cs[0] : !cs.length && headC.length === 1 ? headC[0] : !cs.length && exact.size === 1 ? [...exact][0] : null;
+    totals.push({line: i, ccy, values: [...L.signed].map(v => v / 100)});
+  });
+  // Строки таблиц позиций, которых нет в ответе.
+  const missed = lines.map((L, i) => rowLike(L) && !totalLike(L) && !claimed.has(i) && holdingsTable(tableOf[i]) ? i : -1).filter(i => i >= 0)
+    .map(i => ({line: i, label: cellsOf(lines[i])[0]}));
+  return {pos, totals, missed};
+};
+WL.util = {num, amount, dmy, iso, pad, round2, titleCase};
 })();

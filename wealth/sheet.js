@@ -115,36 +115,8 @@ function parseCSV(text){
   return rows;
 }
 
-// Числа приходят в трёх видах: 1,234.56 · 1 234,56 · 1'234.56. Пустая ячейка — не ноль.
-function numOrNull(v){
-  if(v == null || v instanceof Date) return null;
-  if(typeof v === "number") return isFinite(v) ? v : null;
-  let t = String(v).trim();
-  if(!t || /^[—–-]+$/.test(t)) return null;
-  // Текст с цифрами — не число: «Portfolio 537630.120.6» из колонтитула иначе стал бы суммой в миллиарды.
-  // Рядом с числом бывают только код и знак валюты, процент и подписи вроде «Stk.», «Cr», «Fr.».
-  t = t.replace(/(?<![A-Za-z])[A-Z]{3}(?![A-Za-z])/g, " ")
-    .replace(/(?<!\p{L})(stk|stück|pcs|shares?|units?|nom|nominal|fr|sfr|cr|dr|p\.?\s?a|шт|руб)(?!\p{L})\.?/giu, " ").trim();
-  if(/\p{L}/u.test(t)) return null;
-  const neg = /^\(.*\)$/.test(t) || /^-/.test(t);
-  t = t.replace(/[\s'’ ]/g, "").replace(/[()]/g, "").replace(/[^\d.,]/g, "");
-  if(!/\d/.test(t)) return null;
-  const hasC = t.includes(","), hasD = t.includes(".");
-  if(hasC && hasD) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(/,/g, ".") : t.replace(/,/g, "");
-  else if(hasC){
-    // Запятая — разделитель разрядов, только если за ней группы ровно по три цифры, а число не
-    // начинается с нуля: 1,234 · 12,345,678. Иначе это дробь: 172,30 · 0,9860 · 0,015.
-    const groups = /^[1-9]\d{0,2}(,\d{3})+$/.test(t);
-    t = groups ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
-  }
-  else if(hasD && (t.match(/\./g) || []).length > 1){
-    // Несколько точек — разделители разрядов (1.234.567). С другими группами это номер или дата, а не сумма.
-    if(!/^\d{1,3}(\.\d{3})+$/.test(t)) return null;
-    t = t.replace(/\./g, "");
-  }
-  const n = parseFloat(t);
-  return isFinite(n) ? (neg ? -Math.abs(n) : n) : null;
-}
+// Числа читает общее правило parse.js (минусы, скобки, разделители, валюта рядом). Пустая ячейка — не ноль.
+const numOrNull = v => { const a = WL.util.amount(v); return a ? a.value : null; };
 function toISO(v, dayFirst = true){
   if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
   const s = String(v == null ? "" : v).trim();
@@ -263,9 +235,10 @@ function buildDoc(rows, head, file, ctx){
     // в название бумаги они не годятся.
     const label = nameCol || symRaw || clean((sect ? r.slice(2) : r).find(c => clean(c)));
     const qty = numOrNull(g(r, "qty"));
-    const price = numOrNull(g(r, "price"));
-    let value = numOrNull(g(r, "value"));
-    if(value == null && qty != null && price != null) value = round2(qty * price);
+    const priceA = WL.util.amount(g(r, "price"));
+    const price = priceA ? priceA.value : null;
+    const printed = numOrNull(g(r, "value"));
+    let value = printed;
     if(TOTAL_RE.test(label)){                       // строка итога — не позиция, а сверка
       // Итог раздела относится к строкам после предыдущего итога: «Subtotal equities», потом облигации.
       if(value != null) totals.push({ccy: ccy3(g(r, "ccy")) || ccy3(label), value, from: sectionStart, to: positions.length});
@@ -285,9 +258,26 @@ function buildDoc(rows, head, file, ctx){
     const cls = kind ? classOf(kind) : null;
     // Колонки класса нет — считаем бумагу акцией: так устроены почти все выгрузки позиций.
     // Класс есть, но незнакомый — «прочее», выдумывать за него нельзя.
-    const type = occ ? "option" : cls || (kind ? "other" : nameClass(label) || "stock");
+    const guess = occ ? "option" : cls || (kind ? "other" : nameClass(label) || "stock");
+    // Цена со знаком процента без колонки класса — облигация или нота: у акций процентной цены не бывает.
+    const type = !kind && guess === "stock" && priceA && priceA.pct ? "bond" : guess;
     const isCash = type === "cash" || (!kind && /^(денежные средства|деньги|cash|остаток|cash balance)/i.test(label));
     const isOption = type === "option", isFuture = type === "future";
+    /* Основа цены. У облигаций и нот цена обычно в процентах номинала: 50 000 номинала по 99,50 стоят 49 750, а не 4 975 000.
+       Основу берём из записи («99,50%») или из напечатанной стоимости: номинал × цена / 100 = стоимость. Если нет ни того,
+       ни другого, стоимость не вычисляем и спрашиваем человека — одна конвенция на все облигации была бы догадкой. */
+    const bondLike = type === "bond" || type === "note";
+    let basis = null;
+    if(priceA && priceA.pct) basis = "percent";
+    else if(!bondLike) basis = "unit";
+    else if(printed != null && qty != null && price != null){
+      const near = v => Math.abs(v - printed) <= Math.max(1, Math.abs(printed) * 0.04);
+      basis = near(qty * price / 100) ? "percent" : near(qty * price) ? "unit" : null;
+    }
+    // Основу указал человек (ctx.basis) — только для облигаций, где её не было ни в записи цены, ни в стоимости.
+    if(!basis && bondLike && printed == null && ctx && ctx.basis) basis = ctx.basis;
+    const unit = basis === "percent" ? 0.01 : 1;
+    if(value == null && qty != null && price != null && basis) value = round2(qty * price * unit);
     const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
     const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
                   name: label || WL.t("Позиция ", "Position ") + i, ccy, value: value != null ? round2(value) : null};
@@ -298,15 +288,21 @@ function buildDoc(rows, head, file, ctx){
     // Цена опциона указана за одну бумагу, а контракт — это 100 бумаг: без множителя стоимость
     // и себестоимость расходятся с живой ценой в сто раз.
     const mult = occ ? 100 : 1;
-    if(occ && numOrNull(g(r, "value")) == null && qty != null && price != null) base.value = round2(qty * price * mult);
-    const costPrice = numOrNull(g(r, "costPrice"));
+    if(occ && printed == null && qty != null && price != null) base.value = round2(qty * price * mult);
+    const costA = WL.util.amount(g(r, "costPrice"));
+    const costPrice = costA ? costA.value : null;
     const costTotal = numOrNull(g(r, "costTotal"));
-    const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty * mult) : null);
+    // Цена покупки облигации — в той же основе, что текущая цена, если сама не помечена процентом.
+    const costUnit = costA && costA.pct ? 0.01 : basis ? unit : null;
+    const cost = costTotal != null ? costTotal : (costPrice != null && qty != null && costUnit != null ? round2(costPrice * qty * mult * costUnit) : null);
     const p = {...base, type,
                symbol: sym || null, code: symRaw !== sym ? symRaw : null, qty, price, priceDate: null, cost,
                costNote: cost == null ? WL.t("нет в выгрузке", "not in the export") : null,
                purchaseDate: toISO(g(r, "date"), dayFirst), commission: numOrNull(g(r, "commission")),
                isin: clean(g(r, "isin")) || null};
+    if(basis === "percent"){ p.priceBasis = "percent"; if(costPrice != null) p.costPrice = costPrice; }
+    if(bondLike && !basis && price != null && printed == null) p.basisUnknown = true;
+    if(r.page) p.page = r.page;
     if(occ){
       p.occ = sym; p.underlying = occ[1]; p.underlyingName = occ[1]; p.right = occ[5]; p.multiplier = 100;
       p.strike = +occ[6] / 1000;
@@ -380,9 +376,17 @@ function buildDoc(rows, head, file, ctx){
     "no total row in the file — nothing to reconcile the sum against"));
 
   const ccyGuessed = positions.filter(p => p.ccyGuessed).length;
-  return {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
-          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, ccyGuessed: ccyGuessed || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
+  const basisUnknown = positions.filter(p => p.basisUnknown).length;
+  const doc = {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
+          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, ccyGuessed: ccyGuessed || undefined, basisUnknown: basisUnknown || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
           positions, checks, transactions: []};
+  // Номер счёта: колонка «Account»/«Счёт» или подпись над таблицей. В отчёте хранится только отпечаток.
+  const ids = new Set();
+  const acctCol = (rows[row] || []).findIndex(c => /^(account|account number|account no\.?|acct|счёт|счет|номер сч[её]та|konto|kontonummer|compte|depot)$/i.test(clean(c)));
+  if(acctCol >= 0 && WL.accountIds) body.forEach(r => { const v = clean((r || [])[acctCol]); if(v) WL.accountIds([{text: "Account " + v}]).forEach(x => ids.add(x)); });
+  if(WL.accountIds) WL.accountIds(rows.slice(0, row).map(r => ({text: (r || []).map(clean).join(" ")}))).forEach(x => ids.add(x));
+  Object.defineProperty(doc, "accountIds", {value: [...ids], enumerable: false, configurable: true});
+  return doc;
 }
 
 /* Файл читается отдельно от разбора: те же строки нужны панели ручного сопоставления,
@@ -438,7 +442,8 @@ WL.parseRows = function(tables, file, ctx){
   // одинаковые названия («PORTF.») не отличить. Таблиц без чисел в строках не показываем.
   const order = tables.filter(tb => tb.data >= 1)
     .sort((a, b) => (b.positional - a.positional) || (a.ops - b.ops) || (b.data - a.data)).slice(0, 12);
-  const sheets = order.map(tb => ({name: `${tb.name || WL.t("Таблица", "Table")} · ${WL.t("стр.", "p.")} ${tb.page || 1}`, rows: tb.rows, ctx, ops: tb.ops}));
+  const sheets = order.map(tb => ({name: `${tb.name || WL.t("Таблица", "Table")} · ${WL.t("стр.", "p.")} ${tb.page || 1}`, rows: tb.rows, ctx, ops: tb.ops,
+    page: tb.page || 1, holdings: !tb.ops && tb.positional && (tb.keys || []).some(k => k === "qty" || k === "price")}));
   let best = null;
   sheets.forEach((sh, si) => {
     if(sh.ops) return;                              // операции в позиции не превращаем
@@ -454,6 +459,11 @@ WL.parseRows = function(tables, file, ctx){
   if(!best) return {unknown: true, fileName: file.name, sheets, headers: [], pdf: true};
   const doc = best.doc;
   doc.sheetIndex = best.si; doc.head = best.head; doc.fromPdf = true;
+  /* Разобрана одна таблица, а в файле есть ещё таблица позиций со своей шапкой (облигации отдельно от акций): её строки
+     в отчёт не попали. Итог выбранной таблицы при этом может сойтись — полноты он не доказывает. */
+  const other = sheets.filter((sh, si) => si !== best.si && sh.holdings && sh.rows.length - 1 >= 1);
+  if(other.length) doc.checks.push({label: WL.t("Другие таблицы позиций в файле", "Other position tables in the file"), parsed: 0, stated: other.length, ok: false, count: true,
+    pages: [...new Set(other.map(sh => sh.page))]});
   Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
   return doc;
 };

@@ -46,24 +46,81 @@ const fmt = WL.fmt = {
 WL.days = days; WL.plural = plural; WL.pl = pl;
 
 /* ── Насколько выписке можно верить ───────────────────────────────────────
-   partial — известно, что прочитано не всё: сверка с итогом банка не сошлась, итога не нашлось, часть сумм ИИ не нашлась
-   в тексте выписки. Такая выписка может стоять в отчёте только с пометкой, и продавать отчёт с ней нельзя.
-   unverified — сверять не с чем (в выгрузке нет итоговой строки), ok — всё сошлось с итогами банка. */
+   Три состояния, одинаковые для загрузки, «Документов», оплаты и PDF:
+   ok — «Сверено с выпиской»: прочитанное сошлось с итогами самой выписки, и ничего не известно о пропусках;
+   unverified — «Прочитано, итога нет»: противоречий не нашлось, но сверить сумму не с чем (в выгрузке нет итоговой строки,
+     итог в другой валюте);
+   partial — «Есть пропуски или противоречия»: сверка не сошлась, страница или таблица не прочитана, количество × цена
+     не равно стоимости, число из ответа ИИ не нашлось в строке своей бумаги. С такой выпиской отчёт не продаётся.
+   issues — что именно не так; basis — на чём держится доверие (сошедшиеся итоги, прочитанные страницы, подтверждения человека). */
+const bondLike = p => p.type === "bond" || p.type === "note";
+// Количество × цена × множитель против стоимости. Цена в пенсах при стоимости в фунтах (отношение ровно 1/100 у всех бумаг
+// валюты) — запись биржи, а не ошибка. Любое другое расхождение больше допуска — противоречие: знак, лишний ноль, чужая колонка.
+function mismatches(ps){
+  const out = [];
+  ps.forEach(p => {
+    if(p.type === "cash" || p.accruedLine || p.qty == null || p.price == null || p.value == null || !p.qty) return;
+    const mult = p.type === "option" || p.type === "future" ? p.multiplier : 1;
+    if(!mult) return;
+    const exp = p.qty * p.price * mult * (p.priceBasis === "percent" ? 0.01 : 1);
+    if(Math.abs(exp - p.value) <= Math.max(1, Math.abs(p.value) * (bondLike(p) ? 0.04 : 0.01))) return;
+    out.push({p, r: exp ? p.value / exp : null});
+  });
+  const minor = x => x.r != null && Math.abs(x.r - 0.01) < 0.00005;
+  return out.filter(x => !(minor(x) && out.filter(y => y.p.ccy === x.p.ccy).every(minor)));
+}
+WL.mismatches = mismatches;
+const pagesText = ns => t(`${ns.length === 1 ? "страница" : "страницы"} ${ns.join(", ")}`, `${ns.length === 1 ? "page" : "pages"} ${ns.join(", ")}`);
 WL.quality = d => {
-  const issues = [];
+  const issues = [], basis = [];
   (d.checks || []).forEach(c => {
-    if(c.ok) return;
-    if(c.count) issues.push(t(`${c.label}: ${c.parsed} из ${c.stated}`, `${c.label}: ${c.parsed} of ${c.stated}`));
+    if(c.ok){
+      if(c.human) basis.push(c.label);
+      else if(c.count) basis.push(t(`${c.label}: ${c.parsed} из ${c.stated}`, `${c.label}: ${c.parsed} of ${c.stated}`));
+      else basis.push(t(`${c.label}: сошлось, ${fmt.money(c.stated, c.ccy || "USD")}`, `${c.label}: matches, ${fmt.money(c.stated, c.ccy || "USD")}`));
+      return;
+    }
+    if(c.pages) issues.push(t(`в файле есть ещё таблица позиций (${pagesText(c.pages)}) — её строки не прочитаны`,
+      `the file has another positions table (${pagesText(c.pages)}) — its rows were not read`));
+    else if(c.count) issues.push(t(`${c.label}: ${c.parsed} из ${c.stated}`, `${c.label}: ${c.parsed} of ${c.stated}`));
     else if(c.stated == null) issues.push(t(`${c.label}: итога в выписке не нашлось`, `${c.label}: no total found in the statement`));
     else issues.push(t(`${c.label}: прочитано ${fmt.money(c.parsed, c.ccy || "USD")} вместо ${fmt.money(c.stated, c.ccy || "USD")}`,
       `${c.label}: read ${fmt.money(c.parsed, c.ccy || "USD")} instead of ${fmt.money(c.stated, c.ccy || "USD")}`));
   });
-  if(issues.length && d.imagePages && d.imagePages.length)
+  // Полнота страниц: непрочитанная страница — пропуск, даже если итог прочитанного сошёлся, пока итог не покрывает весь счёт.
+  const pg = d.pages;
+  if(pg){
+    const said = d.pagesConfirmed || [], whole = (d.checks || []).some(c => c.whole && c.ok);
+    const open = (pg.unread || []).filter(n => !said.includes(n));
+    if(open.length && !whole) issues.push(t(`${pagesText(open)} — ${open.length === 1 ? "картинка" : "картинки"}: позиции на ${open.length === 1 ? "ней" : "них"} не прочитаны`,
+      `${pagesText(open)}: image${open.length === 1 ? "" : "s"} — positions on ${open.length === 1 ? "it" : "them"} were not read`));
+    else if(open.length) basis.push(t(`${pagesText(open)} — ${open.length === 1 ? "картинка" : "картинки"} без позиций: итог всего счёта сошёлся`,
+      `${pagesText(open)}: image${open.length === 1 ? "" : "s"} with no positions — the whole account total matches`));
+    const read = pg.count - (pg.unread || []).length, ocr = pg.ocr || [];
+    basis.push(t(`страниц прочитано: ${read} из ${pg.count}`, `pages read: ${read} of ${pg.count}`) +
+      (ocr.length ? t(` (${pagesText(ocr)} — ${ocr.length === 1 ? "распознана" : "распознаны"} на этом компьютере)`, ` (${pagesText(ocr)} recognised on this computer)`) : ""));
+    if(said.length) basis.push(t(`${pagesText(said)}: позиций нет — со слов пользователя`, `${pagesText(said)}: no positions, as confirmed by the user`));
+  } else if(issues.length && d.imagePages && d.imagePages.length)
     issues.push(t(`страницы ${d.imagePages.join(", ")} — картинки без текста, прочитать их нельзя`, `pages ${d.imagePages.join(", ")} are images without text and cannot be read`));
-  if(d.aiDoubt && d.aiDoubt.length)
+  const bad = mismatches(d.positions || []);
+  if(bad.length){
+    const x = bad[0].p, mult = x.type === "option" || x.type === "future" ? ` × ${x.multiplier}` : "";
+    issues.push(t(`количество × цена не равно стоимости: ${x.name} — ${fmt.qty(x.qty)} × ${fmt.px(x.price)}${x.priceBasis === "percent" ? "%" : ""}${mult}, а в выписке ${fmt.money(x.value, x.ccy)}`,
+      `quantity × price does not equal the value: ${x.name} — ${fmt.qty(x.qty)} × ${fmt.px(x.price)}${x.priceBasis === "percent" ? "%" : ""}${mult}, but the statement shows ${fmt.money(x.value, x.ccy)}`) +
+      (bad.length > 1 ? t(` (и ещё у ${bad.length - 1})`, ` (and ${bad.length - 1} more)`) : ""));
+  }
+  const unknown = (d.positions || []).filter(p => p.basisUnknown && p.value == null);
+  if(unknown.length) issues.push(t(`у ${unknown.length} ${pl(unknown.length, ["облигации", "облигаций", "облигаций"], ["bond", "bonds"])} не указано, цена в процентах номинала или за штуку, — стоимость не посчитана`,
+    `${unknown.length} ${pl(unknown.length, ["", "", ""], ["bond has", "bonds have"])} a price without a stated basis (% of nominal or per unit), so the value was not calculated`));
+  if(d.aiIssues && d.aiIssues.length) issues.push(...d.aiIssues);
+  else if(d.aiDoubt && d.aiDoubt.length)
     issues.push(t(`суммы ИИ не подтверждены текстом выписки: ${d.aiDoubt.join(", ")}`, `AI amounts not confirmed by the statement text: ${d.aiDoubt.join(", ")}`));
-  return {status: issues.length ? "partial" : (d.checks || []).some(c => !c.count) ? "ok" : "unverified", issues};
+  const totals = (d.checks || []).some(c => !c.count && !c.human);
+  return {status: issues.length ? "partial" : totals ? "ok" : "unverified", issues, basis};
 };
+// Подписи состояний — одни и те же везде.
+WL.qualityLabel = s => s === "ok" ? t("Сверено с выпиской", "Matches the statement") : s === "unverified" ? t("Прочитано, итога для сверки нет", "Read, no total to reconcile")
+  : t("Есть пропуски или противоречия", "Gaps or contradictions");
 
 /* ── Календарь контрактов CME: даты без учёта биржевых праздников ──────── */
 const TREASURY = {

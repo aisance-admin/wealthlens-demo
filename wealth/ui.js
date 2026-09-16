@@ -100,17 +100,61 @@ const toast = msg => {
    Предпросмотр показывает заглушки вместо скрытых данных, а не размывает их: иначе цифры
    достаются из страницы. */
 const ON_SITE = /(^|\.)euroaff\.eu$/.test(location.hostname);     // рядом лендинг и юридические страницы
-const PAYWALL = ON_SITE || new URLSearchParams(location.search).has("paywall");
+// Проверочный режим оплаты на других адресах (?paywall=1) держится всю вкладку: возврат со Stripe приходит без параметра.
+const PAYWALL = ON_SITE || (() => { const q = new URLSearchParams(location.search).has("paywall");
+  try{ if(q) sessionStorage.setItem("wl_paywall", "1"); return q || sessionStorage.getItem("wl_paywall") === "1"; }catch(e){ return q; } })();
 const PAY_API = "https://api.euroaff.eu";
 const PRICE = {amount: 49, currency: "EUR", label: "€49"};
 const UNLOCKS = "wl_unlock_v1", PENDING = "wl_pending_checkout";
 const newRid = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(36).padStart(2, "0")).join("");
 const unlocks = () => { try{ return JSON.parse(localStorage.getItem(UNLOCKS) || "{}"); }catch(e){ return {}; } };
-const locked = () => PAYWALL && !S.demo && !(S.rid && unlocks()[S.rid]);
+const setUnlocks = m => { try{ localStorage.setItem(UNLOCKS, JSON.stringify(m)); }catch(e){} };
+/* Доступ: подпись сервера (t), номер сессии Stripe (s), отпечатки оплаченных счетов (a) и когда сервер последний раз подтвердил
+   оплату (v). Раньше хранилась только подпись. Отчёт открывает только запись правильной формы, подтверждённая сервером: пустой
+   объект, произвольная строка или подпись без подтверждения — нет. Подтверждённый раньше доступ работает и без связи. */
+const TOKEN = /^[a-f0-9]{40}$/;
+const unlockOf = rid => { const v = rid && unlocks()[rid];
+  if(typeof v === "string") return TOKEN.test(v) ? {t: v} : null;
+  return v && typeof v === "object" && typeof v.t === "string" && TOKEN.test(v.t) ? v : null; };
+const confirmedAccess = u => !!(u && typeof u.v === "number" && isFinite(u.v));
+/* Оплата — за портфель, а не за номер отчёта: если в отчёте не осталось ни одной выписки оплаченных счетов, а новые
+   выписки — других счетов, это отчёт по другому клиенту. Выписки без номера счёта правило не трогают: лучше пропустить
+   переиспользование, чем закрыть отчёт тому, кто заплатил. */
+// Части отпечатка: полный номер, корень субсчёта, номер клиента — любое совпадение значит тот же клиент.
+const acctParts = xs => (xs || []).flatMap(x => /^[ASC]:/.test(x) ? x.slice(2).split("/") : [x]);
+const otherPortfolio = () => { const u = unlockOf(S.rid); if(!u || !u.a || !u.a.length) return false;
+  const paid = new Set(acctParts(u.a)), cur = acctParts(S.docs.flatMap(d => d.accts || [])); return cur.length > 0 && !cur.some(x => paid.has(x)); };
+const locked = () => PAYWALL && !S.demo && (!confirmedAccess(unlockOf(S.rid)) || otherPortfolio());
+// Счета, добавленные в оплаченный отчёт того же клиента, становятся частью оплаченного портфеля.
+function extendPaid(){
+  const u = unlockOf(S.rid); if(!u || !u.a || otherPortfolio()) return;
+  const add = [...new Set(S.docs.flatMap(d => d.accts || []))].filter(x => !u.a.includes(x)); if(!add.length) return;
+  const m = unlocks(); m[S.rid] = {...u, a: u.a.concat(add)}; setUnlocks(m);
+}
+/* Отпечаток номера счёта: SHA-256 от номера с солью этого браузера. Сам номер в отчёте не хранится и никуда не уходит. */
+let saltMem = null;
+const salt = () => { if(saltMem) return saltMem;
+  try{ saltMem = localStorage.getItem("wl_salt_v1"); if(!saltMem){ saltMem = newRid(); localStorage.setItem("wl_salt_v1", saltMem); } }catch(e){ saltMem = saltMem || newRid(); }
+  return saltMem; };
+async function fingerprint(doc){
+  if(doc.accts || !doc.accountIds || !doc.accountIds.length) return;
+  const h = async v => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(salt() + "|" + v))).slice(0, 8),
+    b => b.toString(16).padStart(2, "0")).join("");
+  try{
+    // Вид номера (A — счёт, S — субсчёт с корнем, C — клиент) остаётся открытым: по нему сравниваются выписки.
+    doc.accts = await Promise.all(doc.accountIds.map(async id => {
+      const k = id.slice(0, 2), v = id.slice(2);
+      if(k === "S:"){ const [r, w] = v.split("/"); return `S:${await h(r)}/${await h(w)}`; }
+      return /^[AC]:$/.test(k) ? k + await h(v) : await h(id);
+    }));
+  }catch(e){}
+}
 const track = (name, params) => { if(WL.track) WL.track(name, params); };
 
 const hasPositions = () => !!(S.P && S.P.positions.length);
 const partialDocs = () => S.docs.filter(d => WL.quality(d).status === "partial");
+// Выписки без итога для сверки продаются как анализ с ограничениями: об этом говорим до оплаты, а не после.
+const unverifiedDocs = () => S.docs.filter(d => d.kind === "positions" && d.from !== "demo" && WL.quality(d).status === "unverified");
 let checkoutBusy = false;
 const setBuyDisabled = on => document.querySelectorAll("[data-buy]").forEach(b => { b.disabled = on; });
 async function openCheckout(source){
@@ -125,6 +169,32 @@ async function openCheckout(source){
   const paid = () => { if(locked()) return false; checkoutBusy = false; setBuyDisabled(false); renderApp();
     toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked")); return true; };
   if(paid()) return;
+  // Доступ в браузере есть, но сервер его ещё не подтвердил (нет связи при открытии): сначала проверяем, а не продаём второй раз.
+  if(unlockOf(S.rid) && !confirmedAccess(unlockOf(S.rid))){
+    checkoutBusy = true; setBuyDisabled(true);
+    await checkUnlock();
+    checkoutBusy = false; setBuyDisabled(false);
+    if(paid()) return;
+    if(unlockOf(S.rid)) return;             // проверить не удалось — оплату не начинаем, сообщение уже показано
+  }
+  // Отчёт открывается сразу после оплаты — на это нужно явное согласие, а с ним и понимание, что право на отказ после этого не действует.
+  checkoutBusy = true; setBuyDisabled(true);
+  const {choice} = await dialog({
+    eyebrow: t("Полный отчёт", "Full report"),
+    title: t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),
+    body: `<p>${t("Разовая оплата через Stripe. Отчёт откроется в этом браузере сразу после оплаты. Выписки этого портфеля можно добавлять и потом — платить снова не нужно.",
+        "A one-off payment via Stripe. The report unlocks in this browser right after payment. You can add statements of this portfolio later at no extra cost.")}</p>
+      ${unverifiedDocs().length ? `<p class="muted">${t(`Сверить с итогом банка нельзя: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))}. Позиции из ${unverifiedDocs().length === 1 ? "неё" : "них"} войдут в отчёт как прочитаны.`,
+        `These cannot be reconciled with a bank total: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))}. Their positions are included as read.`)}</p>` : ""}
+      <label class="ai-remember waiver"><input type="checkbox" data-waiver> ${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
+        "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</label>
+      ${ON_SITE ? `<p class="ai-more">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
+        `<a href="/en/legal/terms/" target="_blank" rel="noopener">Terms</a> · <a href="/en/legal/refund/" target="_blank" rel="noopener">refund if the report can't be built</a>`)}</p>` : ""}`,
+    buttons: [{id: "pay", label: t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
+    cancel: "cancel", gate: "[data-waiver]",
+  });
+  checkoutBusy = false; setBuyDisabled(false);
+  if(choice !== "pay" || paid() || Q.running || !hasPositions() || partialDocs().length) return;
   if(!S.rid) S.rid = newRid();
   // Отчёт, который браузер не сохраняет, после возврата с оплаты не найдётся: деньги спишутся, а открыть будет нечего.
   if(!save()){ toast(conflict ? t("Сначала обновите страницу: в другой вкладке этот отчёт удалили или начали другой.", "Reload the page first: in another tab this report was deleted or a different one was started.")
@@ -154,7 +224,8 @@ async function openCheckout(source){
     }
   }
   track("InitiateCheckout", {value: PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
-  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname});
+  // paywall — проверочный режим на другом адресе: сервер сохранит его в адресах возврата со Stripe.
+  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE});
   let r = null;
   try{
     r = await fetch(PAY_API + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
@@ -174,13 +245,59 @@ async function openCheckout(source){
     : t("Не удалось открыть оплату. Попробуйте ещё раз.", "Could not open checkout. Please try again."));
 }
 
-function unlockWith(sid, r){
-  const m = unlocks(); m[S.rid] = r.token;
-  try{ localStorage.setItem(UNLOCKS, JSON.stringify(m)); localStorage.removeItem(PENDING); }catch(e){}
+function unlockWith(sid, r, restored){
+  const m = unlocks(); m[S.rid] = {t: r.token, s: r.sid || sid || null, a: [...new Set(S.docs.flatMap(d => d.accts || []))], v: Date.now()};
+  setUnlocks(m);
+  try{ localStorage.removeItem(PENDING); sessionStorage.setItem("wl_unlock_ok", `${S.rid}|${r.token}`); }catch(e){}
+  if(restored) return;
   const seen = "wl_purchase_" + sid.slice(-16);     // событие покупки — один раз на платёж
   try{ if(!localStorage.getItem(seen)){ localStorage.setItem(seen, "1");
     track("Purchase", {value: r.amount || PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); } }catch(e){}
 }
+
+/* Доступ сверяется с сервером раз за сеанс: подпись должна быть настоящей, а оплата — не возвращённой. Пока сервер не подтвердил
+   доступ в этом браузере хоть раз, отчёт закрыт; нет связи — подтверждённый раньше доступ остаётся, неподтверждённый ждёт связи.
+   Запись не той формы удаляется. */
+async function checkUnlock(){
+  if(!PAYWALL || S.demo || !S.rid) return;
+  const u = unlockOf(S.rid);
+  if(!u){ const m = unlocks(); if(S.rid in m){ delete m[S.rid]; setUnlocks(m); } return; }
+  const key = `${S.rid}|${u.t}`;
+  try{ if(confirmedAccess(u) && sessionStorage.getItem("wl_unlock_ok") === key) return; }catch(e){}
+  let r = null;
+  try{ r = await fetch(`${PAY_API}/unlock/check?rid=${encodeURIComponent(S.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }
+  catch(e){
+    if(!confirmedAccess(u)) toast(t("Не удалось проверить оплату: нет связи с сервером. Обновите страницу, когда связь появится.", "Could not verify the payment: no connection to the server. Reload the page once you are back online."));
+    return;
+  }
+  const now = unlockOf(S.rid);
+  if(!r || !now || u.t !== now.t) return;
+  if(r.ok){
+    const m = unlocks(); m[S.rid] = {...now, v: Date.now()}; setUnlocks(m);
+    try{ sessionStorage.setItem("wl_unlock_ok", key); }catch(e){}
+    if(!confirmedAccess(u) && S.P) renderApp();
+    return;
+  }
+  if(r.ok === false){
+    const m = unlocks(); delete m[S.rid]; setUnlocks(m);
+    try{ sessionStorage.removeItem("wl_unlock_ok"); }catch(e){}
+    toast(r.reason === "refunded" ? t("Оплата этого отчёта возвращена — полный отчёт закрыт.", "Payment for this report was refunded, so the full report is locked.")
+      : t("Доступ к полному отчёту не подтвердился. Если вы оплачивали, нажмите «Восстановить доступ».", "Access to the full report could not be confirmed. If you paid, use “Restore access”."));
+    if(S.P) renderApp();
+  }
+}
+// Оплатили, а доступ в этом браузере пропал: ищем оплату этого отчёта в Stripe по его номеру.
+async function restoreAccess(btn){
+  if(!S.rid) return;
+  if(btn) btn.disabled = true;
+  let r = null;
+  try{ r = await fetch(PAY_API + "/unlock/restore", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rid: S.rid})}).then(x => x.json()); }catch(e){}
+  if(btn) btn.disabled = false;
+  if(r && r.ok){ unlockWith(r.sid, r, true); toast(t("Оплата найдена — полный отчёт открыт", "Payment found — the full report is unlocked")); renderApp(); return; }
+  toast(SUPPORT ? t(`Оплату этого отчёта не нашли. Напишите на ${SUPPORT} и укажите номер отчёта ${S.rid}.`, `No payment was found for this report. Email ${SUPPORT} with report number ${S.rid}.`)
+    : t(`Оплату этого отчёта не нашли. Номер отчёта: ${S.rid}.`, `No payment was found for this report. Report number: ${S.rid}.`));
+}
+document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-restore]"); if(b){ e.preventDefault(); restoreAccess(b); } });
 
 /* Оплатили, но закрыли вкладку раньше, чем Stripe вернул на сайт: при следующем открытии
    проверяем последнюю начатую оплату этого отчёта, если ей не больше двух суток. */
@@ -240,6 +357,16 @@ function renderPaywall(){
       <div class="pw-buy"><button class="btn primary" type="button" data-add-file>${t("Добавить выписку", "Add a statement")}</button></div></div>`;
     return;
   }
+  if(otherPortfolio()){
+    el.hidden = false;
+    el.innerHTML = `<div class="card paywall empty"><div><div class="eyebrow">${t("Другой портфель", "Another portfolio")}</div>
+      <h2>${t("Этот отчёт оплачен для других счетов", "This report was paid for other accounts")}</h2>
+      <p class="muted">${t("В отчёте не осталось выписок оплаченных счетов, а новые выписки — других счетов. Отчёт по другому клиенту оплачивается отдельно: начните «Новый отчёт» или верните выписку оплаченного счёта.",
+        "None of the paid accounts' statements remain, and the new statements belong to other accounts. A report for another client is paid separately: start a “New report” or add back a statement of a paid account.")}
+      ${SUPPORT ? t(`Если это тот же клиент, напишите на ${supportLink()} и укажите номер отчёта <code class="rid">${esc(S.rid)}</code>.`, `If this is the same client, email ${supportLink()} with report number <code class="rid">${esc(S.rid)}</code>.`) : ""}</p></div>
+      <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button></div></div>`;
+    return;
+  }
   const I = WL.insights(S.P), n = lvl => I.filter(x => x.level === lvl).length;
   const found = [n("high") && `${n("high")} ${WL.pl(n("high"), ["важный вывод", "важных вывода", "важных выводов"], ["important finding", "important findings"])}`,
                  n("watch") && `${n("watch")} ${WL.pl(n("watch"), ["пункт требует", "пункта требуют", "пунктов требуют"], ["item that needs", "items that need"])} ${t("внимания", "attention")}`]
@@ -260,19 +387,29 @@ function renderPaywall(){
       </ul></div>
     <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>
       <button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button>
+      ${unverifiedDocs().length ? `<div class="muted pw-note pw-warn">${t(`Не с чем сверить: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))} — в ${unverifiedDocs().length === 1 ? "выписке нет итога" : "выписках нет итога"} для сверки. Отчёт покажет прочитанное как есть.`,
+        `Nothing to reconcile against: ${esc(listShort(unverifiedDocs().map(d => d.fileName)))} — no total to check. The report shows what was read as is.`)}</div>` : ""}
       <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
         "Payment via Stripe. The report is built and kept in this browser, and statements are not stored on a server, so open the report here.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
         `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}
-      <div class="muted pw-note">${t("Выписки можно добавлять и после оплаты — платить снова не нужно.", "You can add statements after paying — no need to pay again.")}</div>
+      <div class="muted pw-note">${t("Выписки этого портфеля можно добавлять и после оплаты — платить снова не нужно. Отчёт по другому клиенту оплачивается отдельно.",
+        "You can add statements of this portfolio after paying at no extra cost. A report for another client is paid separately.")}</div>
+      ${S.rid ? `<div class="muted pw-note">${t("Уже оплачивали этот отчёт?", "Already paid for this report?")} <button class="linkbtn" type="button" data-restore>${t("Восстановить доступ", "Restore access")}</button>
+        · ${t("номер отчёта", "report number")} <code class="rid">${esc(S.rid)}</code></div>` : ""}
       ${SUPPORT ? `<div class="muted pw-note">${t("Вопрос по оплате:", "Payment question:")} ${supportLink()}</div>` : ""}</div>
   </div>`;
 }
 
+// Почему выписку не с чем сверить — из пометок разбора; общий ответ, если причина не записана.
+const unverifiedWhy = d => /в валюте отчёта по бумагам в разных валютах|reference currency across several currencies/.test(d.note || "")
+  ? t("итог в файле — в валюте отчёта по бумагам в разных валютах: без курсов выписки его не сверить", "the file total is in the reference currency across several currencies and cannot be reconciled without the statement's rates")
+  : t("итоговой строки в файле нет — сумму сверять не с чем", "the file has no total row, so there is nothing to reconcile the sum against");
 function renderQuality(){
   const el = $("#qualityBar"); if(!el) return;
-  const bad = S.docs.map(d => ({d, q: WL.quality(d)})).filter(x => x.q.status === "partial");
-  el.innerHTML = !bad.length ? "" : `<div class="card quality" role="status">
+  const all = S.docs.map(d => ({d, q: WL.quality(d)}));
+  const bad = all.filter(x => x.q.status === "partial"), open = all.filter(x => x.q.status === "unverified" && x.d.kind === "positions" && x.d.from !== "demo");
+  el.innerHTML = (!bad.length ? "" : `<div class="card quality" role="status">
     <div class="q-top"><span class="lvl high">${t("Неполный отчёт", "Incomplete report")}</span>
       <h2>${bad.length === 1 ? t("Одна выписка прочитана не полностью", "One statement was not fully read") : t(`${bad.length} выписки прочитаны не полностью`, `${bad.length} statements were not fully read`)}</h2></div>
     <p>${t("Итог, структура и выводы ниже посчитаны только по прочитанному и могут быть неверны.", "The total, breakdown and findings below cover only what was read and may be wrong.")}
@@ -281,7 +418,14 @@ function renderQuality(){
       <div class="q-why">${x.q.issues.map(esc).join("; ")}</div></div>
       <button class="btn small no-print" type="button" data-q-remove="${esc(x.d.fileName)}">${t("Убрать из отчёта", "Remove from report")}</button></li>`).join("")}</ul>
     <div class="q-actions no-print"><button class="btn small" type="button" data-add-file>${t("Добавить исходный PDF или выгрузку CSV", "Add the original PDF or a CSV export")}</button></div>
-  </div>`;
+  </div>`) + (!open.length ? "" : `<div class="card quality soft" role="note">
+    <div class="q-top"><span class="lvl info">${t("К сведению", "Note")}</span>
+      <h2>${open.length === 1 ? t("Одну выписку не с чем сверить", "One statement has no total to reconcile") : t(`${open.length} выписки не с чем сверить`, `${open.length} statements have no total to reconcile`)}</h2></div>
+    <p>${t("Противоречий в них не нашлось, и позиции показаны как прочитаны, но подтвердить полноту суммы итогом банка нельзя.",
+      "No contradictions were found and the positions are shown as read, but the completeness of the sum cannot be confirmed by a bank total.")}</p>
+    <ul class="q-list">${open.map(x => `<li><div><b>${esc(x.d.brokerShort || x.d.broker)}</b> <span class="muted">· ${esc(x.d.fileName)}</span>
+      <div class="q-why">${esc(unverifiedWhy(x.d))}</div></div></li>`).join("")}</ul>
+  </div>`);
 }
 document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-q-remove]"); if(b) removeDoc(b.dataset.qRemove); });
 function renderDemoBar(){
@@ -349,7 +493,7 @@ document.addEventListener("keydown", e => {
   const top = MODALS[MODALS.length - 1]; if(!top) return;
   if(e.key === "Escape"){ e.preventDefault(); e.stopImmediatePropagation(); top.dismiss(); return; }
   if(e.key !== "Tab") return;
-  const f = [...top.el.querySelectorAll("button, select, input, a[href], [tabindex]:not([tabindex='-1'])")]
+  const f = [...top.el.querySelectorAll("button, select, input, textarea, summary, a[href], [tabindex]:not([tabindex='-1'])")]
     .filter(x => !x.disabled && x.offsetParent !== null);
   if(!f.length) return;
   const i = f.indexOf(document.activeElement);
@@ -367,7 +511,7 @@ function pushModal(wrap, dismiss){
   };
 }
 let dlgSeq = 0;
-function dialog({eyebrow, title, body, buttons, cancel, read}){
+function dialog({eyebrow, title, body, buttons, cancel, read, gate, focus, enter}){
   return new Promise(resolve => {
     const wrap = document.createElement("div"), id = "dlg" + (++dlgSeq);
     wrap.className = "modal no-print";
@@ -378,10 +522,14 @@ function dialog({eyebrow, title, body, buttons, cancel, read}){
     let done = false;
     const finish = choice => { if(done) return; done = true; const extra = read ? read(wrap) : null; close(); resolve({choice, extra}); };
     const close = pushModal(wrap, () => finish(cancel));
-    wrap.addEventListener("click", e => { if(e.target === wrap) return finish(cancel); const x = e.target.closest("[data-dlg]"); if(x) finish(x.dataset.dlg); });
+    wrap.addEventListener("click", e => { if(e.target === wrap) return finish(cancel); const x = e.target.closest("[data-dlg]"); if(x && !x.disabled) finish(x.dataset.dlg); });
+    // Главная кнопка ждёт отмеченного согласия.
+    if(gate){ const box = wrap.querySelector(gate), btn = wrap.querySelector(".btn.primary"); const sync = () => { btn.disabled = !box.checked; }; box.addEventListener("change", sync); sync(); }
+    // Поле ввода (пароль): Enter в нём — главная кнопка.
+    if(enter && focus){ const f = wrap.querySelector(focus); if(f) f.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); finish(enter); } }); }
     // Окна из очереди появляются, когда до файла дошла очередь, — возможно, посреди набора текста. Фокус на самом
-    // окне, а не на кнопке: случайный Enter не отправит выписку в ИИ и не заменит выписку.
-    wrap.querySelector(".dialog").focus();
+    // окне, а не на кнопке: случайный Enter не отправит выписку в ИИ и не заменит выписку. Окно с полем ввода — на поле.
+    (focus && wrap.querySelector(focus) || wrap.querySelector(".dialog")).focus();
   });
 }
 
@@ -457,13 +605,21 @@ function sameAccount(doc){
   if(doc.kind === "positions"){
     let best = null;
     S.docs.forEach(d => {
-      if(d.kind !== "positions") return;
+      if(d.kind !== "positions" || distinct(d, doc)) return;
       const b1 = bank(d); if(b1 && b2 && b1 !== b2) return;
+      // Номер счёта известен в обеих выписках: совпал — тот же счёт, разный — другой, как бы ни совпадали бумаги (у супругов одна модель).
+      // Субсчета одного клиента (123456-1 и 123456-2) — разные счета. Совпал только корень или номер клиента — спрашиваем.
+      const rel = WL.compareAccounts(d.accts, doc.accts);
+      if(rel === "different") return;
+      const acctSame = rel === "same";
       const all1 = doc.positions || [], all2 = d.positions || [];
       let hit = null;
       // Дата «на сегодня» (в файле её нет) у одной и той же выгрузки, добавленной в разные дни, разная — такие даты не сравниваем.
       const sameDay = doc.asOf === d.asOf || (dateGuessed(doc) && dateGuessed(d));
-      if(sameDay && all1.length && all1.length === all2.length && pairs(all1, all2, true) === all1.length) hit = {doc: d, share: 1, identical: true, rank: 3};
+      const shareOf = () => { const h1 = all1.filter(p => p.type !== "cash"), h2 = all2.filter(p => p.type !== "cash"), m = pairs(h1, h2), u = h1.length + h2.length - m; return u ? m / u : null; };
+      if(sameDay && all1.length && all1.length === all2.length && pairs(all1, all2, true) === all1.length) hit = {doc: d, share: 1, identical: true, rank: 5};
+      else if(acctSame) hit = {doc: d, share: shareOf(), acct: true, rank: 4};
+      else if(rel === "maybe" || rel === "client") hit = {doc: d, share: shareOf(), maybe: rel, rank: 3};
       else {
         const h1 = all1.filter(p => p.type !== "cash"), h2 = all2.filter(p => p.type !== "cash");
         const m = pairs(h1, h2), union = h1.length + h2.length - m, share = union ? m / union : 0, sameBank = !!(b1 && b1 === b2);
@@ -480,6 +636,10 @@ function sameAccount(doc){
   const log = S.docs.find(d => (d.kind === "ledger" || doc.kind === "ledger") && (d.kind === "ledger" || d.kind === "positions") && bank(d) === b2);
   return log ? {doc: log, share: null, log: true} : null;
 }
+/* Ответ «это разные счета» запоминается за выписками: следующая выписка любого из этих счетов не вызовет тот же вопрос.
+   Ключ — отпечатки номеров счёта, а без номеров — имя файла без даты. */
+const acctKey = d => { const a = (d.accts || []).filter(x => !x.startsWith("C:")).sort().join(","); return a || "file:" + tagOf(d.fileName).replace(/\d{4}[-_.]?\d{2}[-_.]?\d{2}|\d{2}[-_.]\d{2}[-_.]\d{4}/g, ""); };
+const distinct = (a, b) => (a.distinctFrom || []).includes(acctKey(b)) || (b.distinctFrom || []).includes(acctKey(a));
 const ALREADY = () => t("уже в отчёте", "already in the report");
 // Даты оценки в файле не было, и взята сегодняшняя (у выписок, сохранённых раньше, — только пометка в примечании).
 const dateGuessed = x => !!(x.asOfGuessed || /взята сегодняшняя|today's date used/.test(x.note || ""));
@@ -520,6 +680,7 @@ async function runQueue(){
       if(it){
         if(it.state === "ready") await commit(it, it.ready, gen);
         else if(it.later.kind === "hard") await resolveHard(it, it.later.manual, gen);
+        else if(it.later.kind === "password") await askPasswordAndRetry(it, gen);
         else await mapAndCommit(it, it.later.manual, gen);
         continue;
       }
@@ -551,7 +712,23 @@ async function processItem(it, gen){
   if(inReport(it)) return setState(it, "skip", ALREADY());
   if(Q.items.some(x => x !== it && x.hash === it.hash && ACTIVE.test(x.state))) return setState(it, "skip", t("этот файл уже в очереди", "this file is already in the queue"));
   let doc;
-  try{ doc = await WL.parseFile(it.file); }catch(e){ return setState(it, "error", t("не удалось прочитать файл", "could not read the file")); }
+  // Страницы-картинки распознаются на этом компьютере — это небыстро, поэтому показываем ход и даём отменить.
+  const ocrCtl = it.abort = new AbortController();
+  const ocr = (i, n) => { it.ocr = true; setState(it, "reading", t(`распознаю текст на страницах-картинках на этом компьютере: ${i + 1} из ${n}`,
+    `recognising text on image pages on this computer: ${i + 1} of ${n}`)); };
+  try{ doc = await WL.parseFile(it.file, {ocr, signal: ocrCtl.signal, password: it.password}); }
+  catch(e){
+    it.abort = null; it.ocr = false;
+    if(gen !== Q.gen) return;
+    // Выписка под паролем: спросим пароль, когда дойдёт очередь окон; остальные файлы читаются дальше.
+    if(e && e.name === "PasswordException"){
+      it.later = {kind: "password", wrong: e.code === 2};
+      return setState(it, "later", e.code === 2 ? t("пароль не подошёл — спрошу снова", "wrong password — will ask again") : t("защищён паролем — спрошу пароль", "password-protected — will ask for the password"));
+    }
+    return setState(it, "error", e && e.name === "InvalidPDFException" ? t("файл повреждён или это не PDF — откройте его на компьютере и сохраните заново", "the file is damaged or not a PDF — open it on your computer and save it again")
+      : t("не удалось прочитать файл", "could not read the file"));
+  }
+  it.abort = null; it.ocr = false;
   if(gen !== Q.gen) return;
   if(doc.unknown){
     if(doc.ops) return setState(it, "error", MSG.ops());
@@ -564,6 +741,8 @@ async function processItem(it, gen){
     return setState(it, "error", t("формат выписки пока не распознаётся", "this statement format is not supported yet"));
   }
   if(doc.from === "sheet" && !doc.fromPdf && looksLikeOps(doc)) return setState(it, "error", MSG.ops());
+  await fingerprint(doc);
+  if(gen !== Q.gen) return;
   // Таблица из PDF другого банка. Уверенный разбор — сразу в отчёт: ничего не упало в сверке, у позиций есть
   // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — ИИ или ручная разметка.
   if(doc.fromPdf){
@@ -589,6 +768,30 @@ function later(it, kind, manual){
     : (more ? t("нужна разметка колонок — после остальных файлов", "needs column mapping — after the other files") : t("нужна разметка колонок", "needs column mapping")));
 }
 
+/* Выписка под паролем. Пароль вводится здесь и живёт только в памяти этой вкладки: им расшифровывается файл на этом компьютере,
+   на сервер он не уходит и в отчёт не сохраняется. */
+async function askPasswordAndRetry(it, gen){
+  if(inReport(it)) return setState(it, "skip", ALREADY());
+  setState(it, "ask", t("ждёт пароля", "waiting for the password"));
+  const wrong = it.later && it.later.wrong;
+  const {choice, extra} = await dialog({
+    eyebrow: t("Защищённый PDF", "Protected PDF"),
+    title: wrong ? t("Пароль не подошёл", "Wrong password") : t("Выписка защищена паролем", "This statement is password-protected"),
+    body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
+      <p>${t("Банк защитил файл паролем. Введите его — файл откроется на этом компьютере; пароль никуда не отправляется и не сохраняется.",
+        "The bank protected this file with a password. Enter it to open the file on this computer; the password is not sent anywhere or stored.")}</p>
+      <label class="pw-field"><span>${t("Пароль к файлу", "File password")}</span><input type="password" data-pw autocomplete="off" spellcheck="false"></label>`,
+    buttons: [{id: "open", label: t("Открыть", "Open"), primary: true}, {id: "skip", label: t("Пропустить файл", "Skip this file")}],
+    cancel: "skip", focus: "[data-pw]", enter: "open",
+    read: wrap => { const x = wrap.querySelector("[data-pw]"); return x ? x.value : ""; },
+  });
+  if(gen !== Q.gen) return;
+  if(choice !== "open" || !extra) return setState(it, "skip", t("защищён паролем — не добавлен", "password-protected — not added"));
+  it.password = extra; it.later = null;
+  setState(it, "queued", t("в очереди", "queued"));
+  readQueued(gen);
+}
+
 /* PDF, который не прочитался здесь: ИИ (с согласия) или ручная разметка колонок. Согласие спрашиваем на файл;
    «не спрашивать для этого отчёта» действует до конца загрузки, а за отчётом запоминается, когда ИИ добавил
    выписку. Отключается в «Документах». */
@@ -598,12 +801,18 @@ async function resolveHard(it, manual, gen){
   if(!AI_CACHE.has(it.hash) && !aiAllowed()){
     // Текст готовим до вопроса: человек может посмотреть, что именно уйдёт, прежде чем согласиться.
     setState(it, "reading", t("готовлю текст для распознавания…", "preparing the text…"));
-    try{ it.prep = await WL.pdfAiText(it.file); }catch(e){ return setState(it, "error", t("не удалось прочитать текст файла", "could not read the file's text")); }
+    try{ it.prep = await WL.pdfAiText(it.file, {password: it.password}); }catch(e){ return setState(it, "error", t("не удалось прочитать текст файла", "could not read the file's text")); }
     if(gen !== Q.gen) return;
     setState(it, "ask", t("ждёт вашего решения", "waiting for your decision"));
     const r = await askAi(it, manual, it.prep);
     if(gen !== Q.gen) return;
-    choice = r.choice; remember = !!r.extra;
+    choice = r.choice; remember = !!(r.extra && r.extra.remember);
+    // Текст поправили перед отправкой: уходит и проверяется ровно он.
+    const edited = r.extra && r.extra.text;
+    if(choice === "ai" && edited != null && edited !== it.prep.text){
+      if(!edited.trim()) return setState(it, "skip", t("текст для распознавания пуст — файл не добавлен", "the text to read is empty — file not added"));
+      it.prep = {...it.prep, text: edited, ...WL.aiLines(edited), edited: true};
+    }
   }
   if(choice === "manual" && manual) return mapAndCommit(it, manual, gen);
   if(choice !== "ai") return setState(it, "skip", t("пропущен", "skipped"));
@@ -612,7 +821,7 @@ async function resolveHard(it, manual, gen){
   setState(it, "ai", t("распознаю с помощью ИИ — это может занять несколько минут", "reading with AI — this can take a few minutes"));
   const cancelled = () => setState(it, "skip", t("распознавание отменено — файл не добавлен", "recognition cancelled — file not added"));
   // Не ждём ответа: очередь тем временем читает остальные файлы, а результат добавится, когда придёт.
-  it.job = aiRead(it.file, it.hash, ctl.signal, it.prep).then(doc => {
+  it.job = aiRead(it.file, it.hash, ctl.signal, it.prep, it.password).then(doc => {
     it.abort = null; it.job = null; it.prep = null;
     if(gen !== Q.gen) return;
     if(ctl.signal.aborted) return cancelled();
@@ -644,19 +853,24 @@ async function askAi(it, manual, prep){
         "We found the positions table, but the columns or the total did not add up. Check the columns yourself — this stays in the browser — or read the table with AI.")}</p>` : ""}
       <p>${t(`С помощью ИИ текст файла, начиная с первой таблицы, уйдёт на наш сервер и в модель Claude компании Anthropic.
         Страницы и строки до первой таблицы (обложку, адрес, реквизиты) и строки, повторяющиеся на страницах, не отправляем;
-        номера счетов и портфеля, IBAN, почту и телефоны стараемся закрыть по всему тексту. Наш сервер не сохраняет ни файл, ни текст.`,
+        номера счетов и портфеля, IBAN, почту, телефоны и имя владельца закрываем там, где их удалось узнать, — это помощь, а не гарантия.
+        Проверьте текст перед отправкой. Наш сервер не сохраняет ни файл, ни текст.`,
         `With AI, the file's text from the first table onwards will be sent to our server and to Anthropic's Claude model.
         Pages and lines before the first table (cover, address, account details) and lines repeated on every page are not sent;
-        we try to hide account and portfolio numbers, IBANs, emails and phone numbers throughout the text. Our server stores neither the file nor the text.`)}</p>
-      ${prep && prep.text ? `<details class="ai-preview"><summary>${t(`Показать текст, который уйдёт · ${fmt.int(prep.text.length)} знаков`, `Show the text that will be sent · ${fmt.int(prep.text.length)} characters`)}</summary>
-        <pre>${esc(prep.text)}</pre><p class="muted">${t("▇ — закрытые номера и имена. Если видите здесь то, что отправлять нельзя, пропустите файл.", "▇ marks hidden numbers and names. If you see something that must not be sent, skip the file.")}</p></details>` : ""}
+        account and portfolio numbers, IBANs, emails, phone numbers and the owner's name are hidden where we recognise them — this helps but is not a guarantee.
+        Check the text before sending. Our server stores neither the file nor the text.`)}</p>
+      ${prep && prep.text ? `<details class="ai-preview"><summary>${t(`Проверить и поправить текст, который уйдёт · ${fmt.int(prep.text.length)} знаков`, `Check and edit the text that will be sent · ${fmt.int(prep.text.length)} characters`)}</summary>
+        <textarea class="ai-text" data-ai-text spellcheck="false" aria-label="${t("Текст, который уйдёт на распознавание", "Text that will be sent for recognition")}">${esc(prep.text)}</textarea>
+        <p class="muted">${t("▇ — закрытые номера и имена. Всё, что отправлять нельзя, удалите или замените на ▇ прямо здесь: уйдёт и будет проверяться именно этот текст.",
+          "▇ marks hidden numbers and names. Delete anything that must not be sent, or replace it with ▇, right here: exactly this text is sent and checked.")}</p></details>` : ""}
       <label class="ai-remember"><input type="checkbox" data-remember> ${t("Не спрашивать снова для этого отчёта", "Don't ask again for this report")}</label>
       ${ON_SITE ? `<p class="ai-more"><a href="${t("/legal/privacy/", "/en/legal/privacy/")}" target="_blank" rel="noopener">${t("Как мы обращаемся с данными", "How we handle data")}</a></p>` : ""}`,
     buttons: [{id: "ai", label: t("Распознать с помощью ИИ", "Read with AI"), primary: true},
               canManual && {id: "manual", label: t("Разметить колонки вручную", "Map columns manually")},
               {id: "cancel", label: t("Пропустить файл", "Skip this file")}].filter(Boolean),
     cancel: "cancel",
-    read: wrap => { const c = wrap.querySelector("[data-remember]"); return !!(c && c.checked); },
+    read: wrap => { const c = wrap.querySelector("[data-remember]"), x = wrap.querySelector("[data-ai-text]");
+      return {remember: !!(c && c.checked), text: x ? x.value : null}; },
   });
 }
 async function mapAndCommit(it, manual, gen){
@@ -671,12 +885,24 @@ async function commit(it, doc, gen){
   it.ready = null;
   if(inReport(it)) return setState(it, "skip", ALREADY());
   doc.hash = it.hash;
-  const quality = WL.quality(doc);
+  await fingerprint(doc);
+  if(gen !== Q.gen) return;
+  // Цена облигаций без основы и без стоимости: сначала спрашиваем основу — от неё зависят стоимость и сверка итога.
+  if(doc.basisUnknown && doc.sheets && doc.head){
+    setState(it, "ask", t("цена облигаций без основы — ждёт решения", "bond price basis unknown — waiting for your decision"));
+    const {choice} = await askBasis(it, doc);
+    if(gen !== Q.gen) return;
+    if(choice !== "percent" && choice !== "unit") return setState(it, "skip", t("не добавлен — не указана основа цены облигаций", "not added — bond price basis not given"));
+    setBasis(it, doc, choice);
+  }
+  let quality = WL.quality(doc);
   if(quality.status === "partial"){
     setState(it, "ask", t("прочитан не полностью — ждёт решения", "not fully read — waiting for your decision"));
-    const {choice} = await askPartial(it, doc, quality);
+    const open = unreadPages(doc);
+    const {choice} = await askPartial(it, doc, quality, open);
     if(gen !== Q.gen) return;
-    if(choice !== "add") return setState(it, "skip", t("не добавлен — прочитан не полностью", "not added — not fully read"));
+    if(choice === "noPositions"){ doc.pagesConfirmed = [...new Set([...(doc.pagesConfirmed || []), ...open])]; quality = WL.quality(doc); }
+    else if(choice !== "add") return setState(it, "skip", t("не добавлен — прочитан не полностью", "not added — not fully read"));
   }
   // Валюты в файле нет: доллары молча не подставляем — суммы в евро или франках исказили бы итог.
   if(doc.ccyGuessed){
@@ -694,7 +920,10 @@ async function commit(it, doc, gen){
     const {choice} = await askReplace(twin, doc);
     if(gen !== Q.gen) return;
     if(!S.docs.includes(twin.doc) && choice !== "skip"){ replace = null; }                 // пока окно было открыто, выписку убрали
-    else if(choice === "replace") replace = twin.doc.fileName;
+    else if(choice === "replace"){ replace = twin.doc.fileName;
+      // Новая выписка того же счёта наследует ответы «это разные счета», данные о прежней.
+      if(twin.doc.distinctFrom) doc.distinctFrom = [...new Set([...(doc.distinctFrom || []), ...twin.doc.distinctFrom])]; }
+    else if(choice === "both") doc.distinctFrom = [...new Set([...(doc.distinctFrom || []), acctKey(twin.doc)])];
     if(choice === "skip") return setState(it, "skip", twin.identical ? ALREADY() : t("не добавлен — выписка этого счёта уже в отчёте", "not added — this account is already in the report"));
     if(inReport(it)) return setState(it, "skip", ALREADY());
   }
@@ -710,6 +939,7 @@ async function commit(it, doc, gen){
   if(doc.from === "sheet" && doc.sheets) S_SHEETS[doc.fileName] = {file: it.file, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head, hash: doc.hash};
   if(!S.rid) S.rid = newRid();
   save();
+  extendPaid();
   if(doc.fromAi && Q.aiOk) setAiAllowed(true);
   if(!Q.lead){ Q.lead = true; track("Lead", {content_name: "statements_uploaded", documents: S.docs.length}); }
   const n = doc.kind === "ledger" ? null : doc.positions.length, partial = quality.status === "partial";
@@ -737,20 +967,57 @@ function askCurrency(it, doc){
     cancel: "skip",
   });
 }
-// Выписка прочитана не полностью: показываем, что именно потеряно, и объясняем, что будет с отчётом.
-function askPartial(it, doc, quality){
+// Страницы-картинки, которые мешают доверять выписке: не прочитаны, человек их не подтвердил, и итог всего счёта их не покрывает.
+const unreadPages = d => { const pg = d.pages; if(!pg || !(pg.unread || []).length || (d.checks || []).some(c => c.whole && c.ok)) return [];
+  return pg.unread.filter(n => !(d.pagesConfirmed || []).includes(n)); };
+// Выписка прочитана не полностью: показываем, что именно потеряно, и объясняем, что будет с отчётом. Непрочитанные страницы —
+// миниатюрами: человек видит, реклама там или таблица, и может подтвердить, что позиций на них нет.
+async function askPartial(it, doc, quality, open = []){
+  let thumbs = [];
+  if(open.length && WL.pageThumbs){ try{ thumbs = await WL.pageThumbs(it.file, open.slice(0, 4), {password: it.password}); }catch(e){} }
+  const onlyPages = open.length && quality.issues.length === 1;
   return dialog({
-    eyebrow: doc.brokerShort || doc.broker,
-    title: t("Выписка прочитана не полностью", "This statement was not fully read"),
+    eyebrow: bankOf(doc) ? doc.brokerShort || doc.broker : t("Выгрузка без названия банка", "Export without a bank name"),
+    title: onlyPages ? t("Программа не прочитала часть страниц", "Some pages could not be read") : t("Выписка прочитана не полностью", "This statement was not fully read"),
     body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
       <ul class="dlg-issues">${quality.issues.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
-      <p>${t("Итог и выводы с такой выпиской могут быть неверны. Её можно добавить с пометкой — посмотреть, что прочиталось, — но полный отчёт откроется, только когда все выписки сойдутся с итогами банка.",
-        "The total and findings with this statement may be wrong. You can add it with a warning to see what was read, but the full report unlocks only when every statement matches the bank's totals.")}</p>
+      ${thumbs.length ? `<div class="pg-thumbs">${thumbs.map(x => `<figure><img src="${x.url}" alt="${esc(t(`Страница ${x.n}`, `Page ${x.n}`))}"><figcaption>${t("стр.", "p.")} ${x.n}</figcaption></figure>`).join("")}</div>` : ""}
+      ${onlyPages ? `<p>${open.length === 1
+          ? t("Это изображение: текст на нём программа не читает, и распознать его не получилось. Если там только график, условия или реклама, отметьте это — выписка войдёт в отчёт с пометкой «позиций нет — со слов пользователя». Если там позиции, лучше загрузить исходный PDF из интернет-банка или выгрузку CSV.",
+              "This is an image: the program cannot read text on it, and recognition did not work. If it only contains a chart, terms or ads, confirm it — the statement joins the report marked “no positions, as confirmed by the user”. If it contains positions, upload the original PDF from online banking or a CSV export instead.")
+          : t("Это изображения: текст на них программа не читает, и распознать их не получилось. Если на них только графики, условия или реклама, отметьте это — выписка войдёт в отчёт с пометкой «позиций нет — со слов пользователя». Если там позиции, лучше загрузить исходный PDF из интернет-банка или выгрузку CSV.",
+              "These are images: the program cannot read text on them, and recognition did not work. If they only contain charts, terms or ads, confirm it — the statement joins the report marked “no positions, as confirmed by the user”. If they contain positions, upload the original PDF from online banking or a CSV export instead.")}</p>`
+        : `<p>${t("Итог и выводы с такой выпиской могут быть неверны. Её можно добавить с пометкой — посмотреть, что прочиталось, — но полный отчёт откроется, только когда все выписки сойдутся с итогами банка.",
+          "The total and findings with this statement may be wrong. You can add it with a warning to see what was read, but the full report unlocks only when every statement matches the bank's totals.")}</p>
       <p>${t("Надёжнее загрузить исходный PDF из интернет-банка, без закрашивания и пересохранения, или выгрузку позиций в CSV или Excel.",
-        "It is more reliable to upload the original PDF from online banking, not redacted or re-saved, or a positions export in CSV or Excel.")}</p>`,
-    buttons: [{id: "add", label: t("Добавить с пометкой", "Add with a warning"), primary: true}, {id: "skip", label: t("Не добавлять", "Don't add")}],
+        "It is more reliable to upload the original PDF from online banking, not redacted or re-saved, or a positions export in CSV or Excel.")}</p>`}`,
+    buttons: [{id: "add", label: t("Добавить с пометкой", "Add with a warning"), primary: true},
+              onlyPages && {id: "noPositions", label: open.length === 1 ? t("На этой странице позиций нет", "No positions on this page") : t("На этих страницах позиций нет", "No positions on these pages")},
+              {id: "skip", label: t("Не добавлять", "Don't add")}].filter(Boolean),
     cancel: "skip",
   });
+}
+// Цена облигаций без основы: показываем, что получится в каждом случае, — человек сверит с суммой в выписке банка.
+function askBasis(it, doc){
+  const ps = doc.positions.filter(p => p.basisUnknown && p.value == null), ex = ps[0], n = ps.length;
+  const opt = (label, v) => `<li><span class="k">${label}</span><span class="m">${fmt.qty(ex.qty)} × ${fmt.px(ex.price)}${v === "p" ? "%" : ""} = ${fmt.money(ex.qty * ex.price / (v === "p" ? 100 : 1), ex.ccy)}</span></li>`;
+  return dialog({
+    eyebrow: doc.brokerShort || doc.broker,
+    title: t("Цена облигаций — в процентах номинала или за штуку?", "Are the bond prices in percent of nominal or per unit?"),
+    body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
+      <p>${t(`У ${n} ${WL.pl(n, ["облигации", "облигаций", "облигаций"], ["bond", "bonds"])} в файле нет стоимости, а по цене не видно, в чём она указана. Обычно цена облигации — в процентах номинала, но так бывает не всегда. Пример — ${esc(ex.name)}:`,
+        `${n} ${WL.pl(n, ["", "", ""], ["bond has", "bonds have"])} no value in the file, and the price does not say what it is in. Bond prices are usually in percent of nominal, but not always. Example — ${esc(ex.name)}:`)}</p>
+      <ul class="dlg-list">${opt(t("в % номинала", "% of nominal"), "p")}${opt(t("за штуку", "per unit"), "u")}</ul>`,
+    buttons: [{id: "percent", label: t("В процентах номинала", "Percent of nominal"), primary: true}, {id: "unit", label: t("За штуку", "Per unit")}, {id: "skip", label: t("Не добавлять", "Don't add")}],
+    cancel: "skip",
+  });
+}
+function setBasis(it, doc, basis){
+  const sh = doc.sheets[doc.sheetIndex || 0];
+  const fresh = WL.sheetDoc(sh.rows, doc.head, it.file, {...(sh.ctx || {}), basis});
+  doc.positions = fresh.positions; doc.checks = fresh.checks; delete doc.basisUnknown;
+  doc.note = [doc.note, basis === "percent" ? t("цена облигаций в процентах номинала — указано вручную", "bond prices in percent of nominal — set manually")
+    : t("цена облигаций за штуку — указано вручную", "bond prices per unit — set manually")].filter(Boolean).join(" · ");
 }
 function askReplace(twin, doc){
   const old = twin.doc, guessed = dateGuessed(doc) || dateGuessed(old);
@@ -763,6 +1030,12 @@ function askReplace(twin, doc){
     : t("Если это разные счета, оставьте обе.", "If these are different accounts, keep both.");
   const text = twin.identical ? t("Те же бумаги с теми же количествами и суммами на ту же дату — это та же выписка. Второй раз её добавлять не нужно: всё посчиталось бы дважды.",
       "The same holdings with the same quantities and amounts as of the same date — this is the same statement. Adding it again would count everything twice.")
+    : twin.acct ? t("Номер счёта в выписках совпадает — это выписка того же счёта. В отчёте должна остаться одна, более новая, иначе всё посчитается дважды.",
+      "The account number is the same in both statements, so this is the same account. Keep only the newer one, otherwise everything is counted twice.")
+    : twin.maybe === "maybe" ? t(`В одной выписке номер счёта указан полностью, в другой — только его общая часть${pct != null ? `; бумаги совпадают на ${pct}%` : ""}. Это может быть новая выписка того же счёта, а может быть другой субсчёт того же клиента. Если это разные счета, оставьте обе.`,
+      `One statement shows the full account number and the other only its common part${pct != null ? `; ${pct}% of the holdings match` : ""}. This may be a newer statement of the same account or another sub-account of the same client. If these are different accounts, keep both.`)
+    : twin.maybe === "client" ? t(`Номер клиента в выписках совпадает, а номера счёта в них нет${pct != null ? `; бумаги совпадают на ${pct}%` : ""}. У одного клиента бывает несколько счетов: если это разные счета, оставьте обе, если тот же — замените прежнюю.`,
+      `The client number is the same in both statements, but they show no account number${pct != null ? `; ${pct}% of the holdings match` : ""}. One client can have several accounts: if these are different accounts, keep both; if it is the same one, replace the earlier statement.`)
     : log ? t("Журнал операций показывает деньги и открытые позиции на свою дату, выписка — на свою. Если это один и тот же счёт, оставьте одну, более новую, — иначе деньги посчитаются дважды.",
       "A transaction log shows cash and open positions as of its own date, and a statement as of its own. If this is the same account, keep only the newer one — otherwise the cash is counted twice.") + " " + KEEP
     : twin.few && twin.noBank ? t("Банк в файлах не указан, но имя файла то же — похоже на новую выгрузку того же счёта. Если это один и тот же счёт, оставьте одну выписку — иначе всё посчитается дважды.",
@@ -776,12 +1049,16 @@ function askReplace(twin, doc){
   const B = {replaceNew: {id: "replace", label: t("Заменить более новой", "Replace with the newer one")}, replace: {id: "replace", label: t("Заменить прежнюю", "Replace the earlier one")},
     both: {id: "both", label: t("Это разные счета", "Different accounts")}, skip: {id: "skip", label: t("Не добавлять", "Don't add")}, keepNew: {id: "skip", label: t("Оставить более новую", "Keep the newer one")}};
   const order = twin.identical ? [B.skip, B.replace, B.both]
+    : twin.acct ? (newer || same || guessed ? [newer ? B.replaceNew : B.replace, B.skip, B.both] : [B.keepNew, {id: "replace", label: t("Заменить на эту", "Replace with this one")}, B.both])
+    : twin.maybe ? ((twin.share || 0) >= 0.5 && newer ? [B.replaceNew, B.both, B.skip] : [B.both, newer ? B.replaceNew : B.replace, B.skip])
     : guessed ? [B.replace, B.both, B.skip]
     : same ? (log ? [B.replace, B.both, B.skip] : [B.both, B.replace, B.skip])
     : newer ? [B.replaceNew, B.both, B.skip] : [B.keepNew, {id: "replace", label: t("Заменить на эту", "Replace with this one")}, B.both];
   return dialog({
     eyebrow: bankOf(doc) ? doc.brokerShort || doc.broker : t("Выгрузка без названия банка", "Export without a bank name"),
     title: twin.identical ? t("Эта выписка уже есть в отчёте", "This statement is already in the report")
+      : twin.acct ? t("Это выписка того же счёта", "This is a statement of the same account")
+      : twin.maybe ? t("Тот же счёт или другой?", "The same account or another one?")
       : same && !log && !twin.few ? (known ? t("Похоже на другой счёт в том же банке", "Looks like another account at the same bank") : t("Похоже на другой счёт", "Looks like another account"))
       : t("Похоже, это выписка того же счёта", "This looks like a statement of the same account"),
     body: `<ul class="dlg-list">${line(t("В отчёте", "In the report"), old)}${line(t("Новая", "New"), doc)}</ul><p>${text}</p>`,
@@ -790,7 +1067,7 @@ function askReplace(twin, doc){
   });
 }
 // Пометка об ИИ: откуда цифры и какие суммы не нашлись в тексте выписки. Остаётся и после ручной разметки колонок.
-const aiNote = d => [t("распознано ИИ по тексту таблиц — сверьте суммы с выпиской", "read by AI from the table text — check the amounts against the statement"),
+const aiNote = d => [t("распознано ИИ по тексту таблиц; каждое число сверено со строкой своей бумаги", "read by AI from the table text; every number was checked against its own row"),
   d.aiDoubt && d.aiDoubt.length ? t(`не подтверждено текстом выписки: ${listShort(d.aiDoubt)}`, `not confirmed by the statement text: ${listShort(d.aiDoubt)}`) : ""].filter(Boolean).join(" · ");
 const listShort = xs => xs.slice(0, 5).join(", ") + (xs.length > 5 ? t(` и ещё ${xs.length - 5}`, ` and ${xs.length - 5} more`) : "");
 function aiErrorText(code){
@@ -805,14 +1082,17 @@ function aiErrorText(code){
     network: t("нет связи с сервером распознавания", "no connection to the recognition server"),
   })[code] || t("не удалось распознать файл", "could not read the file");
 }
-async function aiRead(file, hash, signal, prepared){
+// Ключ ответа ИИ: файл и ровно тот текст, что ушёл, — поправленный текст распознаётся заново.
+const textKey = x => { let h = 2166136261; for(let i = 0; i < x.length; i++){ h ^= x.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + ":" + x.length; };
+async function aiRead(file, hash, signal, prepared, password){
   // Отменить можно и пока готовится текст: тогда он никуда не уходит.
   const cancelled = () => { if(signal && signal.aborted) throw new Error("aborted"); };
-  const prep = prepared || await WL.pdfAiText(file);
+  const prep = prepared || await WL.pdfAiText(file, {password});
   cancelled();
   if(prep.numbers.size < 2) throw new Error("no_positions");        // отправлять нечего: в тексте нет чисел
   if(prep.text.length > 160000) throw new Error("too_large");
-  let data = AI_CACHE.get(hash);
+  const key = prep.edited ? hash + "|" + textKey(prep.text) : hash;
+  let data = AI_CACHE.get(key);
   if(!data){
     const ctl = new AbortController(), stop = () => ctl.abort();
     let timedOut = false, r;
@@ -824,7 +1104,7 @@ async function aiRead(file, hash, signal, prepared){
     }catch(e){ throw new Error(signal && signal.aborted ? "aborted" : timedOut ? "timeout" : "network"); }
     finally{ clearTimeout(timer); if(signal) signal.removeEventListener("abort", stop); }
     if(!r.ok || data.error) throw new Error(data.error || "http_" + r.status);
-    AI_CACHE.set(hash, data);
+    AI_CACHE.set(key, data);
   }
   cancelled();
   if(data.document_kind === "transactions") throw new Error("transactions");
@@ -835,30 +1115,12 @@ async function aiRead(file, hash, signal, prepared){
   const ps = (data.positions || []).filter(p => p && p.name && (p.market_value != null || p.quantity != null)).map(norm);
   if(!ps.length) throw new Error("no_positions");
 
-  /* Проверка ответа. Число позиции должно стоять в тексте выписки рядом со строкой этой же бумаги — по ISIN, тикеру
-     или словам названия — и с тем же знаком. Совпадение где-нибудь в документе не доказывает, что сумма относится
-     к этой бумаге и этой колонке. Бумаги, у которых что-то не подтвердилось, помечаются: выписка тогда считается
-     прочитанной не полностью. Если таких больше четверти — ответу не верим целиком. */
-  const lines = prep.lines || [];
-  const keys = p => [p.isin, p.ticker, ...String(p.name || "").split(/[^\p{L}\p{N}]+/u).filter(w => w.length >= 4 && !/^\d+$/.test(w))]
-    .filter(Boolean).map(w => String(w).toLowerCase());
-  const around = p => {
-    const ks = keys(p), at = new Set();
-    lines.forEach((L, i) => { if(ks.some(k => L.lower.includes(k))) for(let j = i - 4; j <= i + 4; j++) if(j >= 0 && j < lines.length) at.add(j); });
-    return [...at];
-  };
-  const shortNear = near => near.some(i => /(^|\|\s*)S(\s*\||$)|\bshort\b|\bsold\b|\bwritten\b/i.test(lines[i].text));
-  const confirmed = (v, near) => {
-    if(v == null) return true;
-    const c = Math.round(Math.abs(v) * 100);
-    if(near.some(i => lines[i].signed.has(v < 0 ? -c : c))) return true;
-    // Короткая позиция, напечатанная без минуса, но с пометкой «S» или «Short».
-    return v < 0 && near.some(i => lines[i].abs.has(c)) && shortNear(near);
-  };
-  const doubtful = ps.filter(p => {
-    const near = around(p);
-    return !near.length || ![p.market_value, p.quantity, p.price, p.accrued_interest, p.cost_value].every(v => confirmed(v, near));
-  });
+  /* Проверка ответа (WL.aiVerify): каждое число — в строке своей бумаги и с тем же знаком, валюта — из строки, шапки таблицы
+     или единственная в тексте. Бумаги с неподтверждённой стоимостью, количеством, ценой, НКД или чужой валютой помечаются, и
+     выписка считается прочитанной не полностью; если таких больше четверти — ответу не верим целиком. Себестоимость, которой
+     нет в строке, не показываем. */
+  const V = WL.aiVerify(prep, ps);
+  const doubtful = ps.filter((p, k) => V.pos[k].doubt.length);
   if(doubtful.length > ps.length * 0.25) throw new Error("unverified");
 
   // Ответ собираем в таблицу с заголовками шаблона и читаем тем же разбором, что CSV: классы активов,
@@ -867,54 +1129,88 @@ async function aiRead(file, hash, signal, prepared){
   const ccy = v => (String(v || "").toUpperCase().match(/\b[A-Z]{3}\b/) || [""])[0];
   const isoDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
   const pct = p => p.price_basis === "percent_of_nominal";
-  // Опцион со стандартным контрактом на 100 акций — в виде кода OCC: по нему работают календарь экспираций и котировка.
-  const occOf = p => {
+  const cents = v => Math.round(v * 100) / 100;
+  // Дата погашения, которой противоречит строка выписки, не берётся; не найденная в строке — остаётся с пометкой.
+  ps.forEach((p, k) => { const v = V.pos[k]; if(v.date === "bad") p.maturity = null;
+    v.drop.forEach(f => { p[f] = null; }); });
+  // Опцион со стандартным контрактом на 100 акций — в виде кода OCC: по нему работают календарь экспираций и живая котировка.
+  // Только если экспирация, страйк и базовый актив есть в строке выписки: иначе котировка была бы чужого контракта.
+  const occOf = (p, k) => {
+    const v = V.pos[k];
     if(p.asset_class !== "option" || !p.underlying || !p.option_right || p.strike == null || !isoDate(p.maturity) ||
-       (p.contract_multiplier != null && p.contract_multiplier !== 100)) return "";
+       (p.contract_multiplier != null && p.contract_multiplier !== 100) || v.date !== "ok" || v.strike !== "ok" || v.under !== "ok") return "";
     const u = String(p.underlying).toUpperCase().replace(/\s+/g, "");
     if(!/^[A-Z][A-Z0-9.]{0,5}$/.test(u)) return "";
     const d = p.maturity;
     return u + d.slice(2, 4) + d.slice(5, 7) + d.slice(8, 10) + (p.option_right === "call" ? "C" : "P") + String(Math.round(p.strike * 1000)).padStart(8, "0");
   };
   const broker = prep.ctx.broker || String(data.institution || "").slice(0, 60);
-  const cents = v => Math.round(v * 100) / 100;
-  const accrued = {};
-  ps.forEach(p => { if(p.accrued_interest) accrued[ccy(p.currency)] = cents((accrued[ccy(p.currency)] || 0) + p.accrued_interest); });
+  const accrued = {}, sums = {};
+  const mvOf = p => p.market_value ?? (pct(p) && p.price != null && p.quantity != null ? cents(p.quantity * p.price / 100) : null);
+  ps.forEach(p => { const c = ccy(p.currency); if(p.accrued_interest) accrued[c] = cents((accrued[c] || 0) + p.accrued_interest);
+    const s2 = sums[c] = sums[c] || {mv: 0, acc: 0}; s2.mv = cents(s2.mv + (mvOf(p) || 0)); s2.acc = cents(s2.acc + (p.accrued_interest || 0)); });
   const ACCRUED = t("Накопленный купонный доход", "Accrued interest");
+  // Итог — из строк итога самой выписки. Сошлась сумма позиций (с НКД или без) с каким-нибудь итогом в этой валюте — берём его;
+  // не сошлась ни с одним — берём самый крупный итог валюты, и сверка покажет расхождение.
+  const totalRows = Object.entries(sums).map(([c, s2]) => {
+    const vals = V.totals.filter(x => x.ccy === c).flatMap(x => x.values).filter(v => Math.abs(v) >= 1);
+    if(!c || !vals.length) return null;
+    const near = (a, b) => Math.abs(a - b) < Math.max(0.01, Math.abs(b) * 1e-6);
+    const full = vals.find(v => near(v, cents(s2.mv + s2.acc))), clean = vals.find(v => near(v, s2.mv));
+    const value = full != null ? full : clean != null ? cents(clean + s2.acc) : vals.reduce((m, v) => Math.abs(v) > Math.abs(m) ? v : m, 0);
+    return ["", `Total ${c}`, "", "", "", "", "", "", "", value, c, ""];
+  }).filter(Boolean);
   const rows = [["Broker", "Name", "Ticker", "ISIN", "Type", "Quantity", "Average cost price", "Cost basis", "Current price", "Market value", "Currency", "Expiry"],
-    ...ps.map(p => {
+    ...ps.map((p, k) => {
       // Цены облигаций в процентах номинала: себестоимость — итоговой суммой, цена за единицу в колонку не идёт.
       const cost = p.cost_value ?? (pct(p) && p.cost_price != null && p.quantity != null ? cents(p.quantity * p.cost_price / 100) : null);
-      const mv = p.market_value ?? (pct(p) && p.price != null && p.quantity != null ? cents(p.quantity * p.price / 100) : null);
-      return [broker, p.name, occOf(p) || p.ticker || "", p.isin || "", TYPE[p.asset_class] || "Other", p.quantity ?? "",
-              pct(p) ? "" : p.cost_price ?? "", cost ?? "", pct(p) ? "" : p.price ?? "", mv ?? "", ccy(p.currency), isoDate(p.maturity)];
+      return [broker, p.name, occOf(p, k) || p.ticker || "", p.isin || "", TYPE[p.asset_class] || "Other", p.quantity ?? "",
+              pct(p) ? "" : p.cost_price ?? "", cost ?? "", pct(p) ? "" : p.price ?? "", mvOf(p) ?? "", ccy(p.currency), isoDate(p.maturity)];
     }),
     // НКД — отдельной строкой в своей валюте: в рыночной стоимости бумаг его нет, а в итогах счёта обычно есть.
     ...Object.entries(accrued).map(([c, v]) => [broker, ACCRUED, "", "", "Bond", "", "", "", "", v, c, ""]),
-    ...(data.totals || []).filter(x => x && typeof x.value === "number").map(x => {
-      const acc = accrued[ccy(x.currency)] || (Object.keys(accrued).length === 1 && !ccy(x.currency) ? Object.values(accrued)[0] : 0);
-      const excludes = x.includes_accrued_interest === "no" || x.includes_accrued_interest === false;
-      return ["", `Total ${ccy(x.currency)}`.trim(), "", "", "", "", "", "", "", excludes ? cents(x.value + acc) : x.value, ccy(x.currency), ""];
-    })];
+    ...totalRows];
   const ctx = {broker: broker || null, asOf: prep.ctx.asOf || (/^\d{4}-\d{2}-\d{2}$/.test(data.as_of || "") ? data.as_of : null)};
   const head = WL.sheetFind(rows);
   const doc = WL.sheetDoc(rows, head, file, ctx);
   // Что таблица шаблона не передаёт: погашение, цена в процентах номинала, НКД, страница — сопоставляем по порядку и названию.
   const used = new Set();
-  ps.forEach(p => {
+  ps.forEach((p, k) => {
     const d = doc.positions.find(x => !used.has(x) && x.name === p.name) || null;
     if(!d) return;
     used.add(d);
+    const v = V.pos[k];
     if(p.page != null) d.page = p.page;
     if(isoDate(p.maturity) && d.type !== "option" && d.type !== "future") d.maturity = p.maturity;
     if(pct(p)){ d.priceBasis = "percent"; d.price = p.price ?? null; d.costPrice = p.cost_price ?? null; }
     if(p.accrued_interest != null){ d.accruedRef = p.accrued_interest; d.refCcy = ccy(p.currency) || d.ccy; }
     if(d.type === "option" && !d.occ){ d.right = p.option_right === "call" ? "C" : p.option_right === "put" ? "P" : null; d.strike = p.strike ?? null;
       d.underlying = p.underlying || null; d.multiplier = p.contract_multiplier ?? null; }
+    // Поля, которых нет в строке выписки: показываем с пометкой, по ним не строим котировку.
+    const unconfirmed = [v.date === "unknown" && "maturity", v.strike === "unknown" && "strike", v.under === "unknown" && "underlying"].filter(Boolean);
+    if(unconfirmed.length) d.unconfirmed = unconfirmed;
+    if(v.ccy === "guess"){ d.ccyGuessed = true; }
   });
   doc.positions.forEach(d => { if(d.name === ACCRUED && !d.symbol && d.type === "bond") d.accruedLine = true; });
+  const guessed = doc.positions.filter(d => d.ccyGuessed).length;
+  if(guessed) doc.ccyGuessed = guessed;
   doc.fromAi = true;
+  if(prep.accountIds) Object.defineProperty(doc, "accountIds", {value: prep.accountIds, enumerable: false, configurable: true});
+  // Что именно не подтвердилось — по бумагам и полям: человек видит конкретную цифру, а не общий совет «сверьте».
+  const FIELD = {market_value: t("стоимость", "value"), quantity: t("количество", "quantity"), price: t("цена", "price"),
+    accrued_interest: t("НКД", "accrued interest"), currency: t("валюта", "currency"), row: t("строка бумаги", "the security's row")};
+  const issues = [];
+  ps.forEach((p, k) => { const v = V.pos[k];
+    if(v.doubt.length) issues.push(v.doubt.includes("row") ? t(`${p.name}: бумаги нет в тексте выписки`, `${p.name}: the security is not in the statement text`)
+      : t(`${p.name}: ${v.doubt.map(f => FIELD[f]).join(", ")} — не как в строке бумаги в выписке`, `${p.name}: ${v.doubt.map(f => FIELD[f]).join(", ")} — not as in the security's row in the statement`)); });
+  const noCost = ps.filter((p, k) => V.pos[k].drop.length).map(p => p.name);
+  if(noCost.length) issues.push(t(`себестоимость из ответа ИИ не нашлась в строке бумаги и не показана: ${listShort(noCost)}`,
+    `cost from the AI result was not found in the security's row and is not shown: ${listShort(noCost)}`));
+  if(V.missed.length) issues.push(t(`в таблице позиций есть строки, которых нет в ответе ИИ: ${listShort(V.missed.map(x => x.label))}`,
+    `the positions table has rows missing from the AI result: ${listShort(V.missed.map(x => x.label))}`));
+  doc.aiIssues = issues;
   doc.aiDoubt = doubtful.map(p => p.name);
+  if(prep.pages) doc.pages = {count: prep.pages.count, unread: prep.pages.unread || [], ocr: []};
   doc.note = [doc.note, aiNote(doc)].filter(Boolean).join(" · ");
   doc.sheetIndex = 0; doc.head = head;
   Object.defineProperty(doc, "sheets", {value: [{name: t("Распознано ИИ", "AI result"), rows, ctx}], enumerable: false});
@@ -952,7 +1248,7 @@ function renderTray(show){
     <ul class="ut-list">${items.map(x => `<li class="ut-item ${x.state}">
       <span class="ut-ic" aria-hidden="true"></span>
       <div class="ut-main"><div class="ut-name" title="${esc(x.name)}">${esc(x.name)}</div><div class="ut-text">${esc(x.text)}</div></div>
-      ${x.state === "ai" && x.abort && !x.abort.signal.aborted ? `<button class="btn small" type="button" data-cancel="${x.id}">${t("Отменить", "Cancel")}</button>` : ""}</li>`).join("")}</ul>`;
+      ${(x.state === "ai" || (x.state === "reading" && x.ocr)) && x.abort && !x.abort.signal.aborted ? `<button class="btn small" type="button" data-cancel="${x.id}">${t("Отменить", "Cancel")}</button>` : ""}</li>`).join("")}</ul>`;
   el.classList.toggle("busy", !!active);
   if(show && !Q.hidden) el.hidden = false;
   clearTimeout(trayTimer);
@@ -1144,10 +1440,13 @@ function renderHero(){
     ${mixHtml}`;
   $("#brokers").className = `brokers n${byDoc.length}`;
   $("#brokers").innerHTML = byDoc.map(x => {
-    const bad = x.d.checks.filter(c => !c.ok).length;
+    // Карточка счёта говорит то же, что «Документы» и плашка над отчётом: сверено, итога нет или есть пропуски.
+    const q = x.d.kind === "positions" ? WL.quality(x.d) : {status: x.d.checks.every(c => c.ok) ? "ok" : "partial", issues: x.d.checks.filter(c => !c.ok)};
+    const chip = q.status === "partial" ? `<span class="pill bad" title="${esc(q.issues.map(i => typeof i === "string" ? i : i.label).join("; "))}">${t("есть пропуски", "gaps found")}</span>`
+      : q.status === "unverified" ? `<span class="pill">${t("итог не сверен", "total not reconciled")}</span>`
+      : `<span class="pill ok">${x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`;
     return `<div class="card broker" data-file="${esc(x.d.fileName)}"><div class="name">${esc(x.d.broker)}
-        ${x.d.from === "demo" && !bad ? "" : !bad && x.d.from === "sheet" && !x.d.checks.some(c => !c.count) ? `<span class="pill">${t("итог не сверен", "total not reconciled")}</span>`
-          : `<span class="pill ${bad ? "bad" : "ok"}">${bad ? t(`не сошлось: ${bad}`, `mismatch: ${bad}`) : x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`}
+        ${x.d.from === "demo" && q.status !== "partial" ? "" : chip}
         ${x.stale ? `<span class="pill stale">${t(`${WL.days(x.d.asOf, P.today)} дн. назад`, `${WL.days(x.d.asOf, P.today)} days old`)}</span>` : x.live ? `<span class="pill live">${t("цены сейчас", "live prices")}</span>` : ""}</div>
       <div class="v">${fmt.money(x.usd, "USD", 0)}</div>
       <div class="meta">${x.d.kind === "ledger" ? t(`журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`, `transaction log ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`)
@@ -1306,6 +1605,16 @@ const renderChart = () => {
   WL.renderChart($("#chart"), S.P, S);
 };
 
+// Состояние выписки — та же подпись, что при загрузке, в «Неполном отчёте» и перед оплатой; ниже — что не так и на чём держится доверие.
+function docStatus(d){
+  if(d.kind !== "positions" || d.from === "demo") return "";
+  const q = WL.quality(d), pg = d.pages;
+  const extra = q.basis.filter(x => !(d.checks || []).some(c => x.startsWith(c.label)));
+  return `<div class="doc-status"><span class="qchip ${q.status}">${esc(WL.qualityLabel(q.status))}</span>${d.fromAi ? `<span class="muted">${t("распознано ИИ", "read by AI")}</span>` : ""}</div>
+    ${q.issues.length ? `<ul class="doc-issues">${q.issues.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${q.status === "unverified" && !/сверять сумму не с чем|без курсов выписки|nothing to reconcile|statement's exchange rates/.test(d.note || "") ? `<div class="doc-basis">${esc(unverifiedWhy(d))}</div>` : ""}
+    ${extra.length ? `<div class="doc-basis">${extra.map(esc).join(" · ")}</div>` : ""}`;
+}
 function renderDocs(){
   const P = S.P;
   $("#docs").innerHTML = S.docs.map(d => `<div style="margin-bottom:14px">
@@ -1314,6 +1623,7 @@ function renderDocs(){
         ? t(`журнал операций, ${d.records.length} строк, ${d.trades.length} сделок${d.cancelled.length ? `, отменено банком: ${d.cancelled.length}` : ""}`,
             `transaction log, ${d.records.length} ${WL.pl(d.records.length, ["строка", "строки", "строк"], ["row", "rows"])}, ${d.trades.length} ${WL.pl(d.trades.length, ["сделка", "сделки", "сделок"], ["trade", "trades"])}${d.cancelled.length ? `, cancelled by the bank: ${d.cancelled.length}` : ""}`)
         : t(`${d.from === "sheet" ? "выгрузка таблицей" : "снимок"}, позиции на ${fmt.date(d.asOf)}`, `${d.from === "sheet" ? "spreadsheet export" : "snapshot"}, positions as of ${fmt.date(d.asOf)}`)}${d.note ? " · " + esc(d.note) : ""}</div>
+      ${docStatus(d)}
       ${d.checks.map(c => `<div class="check"><span>${c.ok ? "✓" : "✗"} ${esc(c.label)}</span><span class="num ${c.ok ? "" : "down"}">${c.count ? t(`${c.parsed} из ${c.stated}`, `${c.parsed} of ${c.stated}`) : `${fmt.money(c.parsed, ccyOf(c))}${c.ok ? "" : " ≠ " + fmt.money(c.stated, ccyOf(c))}`}</span></div>`).join("")}
       <div class="doc-actions no-print">
         ${d.from === "sheet" && S_SHEETS[d.fileName] && S_SHEETS[d.fileName].hash === d.hash ? `<button class="btn small" type="button" data-remap="${esc(d.fileName)}">${t("Сопоставить колонки", "Map columns")}</button>` : ""}
@@ -1330,9 +1640,10 @@ function renderDocs(){
     if(!st || !old || st.hash !== old.hash) return;
     const doc = await openMapper(st.file, st.sheets, st, key);
     if(!doc || !S.docs.includes(old)) return;
-    doc.fileName = key; doc.hash = old.hash;
+    doc.fileName = key; doc.hash = old.hash; if(old.accts) doc.accts = old.accts;
     // Цифры по-прежнему из ответа ИИ: пометка об этом и о суммах, не найденных в выписке, остаётся.
-    if(old.fromAi){ doc.fromAi = true; doc.aiDoubt = old.aiDoubt; doc.note = [aiNote(doc), doc.note].filter(Boolean).join(" · "); }
+    if(old.fromAi){ doc.fromAi = true; doc.aiDoubt = old.aiDoubt; doc.aiIssues = old.aiIssues; doc.note = [aiNote(doc), doc.note].filter(Boolean).join(" · "); }
+    if(old.pages){ doc.pages = old.pages; if(old.pagesConfirmed) doc.pagesConfirmed = old.pagesConfirmed; }
     if(doc.ccyGuessed){ const cs = [...new Set(old.positions.map(p => p.ccy))]; if(cs.length === 1) setCurrency(doc, cs[0]); }
     S.docs = S.docs.map(d => d === old ? doc : d);
     S_SHEETS[key] = {file: st.file, sheets: st.sheets, sheetIndex: doc.sheetIndex, head: doc.head, hash: doc.hash};
@@ -1512,12 +1823,14 @@ function openDrawer(id, quiet){
   if(p.type === "option" && p.qty < 0 && p.multiplier) add(p.right === "P" ? t("Обязательство купить", "Obligation to buy") : t("Обязательство продать", "Obligation to sell"), fmt.money(Math.abs(p.qty) * p.multiplier * p.strike, p.ccy, 0));
   if(p.firstNotice) add(t("Первый день уведомления", "First notice day"), fmt.date(p.firstNotice) + t(" <span class='muted'>— переложить до</span>", " <span class='muted'>— roll before</span>"));
   if(p.deliverable) add(t("Поставка по контракту", "Contract deliverable"), `${esc(p.deliverable)} <span class="muted">${t("— скорректированный контракт", "— adjusted contract")}</span>`);
-  if(p.maturity) add(t("Погашение", "Maturity"), fmt.date(p.maturity));
+  const unconf = f => (p.unconfirmed || []).includes(f) ? ` <span class="unk">${t("не подтверждено текстом выписки", "not confirmed by the statement text")}</span>` : "";
+  if(p.maturity) add(t("Погашение", "Maturity"), fmt.date(p.maturity) + unconf("maturity"));
   if(p.coupon != null) add(t("Купон", "Coupon"), `${fmt.dec(p.coupon, 3).replace(/[,.]?0+$/, "")}%`);
   if(p.accruedRef != null) add(t("Накопленный купонный доход", "Accrued interest"), fmt.money(p.accruedRef, p.refCcy || p.ccy));
   if(p.isin) add("ISIN", esc(p.isin));
   if(p.purchaseNote) add(t("Последняя покупка", "Last purchase"), esc(p.purchaseNote));
-  if(p.expiry) add(p.type === "future" ? t("Последний торговый день", "Last trading day") : t("Экспирация", "Expiry"), fmt.date(p.expiry));
+  if(p.expiry) add(p.type === "future" ? t("Последний торговый день", "Last trading day") : t("Экспирация", "Expiry"), fmt.date(p.expiry) + (p.type === "option" ? unconf("maturity") : ""));
+  if(p.type === "option" && !p.occ && p.strike != null) add(t("Страйк", "Strike"), fmt.px(p.strike) + unconf("strike"));
   if(p.unrealized != null) add(t(`Результат к покупке на ${fmt.date(p.priceDate)}`, `Unrealized gain/loss as of ${fmt.date(p.priceDate)}`), fmt.money(p.unrealized));
   const changes = p.type === "cash" ? "" : `<h4 style="margin:18px 0 6px">${t("Изменение за периоды", "Change by period")}</h4><table class="mini">` +
     WL.PERIODS.map(per => { const c = WL.change(P, p, per.id); return `<tr><td class="l">${per.label}</td><td class="${c && c.abs > 0 ? "up" : c && c.abs < 0 ? "down" : ""}">${c ? fmt.signed(c.abs, p.ccy) : `<span class='unk'>${t("нет данных", "no data")}</span>`}</td><td>${c && c.pct != null ? fmt.pct(c.pct) : ""}</td></tr>`; }).join("") + `</table>`;
@@ -1627,6 +1940,7 @@ WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
   if(!S.docs.length) return renderUpload();
   await recoverPendingPayment();
   if(locked()) track("ViewContent", {content_name: "report_preview", value: PRICE.amount, currency: PRICE.currency});
+  checkUnlock();
   return refresh();
 })();
 })();
