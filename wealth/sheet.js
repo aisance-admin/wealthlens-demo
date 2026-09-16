@@ -126,7 +126,14 @@ function toISO(v, dayFirst = true){
   if(m){ const [d, mo] = dayFirst ? [m[1], m[2]] : [m[2], m[1]]; return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(mo)}-${pad(d)}`; }
   return null;
 }
-const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/) || [null])[0];
+// Код валюты — только настоящий код ISO 4217: три буквы, прочитанные с картинки с ошибкой («USH» вместо «USD»), валютой не считаются
+// и не расходятся со сверкой молча — тогда валюту спросят у человека.
+const ISO_CCY = new Set(("AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNH CNY COP " +
+  "CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GBX GEL GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES " +
+  "KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN " +
+  "PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD " +
+  "UYU UZS VES VND VUV WST XAF XAG XAU XCD XOF XPF YER ZAR ZMW ZWG").split(" "));
+const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/g) || []).find(c => ISO_CCY.has(c)) || null;
 const clean = v => String(v == null ? "" : v).replace(/\s+/g, " ").trim();
 
 /* Колонка достаётся ровно одному полю: сначала точные совпадения заголовка, потом
