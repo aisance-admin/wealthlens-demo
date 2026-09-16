@@ -27,8 +27,6 @@ const M = {quotes: null, quotesAt: null, quotesFailed: false, fx: null, fxDate: 
 let timer = null;
 
 const getJSON = (u, ms = 120000) => WL.getJSON(u, ms);
-const dark = () => document.documentElement.dataset.theme === "dark" ||
-  (document.documentElement.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
 const ago = iso => {
   if(!iso) return "";
   const m = Math.round((Date.now() - new Date(iso)) / 60000);
@@ -134,7 +132,7 @@ function fxTile(f){
 }
 
 function tapeSrc(){
-  const cfg = {symbols: TAPE, showSymbolLogo: true, colorTheme: dark() ? "dark" : "light", isTransparent: true,
+  const cfg = {symbols: TAPE, showSymbolLogo: true, colorTheme: "dark", isTransparent: true,
     displayMode: "adaptive", width: "100%", height: 46, utm_source: location.hostname, utm_medium: "widget", utm_campaign: "ticker-tape"};
   return `https://www.tradingview-widget.com/embed-widget/ticker-tape/?locale=${WL.t("ru", "en")}#` + encodeURIComponent(JSON.stringify(cfg));
 }

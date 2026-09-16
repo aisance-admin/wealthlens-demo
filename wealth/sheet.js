@@ -50,7 +50,7 @@ const classOf = t => (CLASS.find(c => c[0].test(t)) || [null, null])[1];
 // Остальное, как и раньше, акции. У кириллицы нет \b, поэтому русские слова — отдельными выражениями.
 const nameClass = n => /\b(etf|ucits|sicav|fund|fonds)\b/i.test(n) || /фонд|бпиф/i.test(n) ? "fund"
   : /\d\s?%.*\b20\d\d\b|\b(treasury|bund|gilt|bonds?|anleihe|obligation)\b/i.test(n) || /облигац|^офз/i.test(n) ? "bond"
-  : /^(current account|cash account|account\b|konto|compte)/i.test(n) || /^(текущий|расч[её]тный) сч[её]т/i.test(n) ? "cash" : null;
+  : /^(account\b|konto|compte)|\b(current|cash|call|deposit|savings|checking)\s+accounts?\b/i.test(n) || /(текущий|расч[её]тный) сч[её]т/i.test(n) ? "cash" : null;
 const IB_OPT = /^([A-Z][A-Z0-9.]{0,5})\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$/;
 const MONTHS = {JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
                 JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12"};
@@ -199,7 +199,10 @@ function loadXLSX(){
 const BROKER_BY_NAME = [[/exante/i, "Exante"], [/interactive|\bibkr\b|\bib_/i, "Interactive Brokers"],
   [/schwab/i, "Charles Schwab"], [/swissquote|\bsq[_-]/i, "Swissquote"], [/\bubs\b/i, "UBS"],
   [/jpmorgan|\bjpm\b|morgan/i, "J.P. Morgan"], [/goldman|\bgs[_-]/i, "Goldman Sachs"], [/\bciti\b/i, "Citi"],
-  [/saxo/i, "Saxo Bank"], [/pictet/i, "Pictet"], [/julius|baer/i, "Julius Baer"], [/lombard/i, "Lombard Odier"]];
+  [/saxo/i, "Saxo Bank"], [/pictet/i, "Pictet"], [/julius|baer/i, "Julius Baer"], [/lombard/i, "Lombard Odier"],
+  [/\befg\b/i, "EFG Bank"], [/vontobel/i, "Vontobel"], [/\blgt\b/i, "LGT"], [/mirabaud/i, "Mirabaud"], [/rothschild/i, "Rothschild"],
+  [/credit suisse/i, "Credit Suisse"], [/safra sarasin/i, "J. Safra Sarasin"], [/morgan stanley/i, "Morgan Stanley"],
+  [/emirates nbd/i, "Emirates NBD"], [/\bhsbc\b/i, "HSBC"], [/barclays/i, "Barclays"]];
 const brokerFromFile = name => (BROKER_BY_NAME.find(b => b[0].test(name)) || [null, null])[1];
 
 function brokerFromHead(rows, upto){
@@ -408,9 +411,14 @@ WL.parseSheet = async function(file){
    таблиц берём самую похожую на позиции: больше узнанных колонок, нет даты сделки, итог сходится.
    Дата оценки и банк из шапки документа (ctx) едут вместе с листом — их берёт и ручная разметка. */
 WL.parseRows = function(tables, file, ctx){
-  const sheets = tables.map((tb, i) => ({name: tb.name || WL.t(`Таблица ${i + 1}`, `Table ${i + 1}`), rows: tb.rows, ctx}));
+  // Вкладки в панели: сначала похожие на позиции, потом остальные, операции — в конце; без страницы
+  // одинаковые названия («PORTF.») не отличить. Таблиц без чисел в строках не показываем.
+  const order = tables.filter(tb => tb.data >= 1)
+    .sort((a, b) => (b.positional - a.positional) || (a.ops - b.ops) || (b.data - a.data)).slice(0, 12);
+  const sheets = order.map(tb => ({name: `${tb.name || WL.t("Таблица", "Table")} · ${WL.t("стр.", "p.")} ${tb.page || 1}`, rows: tb.rows, ctx, ops: tb.ops}));
   let best = null;
   sheets.forEach((sh, si) => {
+    if(sh.ops) return;                              // операции в позиции не превращаем
     const head = findHeader(sh.rows);
     if(!head) return;
     let doc;

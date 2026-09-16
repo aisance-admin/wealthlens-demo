@@ -118,7 +118,7 @@ WL.renderPositions = function(el, P, S){
     }
     grand += sum;
     const label = t === "option" && ps.every(p => p.qty < 0) ? WL.t("Опционы проданные", "Short options") : TYPE_LABEL[t];
-    if(rows) body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.pl(ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</span></td>` +
+    if(rows) body += `<tr class="grp"><td class="l" colspan="8"><span class="cdot" style="--c:var(--cls-${WL.clsKey(t)})"></span>${label} <span class="muted">· ${ps.length} ${WL.pl(ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</span></td>` +
       `<td>${anyUsd ? fmt.money(sum, "USD", 0) : t === "future" ? unk(IN_CASH()) : dash(WL.t("нет текущих цен", "no current prices"))}</td></tr>` + rows;
   }
   if(hiddenRows) body += `<tr class="lockrow"><td class="l" colspan="9">${WL.t(`Ещё ${hiddenRows} ${WL.pl(hiddenRows, ["позиция", "позиции", "позиций"], ["position", "positions"])}
@@ -186,7 +186,11 @@ WL.renderChart = function(el, P, S){
     bench.push(bmap.get(dates[i]) / b0 * 100);
   }
   const startCover = stocks.filter(p => maps.get(p.symbol).has(dates[0])).length;
-  const W = 1000, H = 300, L = 54, R = 20, T = 14, B = 28;
+  /* Форма «акцент»: портфель — золотая линия с лёгкой заливкой, бенчмарк — серая линия для сравнения.
+     Значения на концах линий подписаны текстом, а не цветом серии; при наведении — перекрестие и точки на обеих линиях. */
+  // На телефоне рисуем в масштабе экрана: иначе viewBox шириной 1000 ужимает подписи осей до трёх пикселей.
+  const box = el.clientWidth - 36, narrow = box > 0 && box < 620;
+  const W = narrow ? Math.max(320, Math.round(box)) : 1000, H = narrow ? 240 : 300, L = narrow ? 40 : 54, R = narrow ? 50 : 70, T = 16, B = 28;
   const vals = port.concat(bench); let lo = Math.min(...vals), hi = Math.max(...vals);
   const pad = (hi - lo || 2) * .08; lo -= pad; hi += pad;
   const X = i => L + (W - L - R) * i / (dates.length - 1);
@@ -195,46 +199,76 @@ WL.renderChart = function(el, P, S){
   const step = niceStep((hi - lo) / 4);
   let grid = "";
   for(let t = Math.ceil((lo - 100) / step) * step; t <= hi - 100 + 1e-9; t += step){
-    const y = Y(100 + t).toFixed(1);
-    grid += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--line)" ${Math.abs(t) < 1e-9 ? 'stroke-width="1.5" stroke="var(--line-2)"' : ""}/>` +
+    const y = Y(100 + t).toFixed(1), zero = Math.abs(t) < 1e-9;
+    grid += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="${zero ? "var(--line-2)" : "var(--line)"}" stroke-width="1"/>` +
             `<text x="${L - 8}" y="${+y + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${fmt.pct(t, step < 1 ? 1 : 0)}</text>`;
   }
   let xl = "";
-  for(let j = 0; j < 5; j++){
-    const i = Math.round((dates.length - 1) * j / 4), [y, m, d] = dates[i].split("-");
-    xl += `<text x="${X(i)}" y="${H - 8}" text-anchor="${j === 0 ? "start" : j === 4 ? "end" : "middle"}" font-size="11" fill="var(--muted)">${spec && spec <= 91
+  const nt = narrow ? 3 : 5;
+  for(let j = 0; j < nt; j++){
+    const i = Math.round((dates.length - 1) * j / (nt - 1)), [y, m, d] = dates[i].split("-");
+    xl += `<text x="${X(i)}" y="${H - 8}" text-anchor="${j === 0 ? "start" : j === nt - 1 ? "end" : "middle"}" font-size="11" fill="var(--muted)">${spec && spec <= 91
       ? WL.t(`${d}.${m}`, `${+d} ${MON_EN[m - 1]}`) : WL.t(`${m}.${y}`, `${MON_EN[m - 1]} ${y}`)}</text>`;
   }
   const benchName = (WL.BENCH.find(b => b[0] === S.bench) || [S.bench, S.bench])[1];
-  const pLast = port[port.length - 1] - 100, bLast = bench[bench.length - 1] - 100;
+  const last = dates.length - 1, pLast = port[last] - 100, bLast = bench[last] - 100;
+  const area = `${path(port)}L${X(last).toFixed(1)},${H - B}L${X(0).toFixed(1)},${H - B}Z`;
+  // Подписи на концах: если линии сошлись ближе 16 px, подписи не разводим — значения остаются в легенде.
+  const yp = Y(port[last]), yb = Y(bench[last]), apart = Math.abs(yp - yb) >= 16;
+  const endLabel = (v, y, ink) => apart ? `<text x="${X(last) + 10}" y="${(y + 4).toFixed(1)}" font-size="12" font-weight="600" fill="${ink}">${fmt.pct(v)}</text>` : "";
+  const RING = "#0F1620";   // цвет карточки графика: кольцо отделяет точку от линии под ней
+  const dot = (cls, color, x, y, hidden) => `<circle data-r="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${color}" stroke="${RING}" stroke-width="2"${hidden ? ' visibility="hidden"' : ""}/>`;
   el.innerHTML = `
     <div class="legend">
       <span><span class="sw" style="background:var(--series-1)"></span>${WL.t("Акции в текущем составе", "Current stock holdings")} <b class="num" data-r="p">${fmt.pct(pLast)}</b></span>
       <span><span class="sw" style="background:var(--series-2)"></span>${esc(benchName)} <b class="num" data-r="b">${fmt.pct(bLast)}</b></span>
-      <span class="muted" data-r="d">${fmt.date(dates[0])} — ${fmt.date(dates[dates.length - 1])}</span>
+      <span class="muted" data-r="d">${fmt.date(dates[0])} — ${fmt.date(dates[last])}</span>
     </div>
-    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${WL.t("График акций против бенчмарка", "Chart of stocks vs benchmark")}">
+    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${WL.t(`График: акции ${fmt.pct(pLast)}, ${benchName} ${fmt.pct(bLast)} за период`, `Chart: stocks ${fmt.pct(pLast)}, ${benchName} ${fmt.pct(bLast)} over the period`)}">
+      <defs><linearGradient id="wlArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--series-1);stop-opacity:.18"/><stop offset="1" style="stop-color:var(--series-1);stop-opacity:0"/></linearGradient></defs>
       ${grid}${xl}
-      <path d="${path(bench)}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"/>
-      <path d="${path(port)}" fill="none" stroke="var(--series-1)" stroke-width="2.25" stroke-linejoin="round"/>
-      <line data-r="x" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
+      <path d="${area}" fill="url(#wlArea)" stroke="none"/>
+      <path d="${path(bench)}" fill="none" stroke="var(--series-2)" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="${path(port)}" fill="none" stroke="var(--series-1)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round"/>
+      ${endLabel(bLast, yb, "var(--ink-2)")}${endLabel(pLast, yp, "var(--ink)")}
+      <line data-r="x" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--line-2)" stroke-width="1" visibility="hidden"/>
+      ${dot("eb", "var(--series-2)", X(last), yb)}${dot("ep", "var(--series-1)", X(last), yp)}
+      ${dot("hb", "var(--series-2)", 0, 0, true)}${dot("hp", "var(--series-1)", 0, 0, true)}
       <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" data-r="hit"/>
     </svg>
     <p class="basis">${WL.t(`Разница за период: ${fmt.pct(pLast - bLast)} п.п. Веса — текущая стоимость позиций; в начале периода есть цены по ${startCover} из ${stocks.length} бумаг.
       Это не фактическая история счёта: сделки и ввод-вывод денег не учитываются. Цены CBOE без учёта дивидендов.`,
       `Difference over the period: ${fmt.pct(pLast - bLast).replace("%", "")} pp. Weighted by current position value; start-of-period prices are available for ${startCover} of ${stocks.length} ${stocks.length === 1 ? "security" : "securities"}.
       This is not the account’s actual history: trades, deposits and withdrawals are not included. CBOE prices, excluding dividends.`)}</p>`;
-  const svg = el.querySelector("svg"), hit = el.querySelector('[data-r="hit"]'), cross = el.querySelector('[data-r="x"]');
+  const svg = el.querySelector("svg"), hit = el.querySelector('[data-r="hit"]'), q = r => el.querySelector(`[data-r="${r}"]`);
+  const move = (c, x, y) => { c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1)); c.setAttribute("visibility", "visible"); };
+  let cur = last;
   const show = i => {
+    cur = i;
+    const cross = q("x");
     cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
-    el.querySelector('[data-r="p"]').textContent = fmt.pct(port[i] - 100);
-    el.querySelector('[data-r="b"]').textContent = fmt.pct(bench[i] - 100);
-    el.querySelector('[data-r="d"]').textContent = `${fmt.date(dates[0])} — ${fmt.date(dates[i])}`;
+    move(q("hp"), X(i), Y(port[i])); move(q("hb"), X(i), Y(bench[i]));
+    q("p").textContent = fmt.pct(port[i] - 100);
+    q("b").textContent = fmt.pct(bench[i] - 100);
+    q("d").textContent = `${fmt.date(dates[0])} — ${fmt.date(dates[i])}`;
+  };
+  const reset = () => {
+    cur = last;
+    ["x", "hp", "hb"].forEach(r => q(r).setAttribute("visibility", "hidden"));
+    q("p").textContent = fmt.pct(pLast); q("b").textContent = fmt.pct(bLast);
+    q("d").textContent = `${fmt.date(dates[0])} — ${fmt.date(dates[last])}`;
   };
   hit.addEventListener("mousemove", e => {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W;
-    show(Math.max(0, Math.min(dates.length - 1, Math.round((x - L) / (W - L - R) * (dates.length - 1)))));
+    show(Math.max(0, Math.min(last, Math.round((x - L) / (W - L - R) * last))));
   });
-  hit.addEventListener("mouseleave", () => show(dates.length - 1));
+  hit.addEventListener("mouseleave", reset);
+  // С клавиатуры — то же, что мышью: стрелки двигают перекрестие по датам.
+  svg.addEventListener("keydown", e => {
+    if(e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    show(Math.max(0, Math.min(last, cur + (e.key === "ArrowRight" ? 1 : -1))));
+  });
+  svg.addEventListener("blur", reset);
 };
 })();

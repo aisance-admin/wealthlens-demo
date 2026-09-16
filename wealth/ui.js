@@ -56,7 +56,11 @@ const unlocks = () => { try{ return JSON.parse(localStorage.getItem(UNLOCKS) || 
 const locked = () => PAYWALL && !S.demo && !(S.rid && unlocks()[S.rid]);
 const track = (name, params) => { if(WL.track) WL.track(name, params); };
 
+const hasPositions = () => !!(S.P && S.P.positions.length);
 async function openCheckout(source){
+  // Отчёт без единой позиции продавать нельзя: человек заплатит за пустую страницу.
+  if(!hasPositions()){ toast(t("В загруженных файлах не нашлось позиций — оплачивать пока нечего. Загрузите выписку о портфеле.",
+    "No positions were found in the uploaded files, so there is nothing to pay for yet. Upload a portfolio statement.")); return; }
   if(!S.rid){ S.rid = newRid(); save(); }
   track("InitiateCheckout", {value: PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
   const btns = [...document.querySelectorAll("[data-buy]")];
@@ -126,6 +130,16 @@ function renderPaywall(){
   document.body.classList.toggle("is-locked", lock);
   $("#printBtn").textContent = lock ? t(`Полный отчёт · ${PRICE.label}`, `Full report · ${PRICE.label}`) : t("Отчёт PDF", "PDF report");
   if(!lock){ el.hidden = true; el.innerHTML = ""; return; }
+  if(!hasPositions()){
+    el.hidden = false;
+    el.innerHTML = `<div class="card paywall empty"><div><div class="eyebrow">${t("Позиций не нашлось", "No positions found")}</div>
+      <h2>${t("В загруженных файлах нет таблицы позиций", "The uploaded files have no positions table")}</h2>
+      <p class="muted">${t("Для отчёта нужна выписка о портфеле — Portfolio, Holdings, Positions или Valuation. Выписки операций и движения денег позиций не содержат.",
+        "The report needs a portfolio statement — Portfolio, Holdings, Positions or Valuation. Transaction and cash-movement statements contain no positions.")}
+      ${SUPPORT ? t(`Не получается — напишите на ${supportLink()}.`, `Stuck? Email ${supportLink()}.`) : ""}</p></div>
+      <div class="pw-buy"><button class="btn primary" type="button" data-add-file>${t("Добавить выписку", "Add a statement")}</button></div></div>`;
+    return;
+  }
   const I = WL.insights(S.P), n = lvl => I.filter(x => x.level === lvl).length;
   const found = [n("high") && `${n("high")} ${WL.pl(n("high"), ["важный вывод", "важных вывода", "важных выводов"], ["important finding", "important findings"])}`,
                  n("watch") && `${n("watch")} ${WL.pl(n("watch"), ["пункт требует", "пункта требуют", "пунктов требуют"], ["item that needs", "items that need"])} ${t("внимания", "attention")}`]
@@ -222,7 +236,10 @@ async function addFiles(files){
       if(doc.unknown){
         // Таблицу, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
         if(doc.sheets){ pending.push({file: f, sheets: doc.sheets}); continue; }
-        toast(doc.scan
+        toast(doc.ops
+          ? t(`${f.name}: это выписка операций — в ней движение денег, а не позиции. Для отчёта нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
+              `${f.name}: this is a transaction statement — cash movements, not positions. The report needs a portfolio statement (Portfolio, Holdings, Valuation).`)
+          : doc.scan
           ? t(`${f.name}: это скан — в PDF нет текста. Нужна электронная выписка из интернет-банка или выгрузка CSV или Excel.`,
               `${f.name}: this is a scan with no text layer. Download an electronic statement from online banking, or a CSV or Excel export.`)
           : doc.pdf
@@ -231,8 +248,17 @@ async function addFiles(files){
           : t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
         continue;
       }
-      // Таблица из PDF другого банка: колонки угаданы по вёрстке, поэтому перед импортом их показываем.
-      if(doc.fromPdf){ pending.push({file: f, sheets: doc.sheets, pre: {sheetIndex: 0, head: doc.head, pdf: true}}); continue; }
+      // Таблица из PDF другого банка. Уверенный разбор — сразу в отчёт: ничего не упало в сверке, у позиций есть
+      // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — на проверку колонок.
+      if(doc.fromPdf){
+        const m = doc.head.map, totals = doc.checks.filter(c => !c.count);
+        const valued = doc.positions.filter(p => p.value != null).length;
+        const sure = doc.checks.every(c => c.ok) && doc.positions.length >= 2 && m.value != null && (m.name != null || m.ticker != null) &&
+          (totals.some(c => c.ok) || valued >= doc.positions.length * 0.8);
+        if(!sure){ pending.push({file: f, sheets: doc.sheets, pre: {sheetIndex: doc.sheetIndex || 0, head: doc.head, pdf: true}}); continue; }
+        doc.note = [doc.note, t("таблица найдена в PDF автоматически — если что-то не так, «Сопоставить колонки» ниже",
+          "table found in the PDF automatically — use “Map columns” below if something is off")].filter(Boolean).join(" · ");
+      }
       if(doc.from === "sheet" && doc.sheets)
         S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
       S.docs = S.docs.filter(d => !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
@@ -315,6 +341,19 @@ function renderHero(){
     return {d, ps, usd, day, stale: WL.days(d.asOf, P.today) > 45, live: ps.some(p => p.live)};
   });
   const total = byDoc.reduce((a, x) => a + x.usd, 0), day = byDoc.reduce((a, x) => a + x.day, 0);
+  // Доли — от суммы положительных позиций, как в «Структуре»: проданный опцион — обязательство, а не часть состава.
+  const usdOf = p => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy); return v != null && k != null ? v * k : null; };
+  const assets = P.positions.reduce((a, p) => a + Math.max(usdOf(p) || 0, 0), 0);
+  const pctLabel = v => v < 1 ? "<1%" : Math.round(v) + "%";
+  const MIX = [["stock", t("Акции", "Stocks")], ["fund", t("Фонды", "Funds")], ["bond", t("Облигации", "Bonds")],
+               ["note", t("Ноты", "Notes")], ["other", t("Прочее", "Other")], ["cash", t("Деньги", "Cash")]];
+  const bySum = new Map();
+  P.positions.forEach(p => { const v = usdOf(p); if(v > 0) bySum.set(WL.clsKey(p.type), (bySum.get(WL.clsKey(p.type)) || 0) + v); });
+  const mix = assets > 0 ? MIX.filter(([k]) => bySum.get(k) > 0).map(([k, label]) => ({k, label, share: bySum.get(k) / assets * 100})) : [];
+  // Один класс — не график: полоса из одного куска ничего не сообщает.
+  const mixHtml = mix.length < 2 ? "" : `<div class="mix" role="img" aria-label="${esc(t("Состав портфеля: ", "Portfolio mix: ") + mix.map(m => `${m.label} ${pctLabel(m.share)}`).join(", "))}">
+      <div class="mix-bar">${mix.map(m => `<i style="flex-grow:${m.share.toFixed(3)};--c:var(--cls-${m.k})" title="${esc(m.label)} · ${pctLabel(m.share)}"></i>`).join("")}</div>
+      <ul class="mix-legend" aria-hidden="true">${mix.map(m => `<li><span class="k" style="--c:var(--cls-${m.k})"></span>${esc(m.label)} <b>${pctLabel(m.share)}</b></li>`).join("")}</ul></div>`;
   const mixed = byDoc.some(x => x.stale) && byDoc.some(x => !x.stale);
   // Без связи с сервером данных суммы честно считаются по выпискам, а позиции в других
   // валютах не пересчитать — об этом надо сказать, а не молча выкинуть их из итога.
@@ -325,7 +364,8 @@ function renderHero(){
     <div class="sub">${mixed ? byDoc.map(x => `${esc(x.d.brokerShort)} — ${x.stale ? t("на ", "as of ") + fmt.date(x.d.asOf) : t("сейчас", "now")}`).join(" · ") : t("по текущим ценам", "at current prices")}</div>
     ${P.live && day ? `<div class="sub" style="margin-top:6px">${t("За день:", "Day change:")} <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">${t("по акциям, котировки CBOE", "on stocks, CBOE quotes")}</span></div>` : ""}
     ${!P.live ? `<div class="sub muted" style="margin-top:6px">${t("Загружаю текущие цены…", "Loading current prices…")}</div>` : ""}
-    ${warn.length ? `<div class="sub down" style="margin-top:6px">${esc(warn.join("; "))}.</div>` : ""}`;
+    ${warn.length ? `<div class="sub down" style="margin-top:6px">${esc(warn.join("; "))}.</div>` : ""}
+    ${mixHtml}`;
   $("#brokers").className = `brokers n${byDoc.length}`;
   $("#brokers").innerHTML = byDoc.map(x => {
     const bad = x.d.checks.filter(c => !c.ok).length;
@@ -337,7 +377,8 @@ function renderHero(){
       <div class="meta">${x.d.kind === "ledger" ? t(`журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`, `transaction log ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`)
         : t(`${x.d.from === "sheet" ? "выгрузка" : x.d.from === "demo" ? "данные" : "выписка"} на ${fmt.date(x.d.asOf)}`,
             `${x.d.from === "sheet" ? "export" : x.d.from === "demo" ? "data" : "statement"} as of ${fmt.date(x.d.asOf)}`)} ·
-        ${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</div></div>`;
+        ${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</div>
+      ${byDoc.length > 1 && assets > 0 && x.usd > 0 ? `<div class="share" title="${esc(t("доля в портфеле", "share of the portfolio"))}"><span class="trk"><i style="width:${Math.min(100, Math.max(x.usd / assets * 100, 1)).toFixed(1)}%"></i></span><b>${pctLabel(x.usd / assets * 100)}</b></div>` : ""}</div>`;
   }).join("");
   $("#printTitle").textContent = t(`${S.client} — портфель`, `${S.client} — portfolio`);
   $("#printSub").textContent = t(`Отчёт на ${fmt.date(TODAY)} · ${S.docs.map(d => `${d.brokerShort}: ${d.kind === "ledger" ? "журнал до" : "выписка на"} ${fmt.date(d.asOf)}`).join(" · ")}`,
@@ -353,14 +394,15 @@ function renderStructure(){
     .filter(x => x.usd != null);
   const assets = rows.reduce((a, x) => a + Math.max(x.usd, 0), 0);
   const group = key => { const m = new Map(); rows.forEach(x => m.set(key(x.p), (m.get(key(x.p)) || 0) + x.usd)); return [...m].sort((a, b) => b[1] - a[1]); };
+  // Один ряд — одна сущность, и цвет у типа тот же, что в сводке и в группах таблицы; брокеры и валюты — одним золотом.
   const TYPE = {stock: t("Акции", "Stocks"), fund: t("Фонды", "Funds"), bond: t("Облигации", "Bonds"), note: t("Структурные ноты", "Structured notes"), other: t("Прочее", "Other"),
     option: t("Опционы проданные", "Short options"), future: t("Фьючерсы", "Futures"), cash: t("Деньги", "Cash")};
-  const block = (title, items) => `<div class="card sblock"><div class="eyebrow">${title}</div>` + items.map(([name, v]) => {
-    const share = v > 0 && assets ? v / assets * 100 : null;
-    return `<div class="srow"><div class="sname">${esc(name)}</div><div class="sbar">${share != null ? `<i style="width:${Math.max(share, 0.6).toFixed(1)}%"></i>` : ""}</div>` +
+  const block = (title, items, color) => `<div class="card sblock"><div class="eyebrow">${title}</div>` + items.map(([key, v]) => {
+    const share = v > 0 && assets ? v / assets * 100 : null, name = color ? TYPE[key] || key : key;
+    return `<div class="srow"><div class="sname">${esc(name)}</div><div class="sbar">${share != null ? `<i style="width:${Math.max(share, 0.6).toFixed(1)}%${color ? `;--c:var(--cls-${WL.clsKey(key)})` : ""}"></i>` : ""}</div>` +
       `<div class="sval ${v < 0 ? "down" : ""}">${fmt.short(v)}</div><div class="spct">${share != null ? Math.round(share) + "%" : "—"}</div></div>`;
   }).join("") + `</div>`;
-  el.innerHTML = block(t("По брокерам", "By broker"), group(p => p.brokerShort)) + block(t("По типам", "By type"), group(p => TYPE[p.type] || p.type)) + block(t("По валютам", "By currency"), group(p => p.ccy));
+  el.innerHTML = block(t("По брокерам", "By broker"), group(p => p.brokerShort)) + block(t("По типам", "By type"), group(p => p.type), true) + block(t("По валютам", "By currency"), group(p => p.ccy));
   const stale = P.docs.filter(d => WL.days(d.asOf, P.today) > 45);
   $("#structAside").textContent = t(`в долларах${stale.length ? `; ${stale.map(d => `${d.brokerShort} — на ${fmt.date(d.asOf)}`).join(", ")}` : " по текущим ценам"}; фьючерсы учтены через деньги счёта`,
     `in USD${stale.length ? `; ${stale.map(d => `${d.brokerShort} as of ${fmt.date(d.asOf)}`).join(", ")}` : " at current prices"}; futures are counted through account cash`);
@@ -368,7 +410,7 @@ function renderStructure(){
 
 function renderInsights(){
   const I = WL.insights(S.P);
-  $("#insights").innerHTML = I.length ? I.map((x, i) => locked() && i > 0 ? lockedInsight(x) : `<article class="card insight">
+  $("#insights").innerHTML = I.length ? I.map((x, i) => locked() && i > 0 ? lockedInsight(x) : `<article class="card insight ${x.level}">
       <span class="lvl ${x.level}">${LEVEL[x.level]}</span><h3>${esc(x.title)}</h3>
       ${x.text ? `<p>${esc(x.text)}</p>` : ""}
       ${x.lines ? `<ul>${x.lines.map(l => `<li><b>${esc(l.text)}</b><span class="note ${l.level === "high" ? "high" : ""}">${esc(l.note || "")}</span></li>`).join("")}</ul>` : ""}
@@ -538,12 +580,15 @@ function openMapper(file, sheets, pre, onDone){
     const colLabel = c => { const h = String((rows[head.row] || [])[c] ?? "").replace(/\s+/g, " ").trim();
       return h ? h.slice(0, 30) : t(`Колонка ${c + 1}`, `Column ${c + 1}`); };
     const ready = (head.map.name != null || head.map.ticker != null) && (head.map.qty != null || head.map.value != null);
-    let preview = "", status;
+    let preview = "", status, count = 0;
     if(ready){
       try{
         const d = WL.sheetDoc(rows, head, file, sheets[si].ctx);
         const bad = d.checks.filter(c => !c.ok).length;
-        status = `${d.positions.length} ${WL.pl(d.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}` +
+        count = d.positions.length;
+        status = !count ? t("в этой таблице позиций не нашлось — выберите другую таблицу выше или другие колонки",
+                            "no positions in this table — pick another table above or other columns")
+          : `${d.positions.length} ${WL.pl(d.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}` +
           (d.checks.length > 1 ? (bad ? t(" · с итогом файла не сходится", " · does not match file totals") : t(" · сходится с итогом файла", " · matches file totals")) : "") +
           (d.note ? " · " + d.note : "");
         preview = d.positions.slice(0, 5).map(p => `<tr><td>${esc(p.name)}</td><td>${esc(TYPE_RU[p.type] || p.type)}</td>` +
@@ -566,7 +611,7 @@ function openMapper(file, sheets, pre, onDone){
           `<option value="${c}"${head.map[f] === c ? " selected" : ""}>${esc(colLabel(c))}</option>`).join("")}</select></label>`).join("")}</div>
       <div class="sec-h actions"><b>${t("Получится", "Result")}</b><span class="aside">${esc(status)}</span><span class="spacer"></span>
         <button class="btn small" data-x="auto" type="button">${t("Подобрать заново", "Auto-detect again")}</button>
-        <button class="btn primary small" data-x="ok" type="button"${ready ? "" : " disabled"}>${t("Импортировать", "Import")}</button></div>
+        <button class="btn primary small" data-x="ok" type="button"${ready && count ? "" : " disabled"}>${t("Импортировать", "Import")}</button></div>
       ${preview ? `<div class="table-wrap" style="margin-top:8px"><table class="prev"><tr><th>${t("Бумага", "Security")}</th><th>${t("Тип", "Type")}</th><th>${t("Тикер", "Ticker")}</th><th>${t("Кол-во", "Qty")}</th><th>${t("Стоимость", "Value")}</th><th>${t("Брокер", "Broker")}</th></tr>${preview}</table></div>` : ""}
     </div>`;
   }
@@ -593,6 +638,7 @@ function openMapper(file, sheets, pre, onDone){
     if(b.dataset.x === "close") return close();
     if(b.dataset.x === "ok"){
       const doc = WL.sheetDoc(sheets[si].rows, head, file, sheets[si].ctx);
+      if(!doc.positions.length){ toast(t("Позиций не нашлось — выберите другую таблицу или колонки", "No positions found — pick another table or columns")); return; }
       doc.sheetIndex = si; doc.head = {row: head.row, map: {...head.map}};
       doc.note = [doc.note, pre && pre.pdf ? t("таблица взята из PDF, колонки проверены", "table read from PDF, columns reviewed")
         : t("колонки размечены вручную", "columns mapped manually")].filter(Boolean).join(" · ");
@@ -664,6 +710,7 @@ if(EN){
 $("#file").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
 $("#langBtn").onclick = () => { location.href = langUrl(EN ? "ru" : "en"); };
 $("#addBtn").onclick = () => $("#file").click();
+document.addEventListener("click", e => { if(e.target.closest && e.target.closest("[data-add-file]")) $("#file").click(); });
 $("#printBtn").onclick = () => locked() ? openCheckout("pdf") : window.print();
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest("[data-buy]");

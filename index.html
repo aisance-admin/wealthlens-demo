@@ -16,7 +16,11 @@
   --line:rgba(226,236,255,.08); --line-2:rgba(226,236,255,.15); --accent:#F3BD58; --accent-soft:rgba(243,189,88,.12);
   --risk:#FF7B6C; --risk-soft:rgba(255,123,108,.13); --watch:#F3BD58; --watch-soft:rgba(243,189,88,.13);
   --good:#45D8B6; --good-soft:rgba(69,216,182,.12); --info:#82B5FF; --info-soft:rgba(130,181,255,.12);
-  --series-1:#EEF2F7; --series-2:#F3BD58;
+  --series-1:#F3BD58; --series-2:#7F8B9B;
+  /* Классы активов. Четыре цвета проверены скриптом dataviz (validate_palette, все пары, поверхность #0E141D):
+     золото/синий/маджента/зелёный различимы и при дальтонизме — рядом всегда легенда и зазор 2px.
+     Деньги и «прочее» — нейтральные серые, не категориальные цвета. */
+  --cls-stock:#c98500; --cls-fund:#3987e5; --cls-bond:#d55181; --cls-note:#008300; --cls-other:#A9B4C3; --cls-cash:#5B6675;
   --shadow:0 1px 2px rgba(0,0,0,.35), 0 18px 44px -26px rgba(0,0,0,.85);
   --radius:16px;
   --sans:"Onest", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
@@ -57,6 +61,8 @@ button{cursor:pointer}
 .btn.primary{background:linear-gradient(180deg, #FFD27A, #F3BD58); color:#1B1305; border-color:rgba(243,189,88,.7); font-weight:600;
   box-shadow:0 1px 0 rgba(255,255,255,.45) inset, 0 10px 26px -14px rgba(243,189,88,.6)}
 .btn.primary:hover{filter:brightness(1.06); border-color:#F3BD58}
+/* Недоступная кнопка должна выглядеть недоступной: иначе «Импортировать» жмут и думают, что приложение сломалось */
+.btn:disabled,.btn:disabled:hover{opacity:.4; cursor:not-allowed; filter:saturate(.5); box-shadow:none}
 .btn.small{padding:6px 11px; font-size:13px; border-radius:10px}
 
 /* Загрузка */
@@ -85,7 +91,20 @@ button{cursor:pointer}
 .brokers{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px}
 .brokers.n4{grid-template-columns:repeat(auto-fit,minmax(max(230px,40%),1fr))}
 .card{background:linear-gradient(180deg, #111926, #0D131B); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow)}
-.broker{padding:14px 16px}
+.broker{padding:14px 16px; display:flex; flex-direction:column}
+/* Состав портфеля в сводке: одна полоса по классам активов + легенда в том же порядке */
+.mix{margin-top:auto; padding-top:18px}
+.mix-bar{display:flex; gap:2px; height:10px; border-radius:5px; overflow:hidden}
+.mix-bar i{flex:1 1 0; min-width:3px; background:var(--c)}
+.mix-legend{display:flex; flex-wrap:wrap; gap:6px 14px; margin:10px 0 0; padding:0; list-style:none; font-size:12.5px; color:var(--ink-2)}
+.mix-legend li{display:inline-flex; align-items:center; gap:6px; white-space:nowrap}
+.mix-legend .k{width:8px; height:8px; border-radius:2px; background:var(--c)}
+.mix-legend b{color:var(--ink); font-weight:600}
+/* Доля брокера в портфеле — тонкая дорожка внизу карточки */
+.broker .share{margin-top:auto; padding-top:12px; display:flex; align-items:center; gap:10px; font-size:12px; color:var(--muted)}
+.broker .share .trk{flex:1; height:4px; border-radius:2px; background:rgba(226,236,255,.07); overflow:hidden}
+.broker .share .trk i{display:block; height:100%; border-radius:2px; background:var(--accent)}
+.broker .share b{font-weight:600; color:var(--ink-2); font-variant-numeric:tabular-nums}
 .broker .name{font-weight:600; display:flex; align-items:center; gap:8px; flex-wrap:wrap}
 .broker .v{font-size:22px; font-weight:600; margin:8px 0 2px}
 .broker .meta{font-size:12.5px; color:var(--muted)}
@@ -103,7 +122,11 @@ section{margin:30px 0}
 
 /* Выводы */
 .insights{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px}
-.insight{padding:16px 18px 14px}
+.insight{padding:16px 18px 14px; position:relative; overflow:hidden}
+/* Уровень вывода — ещё и мягким свечением из угла карточки, а не только плашкой */
+.insight::before{content:""; position:absolute; inset:0; pointer-events:none; background:radial-gradient(110% 85% at 0% 0%, var(--tint, transparent), transparent 62%)}
+.insight > *{position:relative}
+.insight.high{--tint:rgba(255,123,108,.11)} .insight.watch{--tint:rgba(243,189,88,.09)} .insight.info{--tint:rgba(130,181,255,.07)}
 .lvl{display:inline-block; font:600 10px/1 var(--mono); letter-spacing:.09em; text-transform:uppercase; padding:5px 7px 4px; border-radius:6px}
 .lvl.high{background:var(--risk-soft); color:var(--risk)}
 .lvl.watch{background:var(--watch-soft); color:var(--watch)}
@@ -158,12 +181,16 @@ table.pos{width:100%; border-collapse:collapse; font-size:13px}
 .pos th:first-child,.pos td:first-child{position:sticky; left:0; z-index:1; background:var(--surface)}
 .pos th:first-child,.pos tr.foot td:first-child,.pos tr.row:hover td:first-child{background:var(--surface-2)}
 .pos tr.grp td:first-child{background:var(--ground)}
+/* Фон таблицы сплошной: закреплённая первая колонка иначе выделяется полосой на градиенте карточки */
+#positions.card{background:var(--surface)}
+.cdot{display:inline-block; width:8px; height:8px; border-radius:2px; background:var(--c); margin-right:8px; vertical-align:1px}
 
 /* График */
 .chart-card{padding:16px 18px}
 .legend{display:flex; gap:18px; font-size:13px; color:var(--ink-2); align-items:center; flex-wrap:wrap; margin-bottom:8px}
 .sw{display:inline-block; width:16px; height:3px; border-radius:2px; vertical-align:middle; margin-right:6px}
 svg.chart{display:block; width:100%; height:auto}
+svg.chart:focus-visible{outline:2px solid var(--accent); outline-offset:4px; border-radius:8px}
 select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); background:var(--surface)}
 
 /* Документы и недостающее */
@@ -206,7 +233,8 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .lockblock{padding:18px; display:grid; gap:10px; justify-items:start}
 .lockblock p{margin:0; color:var(--ink-2)}
 .skel-chart{width:100%; height:150px; border-radius:10px; background:repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 38px), var(--surface-2)}
-.demobar{display:flex; gap:16px; align-items:center; justify-content:space-between; padding:12px 16px; margin:18px 0 0; border-color:var(--info)}
+.demobar{display:flex; gap:16px; align-items:center; justify-content:space-between; padding:12px 16px; margin:18px 0 0;
+  border-color:rgba(243,189,88,.3); background:linear-gradient(90deg, rgba(243,189,88,.09), rgba(243,189,88,0) 55%), linear-gradient(180deg, #111926, #0D131B)}
 .demo-link{font-size:13.5px; margin:16px auto 0}
 .where{margin:18px auto 0; max-width:480px; text-align:left; font-size:13px; color:var(--ink-2)}
 .where summary{cursor:pointer; color:var(--muted); text-align:center; list-style:none}
@@ -263,8 +291,8 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 .sblock{padding:14px 16px}
 .srow{display:grid; grid-template-columns:minmax(84px,1.6fr) minmax(32px,1.4fr) auto 36px; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:13px}
 .sblock .eyebrow + .srow{border-top:0; margin-top:6px}
-.sbar{height:8px; background:var(--surface-2); border-radius:4px; overflow:hidden}
-.sbar i{display:block; height:100%; background:var(--series-1); border-radius:4px}
+.sbar{height:6px; background:rgba(226,236,255,.07); border-radius:3px; overflow:hidden}
+.sbar i{display:block; height:100%; background:var(--c, var(--accent)); border-radius:3px}
 .sval{font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
 .spct{color:var(--muted); text-align:right; font-variant-numeric:tabular-nums}
 
@@ -276,7 +304,7 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 .q-v{font-size:17px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums}
 .q-c{font-size:12.5px; font-variant-numeric:tabular-nums; min-height:18px}
 .tape{margin-top:12px; border-top:1px solid var(--line); padding-top:6px}
-.tape iframe{display:block; width:100%; height:46px; border:0}
+.tape iframe{display:block; width:100%; height:46px; border:0; color-scheme:light}   /* схема как у документа TradingView — иначе браузер красит рамку непрозрачным белым на тёмной странице */
 .mkt .basis a,.newscol .basis a{color:var(--ink-2)}
 .news{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px}
 .newscol{padding:12px 16px 10px}
@@ -350,7 +378,8 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
   :root,:root:not([data-theme="light"]),:root[data-theme="dark"]{
     --ground:#FFFFFF; --surface:#FFFFFF; --surface-2:#F5F6F8; --ink:#0E1A2B; --ink-2:#35455B; --muted:#5D6A7B;
     --line:#DADFE6; --line-2:#C5CDD8; --risk:#B42318; --risk-soft:#FBEAE8; --watch:#955800; --watch-soft:#FCF0DA;
-    --good:#1B7650; --good-soft:#E4F2EB; --info:#2D5985; --info-soft:#E6EEF7; --series-1:#0E1A2B; --series-2:#B0892A;
+    --good:#1B7650; --good-soft:#E4F2EB; --info:#2D5985; --info-soft:#E6EEF7; --series-1:#8A6B1E; --series-2:#8B95A3;
+    --cls-stock:#eda100; --cls-fund:#2a78d6; --cls-bond:#e87ba4; --cls-note:#008300; --cls-other:#C5CDD8; --cls-cash:#8B95A3;
     --accent:#8A6B1E; --accent-soft:#F4EDDA; color-scheme:light;
   }
   .bar,.no-print,.drawer,.scrim,.toast{display:none !important}
@@ -384,7 +413,10 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
   .struct{grid-template-columns:repeat(3,minmax(0,1fr))}
   section:has(#structure){break-inside:avoid}
   .nlist li{break-inside:avoid}
-  .sbar,.sbar i,.pill,.lvl,.q,.tick{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  .sbar,.sbar i,.pill,.lvl,.q,.tick,.mix-bar i,.mix-legend .k,.broker .share .trk i,.cdot{-webkit-print-color-adjust:exact; print-color-adjust:exact}
+  .insight::before{display:none}
+  .demobar{background:#fff}
+  .broker .share .trk,.sbar{background:#EDF0F4}
   /* Заголовок раздела не остаётся внизу страницы без содержимого. */
   .sec-h{break-after:avoid}
   section:has(#chart),section:has(#docs),#printPeriods,#printNotes{break-inside:avoid}

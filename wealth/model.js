@@ -199,6 +199,9 @@ WL.fetchHistory = async function(P, symbols){
 // Бумаги, которые ведут себя как акции: есть тикер и биржевая цена. Фонды сюда входят,
 // облигации и структурные ноты — нет, у них своей котировки у нас нет.
 WL.eq = p => p.type === "stock" || p.type === "fund";
+// Цвет класса актива один на весь отчёт (сводка, «Структура», группы таблицы): --cls-<ключ> в wealth.html.
+// Опционы, фьючерсы и незнакомые классы делят нейтральный «прочее».
+WL.clsKey = type => ["stock", "fund", "bond", "note", "cash"].includes(type) ? type : "other";
 WL.usd = (P, ccy) => ccy === "USD" ? 1 : (P.live && P.live.fx && P.live.fx[ccy] ? 1 / P.live.fx[ccy] : null);
 WL.current = (P, p) => {
   if(WL.eq(p) && p.live) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};

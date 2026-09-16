@@ -269,7 +269,7 @@ function sameTable(a, b){
 // Заголовок раздела над шапкой («Positions», «Акции») — короткая строка без чисел.
 const isTitle = cells => cells.length <= 2 && !cells.some(isNumCell) && cells.map(c => c.s).join(" ").length <= 48;
 // Раздел выписки задаёт класс бумаг под ним: «Bonds», «Облигации», «Cash».
-const SECTION = /^(equities|equity|shares|stocks|bonds|fixed income|cash|cash accounts|accounts|liquidity|funds|investment funds|structured products|options|futures|акции|облигации|фонды|денежные средства|деньги|aktien|anleihen|obligationen|liquidität|konten|fonds|actions|obligations|liquidités|comptes)(\s*\(.*\))?:?$/i;
+const SECTION = /^(equities|equity|shares|stocks|bonds|fixed income|cash|cash accounts|accounts|liquidity|liquid assets|cash (and|&) (cash )?equivalents?|money market|funds|investment funds|hedge funds|structured products|alternative investments|precious metals|private equity|options|futures|акции|облигации|фонды|денежные средства|деньги|aktien|anleihen|obligationen|liquidität|konten|fonds|actions|obligations|liquidités|comptes)(\s*\(.*\))?:?$/i;
 
 function bandsOf(rows){
   const data = rows.filter(cells => cells.length >= 3 && cells.some(isNumCell));
@@ -326,6 +326,9 @@ function alignBlocks(blocks){
     });
   });
   if(!data) return null;
+  const keys = fields.filter(Boolean);
+  const dated = keys.includes("date") || names.some(n => /(^|\s)(date|datum|дата|valuta|booking)(\s|$)/i.test(n));
+  const page = (blocks[0].rows[blocks[0].head] || {}).page || 1;
   const rows = out.map(r => Array.from({length: names.length}, (_, i) => r[i] || ""));
   rows[head] = names.map((n, i) => n || rows[head][i]);
   // Класс актива по разделам — отдельной колонкой, если своей в выписке нет.
@@ -341,12 +344,59 @@ function alignBlocks(blocks){
     if(any) rows.forEach((r, i) => r.push(i === head ? "Asset class" : col[i]));
   }
   const name = [...new Set(titles.filter(Boolean))].join(" · ");
-  return {name: name.length > 48 ? name.slice(0, 47) + "…" : name, rows, head};
+  // ops — движение денег (дата сделки, нет количества и цены): позиций в такой таблице нет.
+  return {name: name.length > 48 ? name.slice(0, 47) + "…" : name, rows, head, page, data,
+          positional: positional(keys), ops: dated && !keys.includes("qty") && !keys.includes("price")};
+}
+/* Шапка в две-три строки («MARKET» над «VALUE USD», «PORTF.» над «WEIGHT») по строкам узнаётся плохо и режет
+   выписку на десятки ложных таблиц. Соседние строки без чисел, стоящие вплотную, склеиваем по колонкам — но только
+   если так узнаётся больше полей, чем в лучшей строке по отдельности. Заголовок раздела у левого края
+   («CASH AND CASH EQUIVALENT») и длинный текст в шапку не берём. */
+function mergeCells(part){
+  const all = part.flatMap((P, li) => P.cells.map(c => ({...c, li}))).sort((a, b) => a.x - b.x), cols = [];
+  for(const c of all){
+    const k = cols[cols.length - 1];
+    if(k && c.x < k.x2 + 1.5){ k.items.push(c); k.x2 = Math.max(k.x2, c.x2); }
+    else cols.push({x: c.x, x2: c.x2, items: [c]});
+  }
+  return cols.map(k => ({s: k.items.sort((a, b) => a.li - b.li || a.x - b.x).map(c => c.s).join(" "), x: k.x, x2: k.x2}));
+}
+function mergeHeaderLines(lines){
+  const out = [], textOnly = L => L.cells.length > 0 && !L.cells.some(isNumCell);
+  const keyCount = cells => (headKeyOf(cells) || []).length;
+  for(let i = 0; i < lines.length; i++){
+    const win = [lines[i]];
+    if(textOnly(lines[i])){
+      for(let j = i + 1; j < lines.length && win.length < 3; j++){
+        const M = lines[j], prev = win[win.length - 1];
+        if(M.page !== prev.page || !textOnly(M) || M.y - prev.y > Math.max(prev.h, M.h) * 1.9) break;
+        win.push(M);
+      }
+    }
+    let used = 1, merged = null;
+    for(let n = win.length; n >= 2 && !merged; n--){
+      const part = win.slice(0, n), minX = Math.min(...part.flatMap(P => P.cells.map(c => c.x)));
+      if(part.some(P => P.cells.length === 1 && P.cells[0].x <= minX + 4)) continue;
+      const cells = mergeCells(part);
+      if(cells.some(c => c.s.length > 40)) continue;
+      const k = headKeyOf(cells) || [];
+      if(k.length > Math.max(...part.map(P => keyCount(P.cells))) && (positional(k) || k.length >= 3)){
+        merged = {cells, page: part[0].page, y: part[n - 1].y, h: part[n - 1].h}; used = n;
+      }
+    }
+    out.push(merged || lines[i]);
+    i += used - 1;
+  }
+  return out;
 }
 function pdfTables(pages){
-  const rows = pages.flat().map(lineCells);
-  const parts = [];
-  let cur = {key: null, blocks: [{head: -1, rows: []}]};
+  const lines = mergeHeaderLines(pages.flat().map(L => ({cells: lineCells(L), page: L.page, y: L.y,
+    h: Math.max(8, ...L.items.map(it => it.h || 0))})));
+  const rows = lines.map(L => Object.assign(L.cells, {page: L.page}));
+  // Таблица с той же шапкой дальше по документу продолжает прежнюю, даже если между ними была другая:
+  // у выписки банка позиции идут по страницам вперемешку со сводками.
+  const parts = [{key: null, blocks: [{head: -1, rows: []}]}];
+  let cur = parts[0];
   rows.forEach(cells => {
     const k = headKeyOf(cells);
     const last = cur.blocks[cur.blocks.length - 1];
@@ -355,10 +405,10 @@ function pdfTables(pages){
     const lead = [];
     if(last.rows.length > last.head + 1 && isTitle(last.rows[last.rows.length - 1])) lead.push(last.rows.pop());
     const bl = {head: lead.length, rows: [...lead, cells]};
-    if(cur.key && sameTable(cur.key, k)) cur.blocks.push(bl);
-    else { parts.push(cur); cur = {key: k, blocks: [bl]}; }
+    const same = parts.find(p => p.key && sameTable(p.key, k));
+    if(same){ same.blocks.push(bl); cur = same; }
+    else { cur = {key: k, blocks: [bl]}; parts.push(cur); }
   });
-  parts.push(cur);
   const headed = parts.some(p => p.key), tables = [];
   parts.forEach(p => {
     if(p.key){ const t = alignBlocks(p.blocks); if(t) tables.push(t); return; }
@@ -368,7 +418,8 @@ function pdfTables(pages){
     const first = src.findIndex(cells => cells.length >= 3 && cells.some(isNumCell));
     src = src.slice(Math.max(0, first - 3));
     const band = bandsOf(src);
-    if(band && band.data >= 2 && band.cols.length >= 3) tables.push({name: "", rows: src.map(cells => place(cells, band.cols))});
+    if(band && band.data >= 2 && band.cols.length >= 3)
+      tables.push({name: "", rows: src.map(cells => place(cells, band.cols)), page: (src[0] || {}).page || 1, data: band.data, positional: false, ops: false});
   });
   return tables;
 }
@@ -422,8 +473,16 @@ WL.parseFile = async function(file){
   // Таблицу разбирает sheet.js: у выгрузки колонки уже размечены, и гадать не нужно.
   if(!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return WL.parseSheet(file);
   const pages = await pdfLines(await file.arrayBuffer());
-  const head = pages.slice(0, 2).flat().map(l => l.text).join("\n");
-  if(/Schwab One|Charles Schwab/.test(head)) return parseSchwab(pages, file.name);
+  const head = pages.slice(0, 3).flat().map(l => l.text).join("\n");
+  // Schwab выпускает выписки в нескольких шаблонах; имя файла «Brokerage Statement_2026-08-31_241.PDF» — их.
+  // Разборщик знает один шаблон: если позиций он не нашёл, отдаём файл общему разбору таблиц, а не пустой отчёт.
+  const schwabName = /^Brokerage Statement_\d{4}-\d{2}-\d{2}_\d+\.pdf$/i.test(file.name);
+  let schwabTried = false;
+  if(/Schwab One|Charles Schwab/i.test(head) || (schwabName && /schwab/i.test(head))){
+    const doc = parseSchwab(pages, file.name);
+    if(doc.positions.length) return doc;
+    schwabTried = true;
+  }
   if(/Swissquote Bank/.test(head)) return parseSwissquote(pages, file.name);
   // Скан — это картинка без текста: читать в нём нечего, и сказать надо именно это.
   if(!pages.some(lines => lines.length)) return {unknown: true, fileName: file.name, pdf: true, scan: true};
@@ -434,7 +493,10 @@ WL.parseFile = async function(file){
   const cut = p1.findIndex(L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); });
   const top = p1.slice(0, cut < 0 ? 12 : Math.min(cut, 12)).map(l => l.text);
   const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top)};
+  if(schwabTried && !ctx.broker) ctx.broker = "Charles Schwab";
   const doc = tables.length && WL.parseRows ? WL.parseRows(tables, file, ctx) : null;
+  // Только движение денег (даты, суммы, без количества и цен) — это выписка операций, позиций в ней нет.
+  if(doc && doc.unknown && tables.every(tb => tb.ops)) return {unknown: true, fileName: file.name, pdf: true, ops: true};
   // Узнанной шапки нет: разметку предлагаем, только если в файле правда есть таблица с числами —
   // иначе договор или письмо откроются «таблицей» из дат, номеров пунктов и страниц.
   const tabular = sh => sh.rows.filter(r => r.filter(c => c && NUMLIKE.test(c)).length >= 2 && r.some(c => c && !NUMLIKE.test(c))).length >= 3;
