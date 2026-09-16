@@ -816,13 +816,16 @@ function announce(text){
   requestAnimationFrame(() => { el.textContent = text; });
 }
 function setBusy(on){ document.body.classList.toggle("uploading", on); }
-let flash = null;
-function flashDoc(fileName){ flash = {fileName, at: Date.now()}; keepFlash(); }
+const flashes = new Map();   // имя файла → когда карточка начала светиться; выписок в пачке бывает несколько
+function flashDoc(fileName){ flashes.set(fileName, Date.now()); keepFlash(); }
 function keepFlash(){
-  const left = flash ? 1600 - (Date.now() - flash.at) : 0;
-  if(left <= 0) return;
-  const card = [...document.querySelectorAll("#brokers .broker")].find(c => c.dataset.file === flash.fileName);
-  if(card){ card.style.animationDelay = `${left - 1600}ms`; card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); }
+  const cards = [...document.querySelectorAll("#brokers .broker")];
+  flashes.forEach((at, name) => {
+    const gone = Date.now() - at;
+    if(gone >= 1600) return flashes.delete(name);
+    const card = cards.find(c => c.dataset.file === name);
+    if(card){ card.style.animationDelay = `${-gone}ms`; card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); }
+  });
 }
 function cancelQueue(){
   Q.gen++; Q.running = false; Q.aiOk = false; Q.hidden = false; setBusy(false);
