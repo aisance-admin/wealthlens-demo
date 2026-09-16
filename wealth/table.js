@@ -153,6 +153,12 @@ const niceStep = raw => { const p = Math.pow(10, Math.floor(Math.log10(raw || 1)
 WL.renderChart = function(el, P, S){
   const stocks = P.positions.filter(p => WL.eq(p) && (P.history[p.symbol] || []).length);
   const bh = P.history[S.bench] || [];
+  // История грузится только по американским тикерам (см. loadHistory): без них ждать нечего.
+  if(!P.positions.some(p => WL.eq(p) && p.symbol && p.ccy === "USD")){
+    el.innerHTML = `<p class="muted">${WL.t("Для сравнения нужны акции или фонды с американским тикером — в выписках таких нет.",
+                                            "The comparison needs stocks or funds with a US ticker — the statements have none.")}</p>`;
+    return;
+  }
   if(!stocks.length || bh.length < 2){
     const limited = Object.values(P.historyStatus || {}).includes("limited");
     el.innerHTML = `<p class="muted">${limited ? WL.t("CBOE временно ограничил частоту запросов. История цен подгрузится автоматически, повтор через полторы минуты.",

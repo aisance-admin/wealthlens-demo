@@ -28,6 +28,7 @@ const DEFAULT_NAMES = {"Мой портфель": "My portfolio", "Клиент"
 const localName = name => EN ? DEFAULT_NAMES[name] || name
   : Object.keys(DEFAULT_NAMES).find(k => DEFAULT_NAMES[k] === name) || name;
 const SUPPORT = String(window.WL_SUPPORT_EMAIL || "");
+const supportLink = () => SUPPORT ? `<a href="mailto:${esc(SUPPORT)}">${esc(SUPPORT)}</a>` : "";
 /* Переключатель языка: тот же адрес с ?lang=…, остальные параметры (demo и др.) сохраняются.
    Внутренние переходы на английском несут ?lang=en, чтобы язык не терялся без хранилища браузера. */
 const langUrl = l => { const u = new URL(location.href); u.searchParams.set("lang", l); return u.pathname + u.search + u.hash; };
@@ -75,6 +76,7 @@ async function openCheckout(source){
   toast(r && r.error === "payments_not_configured"
     ? (SUPPORT ? t(`Оплата подключается. Напишите на ${SUPPORT} — откроем отчёт вручную.`, `Payments are being set up. Email ${SUPPORT} and we will unlock the report manually.`)
                : t("Оплата скоро заработает. Попробуйте, пожалуйста, чуть позже.", "Payments are coming soon. Please try again a little later."))
+    : SUPPORT ? t(`Не удалось открыть оплату. Попробуйте ещё раз или напишите на ${SUPPORT}.`, `Could not open checkout. Try again or email ${SUPPORT}.`)
     : t("Не удалось открыть оплату. Попробуйте ещё раз.", "Could not open checkout. Please try again."));
 }
 
@@ -113,7 +115,8 @@ async function handlePaymentReturn(){
     toast(t("Оплата прошла — полный отчёт открыт", "Payment received — full report unlocked"));
   } else {
     toast(r && r.reason === "not paid" ? t("Платёж ещё не подтверждён. Обновите страницу через минуту.", "Payment is not confirmed yet. Refresh the page in a minute.")
-                                       : t("Не удалось подтвердить оплату. Напишите нам — разберёмся.", "Could not confirm the payment. Contact us and we will look into it."));
+                                       : (SUPPORT ? t(`Не удалось подтвердить оплату. Напишите на ${SUPPORT} — разберёмся.`, `Could not confirm the payment. Email ${SUPPORT} and we will look into it.`)
+                                               : t("Не удалось подтвердить оплату. Напишите нам — разберёмся.", "Could not confirm the payment. Contact us and we will look into it.")));
   }
 }
 
@@ -146,7 +149,8 @@ function renderPaywall(){
       <div class="muted pw-note">${t("Оплата через Stripe. Выписки не загружаются на сервер — отчёт собирается в вашем браузере.",
         "Payment via Stripe. Statements are not uploaded to a server — the report is built in your browser.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
-        `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}</div>
+        `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}
+      ${SUPPORT ? `<div class="muted pw-note">${t("Вопрос по оплате:", "Payment question:")} ${supportLink()}</div>` : ""}</div>
   </div>`;
 }
 
@@ -166,26 +170,29 @@ const lockedInsight = x => `<article class="card insight lockcard"><span class="
 function renderUpload(){
   $("#bar").hidden = true;
   $("#app").innerHTML = `<div class="drop" id="drop">
+    <div class="drop-mark" aria-hidden="true"></div>
     <div class="eyebrow">${ON_SITE ? `<a class="home" href="${t("/", "/en/")}">WealthLens</a>` : "WealthLens"} · ${INVESTOR ? t("сводный отчёт", "consolidated report") : t("портфель клиента", "client portfolio")}</div>
     <h1>${INVESTOR ? t("Загрузите выписки брокеров", "Upload your broker statements") : t("Загрузите выписки клиента", "Upload client statements")}</h1>
-    <p>${t("Можно сразу несколько файлов. PDF читается у Charles Schwab и Swissquote; выгрузка CSV или Excel — у любого брокера, колонки распознаются сами.",
-      "You can add several files at once. PDF statements are supported for Charles Schwab and Swissquote; CSV or Excel exports work for any broker, and columns are detected automatically.")}</p>
-    <button class="btn primary" id="pick" type="button">${t("Выбрать файлы", "Choose files")}</button>
-    <button class="btn small" id="tplBtn" type="button" style="margin-left:8px">${t("Шаблон CSV", "CSV template")}</button>
+    <p>${t("Можно сразу несколько файлов. PDF Charles Schwab и Swissquote читаются сами; PDF, CSV и Excel других банков — с проверкой колонок перед импортом.",
+      "You can add several files at once. Charles Schwab and Swissquote PDFs are read automatically; PDFs, CSV and Excel files from other banks are imported after a quick column check.")}</p>
+    <div class="drop-actions"><button class="btn primary" id="pick" type="button">${t("Выбрать файлы", "Choose files")}</button>
+    <button class="btn small" id="tplBtn" type="button">${t("Шаблон CSV", "CSV template")}</button></div>
     <p class="demo-link">${t(`<a href="?demo=1">Посмотреть пример отчёта</a> — вымышленный портфель у четырёх брокеров`,
       `<a href="?demo=1&amp;lang=en">See a sample report</a> — a fictional portfolio across four brokers`)}</p>
     <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере и никуда не отправляются: наружу уходят только тикеры и названия компаний — для котировок и новостей.",
       "Or drop files here. Statements are processed in this browser and are not sent anywhere: only tickers and company names leave it, to fetch quotes and news.")}</p>
+    ${SUPPORT ? `<p class="hint">${t(`Выписка не читается или нужен другой банк — напишите на ${supportLink()}. Сами выписки присылать не нужно, достаточно названия банка.`,
+      `Statement not read, or need another bank? Email ${supportLink()}. No need to send the statement itself — the bank's name is enough.`)}</p>` : ""}
     <p class="hint lang-link"><a href="${esc(langUrl(EN ? "ru" : "en"))}" hreflang="${EN ? "ru" : "en"}" lang="${EN ? "ru" : "en"}">${EN ? "Русский" : "English"}</a></p>
     <details class="where"><summary>${t("Где взять выписку", "Where to get a statement")}</summary><ul>${t(`
       <li><b>Interactive Brokers</b> — Portal → Performance &amp; Reports → Statements → Activity, формат CSV.</li>
       <li><b>Charles Schwab</b> — Accounts → Statements &amp; Tax Forms → месячная выписка в PDF.</li>
       <li><b>Swissquote</b> — раздел документов счёта → выписка о портфеле в PDF.</li>
-      <li><b>Другие банки</b> — в интернет-банке найдите позиции (Positions, Holdings, Portfolio) и экспорт в CSV или Excel.</li>`, `
+      <li><b>Другие банки</b> — выписка о портфеле в PDF или экспорт позиций (Positions, Holdings, Portfolio) в CSV или Excel. Сканы не читаются: в PDF должен выделяться текст.</li>`, `
       <li><b>Interactive Brokers</b> — Portal → Performance &amp; Reports → Statements → Activity, CSV format.</li>
       <li><b>Charles Schwab</b> — Accounts → Statements &amp; Tax Forms → monthly statement (PDF).</li>
       <li><b>Swissquote</b> — account documents → portfolio statement (PDF).</li>
-      <li><b>Other banks</b> — in online banking, open the positions page (Positions, Holdings or Portfolio) and export it to CSV or Excel.</li>`)}
+      <li><b>Other banks</b> — a portfolio statement in PDF, or a positions export (Positions, Holdings or Portfolio) to CSV or Excel. Scans cannot be read: the PDF text must be selectable.</li>`)}
     </ul></details>
     <div class="progress" id="progress" aria-live="polite"></div></div>
     ${PAYWALL ? `<p class="drop-foot muted">${t(`Итог по счетам и первый вывод — бесплатно · полный отчёт ${PRICE.label} · оплата через Stripe`,
@@ -215,16 +222,24 @@ async function addFiles(files){
       if(doc.unknown){
         // Таблицу, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
         if(doc.sheets){ pending.push({file: f, sheets: doc.sheets}); continue; }
-        toast(t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
+        toast(doc.scan
+          ? t(`${f.name}: это скан — в PDF нет текста. Нужна электронная выписка из интернет-банка или выгрузка CSV или Excel.`,
+              `${f.name}: this is a scan with no text layer. Download an electronic statement from online banking, or a CSV or Excel export.`)
+          : doc.pdf
+          ? t(`${f.name}: в PDF не нашлось таблицы позиций. Если это выписка, загрузите выгрузку позиций в CSV или Excel.`,
+              `${f.name}: no positions table found in this PDF. If it is a statement, upload a CSV or Excel export of positions.`)
+          : t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
         continue;
       }
+      // Таблица из PDF другого банка: колонки угаданы по вёрстке, поэтому перед импортом их показываем.
+      if(doc.fromPdf){ pending.push({file: f, sheets: doc.sheets, pre: {sheetIndex: 0, head: doc.head, pdf: true}}); continue; }
       if(doc.from === "sheet" && doc.sheets)
         S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
       S.docs = S.docs.filter(d => !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
       S.docs.push(doc);
     }catch(e){ toast(t(`${f.name}: не удалось прочитать файл`, `${f.name}: could not read the file`)); }
   }
-  const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, null, askMapping); };
+  const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, p.pre || null, askMapping); };
   if(!S.docs.length){ renderUpload(); askMapping(); return; }
   if(!S.rid) S.rid = newRid();
   track("Lead", {content_name: "statements_uploaded", documents: S.docs.length});
@@ -278,7 +293,11 @@ function renderApp(){
         <div class="card chart-card" id="chart"></div></section>
       <section id="market"></section>
       <section><div class="sec-h"><h2>${t("Документы и чего не хватает", "Documents and gaps")}</h2></div><div class="docs"><div class="card doc" id="docs"></div><div class="card miss" id="missing"></div></div></section>
-      <section class="print-only" id="printNotes"></section>`;
+      <section class="print-only" id="printNotes"></section>
+      <footer class="app-foot no-print">${[`WealthLens`, SUPPORT && `${t("Поддержка", "Support")}: ${supportLink()}`,
+        ON_SITE && `<a href="${t("/legal/terms/", "/en/legal/terms/")}">${t("Условия", "Terms")}</a>`,
+        ON_SITE && `<a href="${t("/legal/privacy/", "/en/legal/privacy/")}">${t("Конфиденциальность", "Privacy")}</a>`,
+        window.WL_PIXEL_ID && `<a href="#" data-cookies>${t("Настройки cookies", "Cookie settings")}</a>`].filter(Boolean).join(" · ")}</footer>`;
     $("#bench").onchange = async e => { S.bench = e.target.value; $("#chart").innerHTML = `<p class="muted">${t("Загружаю историю…", "Loading price history…")}</p>`; await WL.fetchHistory(S.P, [S.bench]); renderChart(); };
     WL.renderMarket($("#market"), S.P);   // один раз: лента и новости не должны перезагружаться при каждом обновлении цен
   }
@@ -311,7 +330,8 @@ function renderHero(){
   $("#brokers").innerHTML = byDoc.map(x => {
     const bad = x.d.checks.filter(c => !c.ok).length;
     return `<div class="card broker"><div class="name">${esc(x.d.broker)}
-        ${x.d.from === "demo" && !bad ? "" : `<span class="pill ${bad ? "bad" : "ok"}">${bad ? t(`не сошлось: ${bad}`, `mismatch: ${bad}`) : x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`}
+        ${x.d.from === "demo" && !bad ? "" : !bad && x.d.from === "sheet" && !x.d.checks.some(c => !c.count) ? `<span class="pill">${t("итог не сверен", "total not reconciled")}</span>`
+          : `<span class="pill ${bad ? "bad" : "ok"}">${bad ? t(`не сошлось: ${bad}`, `mismatch: ${bad}`) : x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`}
         ${x.stale ? `<span class="pill stale">${t(`${WL.days(x.d.asOf, P.today)} дн. назад`, `${WL.days(x.d.asOf, P.today)} days old`)}</span>` : x.live ? `<span class="pill live">${t("цены сейчас", "live prices")}</span>` : ""}</div>
       <div class="v">${fmt.money(x.usd, "USD", 0)}</div>
       <div class="meta">${x.d.kind === "ledger" ? t(`журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`, `transaction log ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`)
@@ -521,7 +541,7 @@ function openMapper(file, sheets, pre, onDone){
     let preview = "", status;
     if(ready){
       try{
-        const d = WL.sheetDoc(rows, head, file);
+        const d = WL.sheetDoc(rows, head, file, sheets[si].ctx);
         const bad = d.checks.filter(c => !c.ok).length;
         status = `${d.positions.length} ${WL.pl(d.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}` +
           (d.checks.length > 1 ? (bad ? t(" · с итогом файла не сходится", " · does not match file totals") : t(" · сходится с итогом файла", " · matches file totals")) : "") +
@@ -572,9 +592,10 @@ function openMapper(file, sheets, pre, onDone){
     if(b.dataset.x === "auto"){ head = {row: head.row, map: WL.sheetMap(sheets[si].rows[head.row] || [])}; return render(); }
     if(b.dataset.x === "close") return close();
     if(b.dataset.x === "ok"){
-      const doc = WL.sheetDoc(sheets[si].rows, head, file);
+      const doc = WL.sheetDoc(sheets[si].rows, head, file, sheets[si].ctx);
       doc.sheetIndex = si; doc.head = {row: head.row, map: {...head.map}};
-      doc.note = [doc.note, t("колонки размечены вручную", "columns mapped manually")].filter(Boolean).join(" · ");
+      doc.note = [doc.note, pre && pre.pdf ? t("таблица взята из PDF, колонки проверены", "table read from PDF, columns reviewed")
+        : t("колонки размечены вручную", "columns mapped manually")].filter(Boolean).join(" · ");
       S_SHEETS[file.name] = {file, sheets, sheetIndex: si, head: doc.head};
       S.docs = S.docs.filter(d => d.fileName !== doc.fileName &&
         !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));

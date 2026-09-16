@@ -17,7 +17,8 @@ const HEAD = {
   isin: ["isin", "изин"],
   type: ["тип", "класс", "класс актива", "вид", "asset class", "asset category", "assetclass", "type", "class", "category",
          "asset type", "security type", "instrument type", "product type"],
-  qty: ["количество", "кол-во", "колво", "штук", "шт", "quantity", "qty", "shares", "units", "контракты"],
+  qty: ["количество", "кол-во", "колво", "штук", "шт", "quantity", "qty", "shares", "units", "контракты",
+        "nominal", "номинал", "nennwert"],
   costTotal: ["себестоимость", "сумма покупки", "затраты", "cost basis", "total cost", "book value", "стоимость покупки",
               "cost value"],
   costPrice: ["цена покупки", "средняя цена", "цена входа", "цена приобретения", "avg price", "average price",
@@ -38,13 +39,18 @@ const OCC = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
 /* Класс актива из файла. Фонд ведёт себя как акция: тикер и биржевая цена. У облигации и
    структурной ноты цены у нас нет, поэтому они отдельные типы. Незнакомый класс не выдаём
    за акцию — это «прочее»: лучше честная строка, чем неверная подпись. */
-const CLASS = [[/структурн|structured|\bnote|нот[аы]/i, "note"], [/облигац|\bbond|бонд|\bобл\b/i, "bond"],
+const CLASS = [[/структурн|structured|\bnote|нот[аы]/i, "note"], [/облигац|\bbond|бонд|\bобл\b|fixed income|anleihe|obligation/i, "bond"],
   [/фонд|fund|\betf|бпиф|\bпиф|trust/i, "fund"],
   // Опционы и фьючерсы — до акций: «Equity and Index Options» иначе читается как акции.
   [/опцион|option|колл|пут|\bcall\b|\bput\b/i, "option"], [/фьючерс|фьюч|future/i, "future"],
-  [/акци|equity|stock|share/i, "stock"],
-  [/cash|денеж|деньг|остат|balance|наличн|ликвидн|валют|currency/i, "cash"]];
+  [/акци|equit|stock|share|aktie|\bactions\b/i, "stock"],
+  [/cash|денеж|деньг|остат|balance|наличн|ликвидн|валют|currency|liquidit|account|konto|konten|compte/i, "cash"]];
 const classOf = t => (CLASS.find(c => c[0].test(t)) || [null, null])[1];
+// Класса в файле нет — по названию узнаём только очевидное: фонд, облигацию с купоном и годом, счёт.
+// Остальное, как и раньше, акции. У кириллицы нет \b, поэтому русские слова — отдельными выражениями.
+const nameClass = n => /\b(etf|ucits|sicav|fund|fonds)\b/i.test(n) || /фонд|бпиф/i.test(n) ? "fund"
+  : /\d\s?%.*\b20\d\d\b|\b(treasury|bund|gilt|bonds?|anleihe|obligation)\b/i.test(n) || /облигац|^офз/i.test(n) ? "bond"
+  : /^(current account|cash account|account\b|konto|compte)/i.test(n) || /^(текущий|расч[её]тный) сч[её]т/i.test(n) ? "cash" : null;
 const IB_OPT = /^([A-Z][A-Z0-9.]{0,5})\s+(\d{1,2})([A-Z]{3})(\d{2})\s+([\d.]+)\s+([CP])$/;
 const MONTHS = {JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
                 JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12"};
@@ -204,13 +210,13 @@ function brokerFromHead(rows, upto){
   return null;
 }
 
-function buildDoc(rows, head, file){
+function buildDoc(rows, head, file, ctx){
   const {row, map} = head;
   const tag = file.name.replace(/\.[^.]+$/, "").slice(0, 40);
   const g = (r, f) => map[f] != null ? r[map[f]] : undefined;
   const positions = [], totals = [], notes = [];
-  const headBroker = brokerFromHead(rows, head.row);
-  let dataRows = 0;
+  const headBroker = brokerFromHead(rows, head.row) || (ctx && ctx.broker) || null;
+  let dataRows = 0, sectionStart = 0, afterTotal = false;
 
   const sect = sectionBody(rows, row);
   const body = sect ? sect.data : rows.slice(row + 1);
@@ -239,10 +245,13 @@ function buildDoc(rows, head, file){
     let value = numOrNull(g(r, "value"));
     if(value == null && qty != null && price != null) value = round2(qty * price);
     if(TOTAL_RE.test(label)){                       // строка итога — не позиция, а сверка
-      if(value != null) totals.push({ccy: ccy3(g(r, "ccy")) || ccy3(label), value});
+      // Итог раздела относится к строкам после предыдущего итога: «Subtotal equities», потом облигации.
+      if(value != null) totals.push({ccy: ccy3(g(r, "ccy")) || ccy3(label), value, from: sectionStart, to: positions.length});
+      afterTotal = true;
       continue;
     }
     if(qty == null && value == null && price == null) continue;   // подзаголовок или примечание
+    if(afterTotal){ sectionStart = positions.length; afterTotal = false; }
     dataRows++;
 
     const ccy = ccy3(g(r, "ccy")) || "USD";
@@ -253,7 +262,7 @@ function buildDoc(rows, head, file){
     const cls = kind ? classOf(kind) : null;
     // Колонки класса нет — считаем бумагу акцией: так устроены почти все выгрузки позиций.
     // Класс есть, но незнакомый — «прочее», выдумывать за него нельзя.
-    const type = occ ? "option" : cls || (kind ? "other" : "stock");
+    const type = occ ? "option" : cls || (kind ? "other" : nameClass(label) || "stock");
     const isCash = type === "cash" || (!kind && /^(денежные средства|деньги|cash|остаток|cash balance)/i.test(label));
     const isOption = type === "option", isFuture = type === "future";
     const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
@@ -293,7 +302,7 @@ function buildDoc(rows, head, file){
   // Дата оценки: сначала шапка над таблицей («Отчёт по портфелю на 31.08.2026»),
   // потом имя файла. Выдумывать сегодняшнюю дату молча нельзя — от неё зависит,
   // считаются ли данные свежими.
-  let asOf = null;
+  let asOf = (ctx && ctx.asOf) || null;           // PDF: дата из шапки документа
   for(let i = 0; i < row && !asOf; i++){
     const line = (rows[i] || []).map(clean).join(" ");
     const m = /(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d\d)|(20\d\d)[-.\/](\d{1,2})[-.\/](\d{1,2})/.exec(line);
@@ -326,11 +335,22 @@ function buildDoc(rows, head, file){
   const one = brokers.length === 1 ? brokers[0] : null;
   const checks = [{label: WL.t("Строк с позициями прочитано", "Position rows read"), parsed: positions.length, stated: dataRows,
                    ok: positions.length === dataRows, count: true}];
+  let mixedTotal = false;
   totals.forEach(t => {
-    const sum = round2(positions.filter(p => !t.ccy || p.ccy === t.ccy).reduce((a, p) => a + (p.value || 0), 0));
-    checks.push({label: `${WL.t("Итог в файле", "File total")}${t.ccy ? " " + t.ccy : ""}`, parsed: sum, stated: round2(t.value),
-                 ok: Math.abs(sum - t.value) < Math.max(1, Math.abs(t.value) * 1e-6), ccy: t.ccy || undefined});
+    const sum = ps => round2(ps.filter(p => !t.ccy || p.ccy === t.ccy).reduce((a, p) => a + (p.value || 0), 0));
+    const near = v => Math.abs(v - t.value) < Math.max(1, Math.abs(t.value) * 1e-6);
+    // Итог раздела сходится со строками раздела, общий — со всем, что выше него.
+    const part = t.to != null ? positions.slice(t.from, t.to) : positions, upTo = t.to != null ? positions.slice(0, t.to) : positions;
+    const parsed = near(sum(part)) ? sum(part) : sum(upTo);
+    // В PDF банка итог обычно в валюте отчёта по бумагам в разных валютах: без курсов на дату выписки
+    // его не сверить, и «не сошлось» было бы ложной тревогой. Такой итог пропускаем и говорим об этом.
+    const mixed = ps => new Set(ps.map(p => p.ccy)).size > 1;
+    if(ctx && !near(parsed) && (mixed(part) || mixed(upTo))){ mixedTotal = true; return; }
+    checks.push({label: `${WL.t("Итог в файле", "File total")}${t.ccy ? " " + t.ccy : ""}`, parsed, stated: round2(t.value),
+                 ok: near(parsed), ccy: t.ccy || undefined});
   });
+  if(mixedTotal) notes.push(WL.t("итог в файле посчитан в валюте отчёта по бумагам в разных валютах — без курсов выписки его не сверить",
+    "the file total is in the reference currency across several currencies — it cannot be reconciled without the statement's exchange rates"));
   if(!totals.length) notes.push(WL.t("итоговой строки в файле нет — сверять сумму не с чем",
     "no total row in the file — nothing to reconcile the sum against"));
 
@@ -361,6 +381,7 @@ WL.readSheet = async function(file){
 WL.sheetDoc = buildDoc;          // (строки, {row, map}, файл) → документ
 WL.sheetMap = mapHeaders;        // ячейки строки → карта колонок
 WL.sheetFind = findHeader;       // строки листа → {row, map} или null
+WL.brokerByName = brokerFromFile;  // строка текста → известный брокер или null
 // Поля для панели сопоставления: порядок и подписи. Первые два — обязательный минимум.
 WL.sheetFields = [["name", WL.t("Наименование", "Name")], ["ticker", WL.t("Тикер", "Ticker")],
   ["qty", WL.t("Количество", "Quantity")], ["value", WL.t("Стоимость", "Market value")],
@@ -379,6 +400,29 @@ WL.parseSheet = async function(file){
   if(sheets.length > 1) doc.note = [WL.t(`лист «${sheets[best.sheetIndex].name}»`, `sheet “${sheets[best.sheetIndex].name}”`),
                                     doc.note].filter(Boolean).join(" · ");
   doc.sheetIndex = best.sheetIndex; doc.head = best.head;   // чтобы сопоставление можно было поправить руками
+  Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
+  return doc;
+};
+
+/* Таблицы из PDF любого банка (см. parse.js): те же заголовки и разбор, что у CSV. Из нескольких
+   таблиц берём самую похожую на позиции: больше узнанных колонок, нет даты сделки, итог сходится.
+   Дата оценки и банк из шапки документа (ctx) едут вместе с листом — их берёт и ручная разметка. */
+WL.parseRows = function(tables, file, ctx){
+  const sheets = tables.map((tb, i) => ({name: tb.name || WL.t(`Таблица ${i + 1}`, `Table ${i + 1}`), rows: tb.rows, ctx}));
+  let best = null;
+  sheets.forEach((sh, si) => {
+    const head = findHeader(sh.rows);
+    if(!head) return;
+    let doc;
+    try{ doc = buildDoc(sh.rows, head, file, ctx); }catch(e){ return; }
+    if(!doc.positions.length) return;
+    const score = Object.keys(head.map).length - (head.map.date != null ? 2 : 0) + (doc.checks.some(c => !c.count && c.ok) ? 3 : 0);
+    if(!best || score > best.score || (score === best.score && doc.positions.length > best.doc.positions.length))
+      best = {score, doc, si, head};
+  });
+  if(!best) return {unknown: true, fileName: file.name, sheets, headers: [], pdf: true};
+  const doc = best.doc;
+  doc.sheetIndex = best.si; doc.head = best.head; doc.fromPdf = true;
   Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
   return doc;
 };

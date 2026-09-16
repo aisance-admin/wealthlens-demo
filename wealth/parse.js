@@ -35,7 +35,8 @@ async function pdfLines(buf){
     const vp = page.getViewport({scale: 1});
     const tc = await page.getTextContent();
     const items = tc.items.filter(i => i.str.trim()).map(i => ({
-      s: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5])}));
+      s: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5]),
+      w: i.width || 0, h: Math.abs(i.transform[3]) || i.height || 8}));
     items.sort((a, b) => a.y - b.y || a.x - b.x);
     const lines = [];
     for(const it of items){
@@ -227,6 +228,196 @@ function parseSwissquote(pages, fileName){
   return doc;
 }
 
+/* ── Любой другой PDF: таблицы по координатам текста ────────────────────────
+   Строки уже собраны по высоте; куски текста без заметного промежутка — одна ячейка. Документ режется
+   на таблицы по строкам-шапкам: та же шапка на следующей странице или в следующем разделе продолжает
+   таблицу, другая (операции после позиций) начинает новую. Колонки считаются отдельно для каждого
+   куска между шапками — вертикальные полосы, занятые текстом в строках с числами и разделённые
+   просветами от 5 pt: у разделов и страниц своя ширина колонок, и общие полосы слипаются. Затем
+   куски сводятся в одну таблицу по названиям колонок. Дальше таблицы идут в тот же разбор, что CSV
+   и Excel, а пользователь проверяет колонки перед импортом. */
+const NUMLIKE = /^[(\-−+]?\s?(?:[$€£]|CHF|USD|EUR|GBP)?\s?\d[\d\s'’.,]*\)?\s?%?$/;
+const isNumCell = c => NUMLIKE.test(c.s);
+function lineCells(L){
+  const cells = [];
+  for(const it of L.items){
+    const c = cells[cells.length - 1], x2 = it.x + (it.w || it.s.length * 4.5);
+    const gap = c ? it.x - c.x2 : Infinity;
+    if(c && gap < Math.max(2.5, it.h * 0.55)){ c.s += (gap > 0.8 ? " " : "") + it.s; c.x2 = Math.max(c.x2, x2); }
+    else cells.push({s: it.s, x: it.x, x2});
+  }
+  return cells;
+}
+// Шапка — строка без чисел, в которой узнаются хотя бы два поля: «Description · Quantity · Market value».
+// Любая колонка даты («Date», «Datum», «Valuta») тоже в ключе: по ней операции отличаются от позиций.
+function headKeyOf(cells){
+  if(cells.length < 2 || cells.some(isNumCell) || !WL.sheetMap) return null;
+  const k = Object.keys(WL.sheetMap(cells.map(c => c.s)));
+  if(!k.includes("date") && cells.some(c => /(^|\s)(date|datum|дата|valuta|booking)(\s|$)/i.test(c.s))) k.push("date");
+  return k.length >= 2 ? k.sort() : null;
+}
+const positional = k => (k.includes("name") || k.includes("ticker")) && (k.includes("qty") || k.includes("value"));
+// Шапка с чуть другим набором полей — та же таблица, если выписка разбита по классам активов или pdf.js
+// иначе склеил слова на новой странице: меньший набор — часть большего, в нём от трёх полей, а дата
+// есть либо в обоих, либо ни в одном. «Description · Amount» операций к позициям так не приклеится.
+function sameTable(a, b){
+  if(a.join() === b.join()) return true;
+  if(!positional(a) || !positional(b) || a.includes("date") !== b.includes("date")) return false;
+  const [small, big] = a.length <= b.length ? [a, b] : [b, a];
+  return small.length >= 3 && small.every(f => big.includes(f));
+}
+// Заголовок раздела над шапкой («Positions», «Акции») — короткая строка без чисел.
+const isTitle = cells => cells.length <= 2 && !cells.some(isNumCell) && cells.map(c => c.s).join(" ").length <= 48;
+// Раздел выписки задаёт класс бумаг под ним: «Bonds», «Облигации», «Cash».
+const SECTION = /^(equities|equity|shares|stocks|bonds|fixed income|cash|cash accounts|accounts|liquidity|funds|investment funds|structured products|options|futures|акции|облигации|фонды|денежные средства|деньги|aktien|anleihen|obligationen|liquidität|konten|fonds|actions|obligations|liquidités|comptes)(\s*\(.*\))?:?$/i;
+
+function bandsOf(rows){
+  const data = rows.filter(cells => cells.length >= 3 && cells.some(isNumCell));
+  if(!data.length) return null;
+  const W = Math.ceil(rows.reduce((m, cells) => cells.reduce((mm, c) => Math.max(mm, c.x2), m), 0)) + 2;
+  const occ = new Uint16Array(W);
+  data.forEach(cells => cells.forEach(c => { for(let x = Math.max(0, Math.floor(c.x)); x < Math.min(W, Math.ceil(c.x2)); x++) occ[x]++; }));
+  const thr = Math.floor(data.length * 0.03), cols = [];
+  let start = -1, last = -1, gap = 0;
+  for(let x = 0; x < W; x++){
+    if(occ[x] > thr){ if(start < 0) start = x; last = x; gap = 0; }
+    else if(start >= 0 && ++gap >= 5){ cols.push([start, last + 1]); start = -1; gap = 0; }
+  }
+  if(start >= 0) cols.push([start, last + 1]);
+  return {cols, data: data.length};
+}
+function place(cells, cols){
+  const arr = new Array(cols.length).fill("");
+  cells.forEach(c => {
+    let best = 0, ov = -Infinity;
+    cols.forEach(([a, b], i) => { const o = Math.min(b, c.x2) - Math.max(a, c.x); if(o > ov){ ov = o; best = i; } });
+    arr[best] = arr[best] ? arr[best] + " " + c.s : c.s;
+  });
+  return arr;
+}
+// Куски одной таблицы (разделы, страницы) → общая сетка: колонка куска попадает в колонку с тем же
+// полем, потом с той же подписью, а без подписи — в ту, над которой стоит.
+function alignBlocks(blocks){
+  const names = [], fields = [], xs = [], out = [], titles = [];
+  let head = 0, data = 0, lastCols = null;
+  blocks.forEach((bl, bi) => {
+    const band = bandsOf(bl.rows);
+    data += band ? band.data : 0;
+    const cols = band && band.cols.length >= 2 ? band.cols : lastCols || bl.rows[bl.head].map(c => [c.x, c.x2]);
+    lastCols = cols;
+    const grid = bl.rows.map(cells => place(cells, cols));
+    const hdr = grid[bl.head], fieldAt = {};
+    Object.entries(WL.sheetMap(hdr)).forEach(([f, i]) => { fieldAt[i] = f; });
+    const target = cols.map(([x1, x2], j) => {
+      const f = fieldAt[j] || null, name = hdr[j].replace(/\s+/g, " ").trim();
+      let t = f ? fields.indexOf(f) : -1;
+      if(t < 0 && name) t = names.findIndex(n => n.toLowerCase() === name.toLowerCase());
+      if(t < 0 && !name && !f){ let ov = 0; xs.forEach(([a, b], i) => { const o = Math.min(b, x2) - Math.max(a, x1); if(o > ov){ ov = o; t = i; } }); }
+      if(t < 0){ names.push(name); fields.push(f); xs.push([x1, x2]); t = names.length - 1; }
+      return t;
+    });
+    grid.forEach((cells, ri) => {
+      if(bi > 0 && ri === bl.head) return;                       // повтор шапки в таблицу не идёт
+      if(ri === bl.head - 1) titles.push(cells.filter(Boolean).join(" ").replace(/\s*\(.*\)\s*:?$/, ""));
+      const row = [];
+      cells.forEach((v, j) => { if(v) row[target[j]] = row[target[j]] ? row[target[j]] + " " + v : v; });
+      if(bi === 0 && ri === bl.head) head = out.length;
+      out.push(row);
+    });
+  });
+  if(!data) return null;
+  const rows = out.map(r => Array.from({length: names.length}, (_, i) => r[i] || ""));
+  rows[head] = names.map((n, i) => n || rows[head][i]);
+  // Класс актива по разделам — отдельной колонкой, если своей в выписке нет.
+  if(!fields.includes("type")){
+    let cls = "", any = false;
+    const col = rows.map((r, i) => {
+      const filled = r.filter(Boolean);
+      if(filled.length === 1 && !NUMLIKE.test(filled[0]) && SECTION.test(filled[0].trim())){
+        cls = filled[0].replace(/\s*\(.*\)\s*:?$/, "").trim(); any = true; return "";
+      }
+      return i > head ? cls : "";
+    });
+    if(any) rows.forEach((r, i) => r.push(i === head ? "Asset class" : col[i]));
+  }
+  const name = [...new Set(titles.filter(Boolean))].join(" · ");
+  return {name: name.length > 48 ? name.slice(0, 47) + "…" : name, rows, head};
+}
+function pdfTables(pages){
+  const rows = pages.flat().map(lineCells);
+  const parts = [];
+  let cur = {key: null, blocks: [{head: -1, rows: []}]};
+  rows.forEach(cells => {
+    const k = headKeyOf(cells);
+    const last = cur.blocks[cur.blocks.length - 1];
+    if(!k){ last.rows.push(cells); return; }
+    // Заголовок раздела над шапкой переезжает к ней: «Bonds» относится к таблице ниже.
+    const lead = [];
+    if(last.rows.length > last.head + 1 && isTitle(last.rows[last.rows.length - 1])) lead.push(last.rows.pop());
+    const bl = {head: lead.length, rows: [...lead, cells]};
+    if(cur.key && sameTable(cur.key, k)) cur.blocks.push(bl);
+    else { parts.push(cur); cur = {key: k, blocks: [bl]}; }
+  });
+  parts.push(cur);
+  const headed = parts.some(p => p.key), tables = [];
+  parts.forEach(p => {
+    if(p.key){ const t = alignBlocks(p.blocks); if(t) tables.push(t); return; }
+    if(headed) return;                          // текст до первой шапки: адрес, реквизиты, сводка
+    // Шапку узнать не удалось: одна сетка на весь документ с первой строки, похожей на таблицу.
+    let src = p.blocks[0].rows;
+    const first = src.findIndex(cells => cells.length >= 3 && cells.some(isNumCell));
+    src = src.slice(Math.max(0, first - 3));
+    const band = bandsOf(src);
+    if(band && band.data >= 2 && band.cols.length >= 3) tables.push({name: "", rows: src.map(cells => place(cells, band.cols))});
+  });
+  return tables;
+}
+
+/* Дата оценки и банк — из шапки первой страницы: над таблицей в PDF их нет, а молча брать
+   сегодняшнюю дату нельзя. Дата после «as of», «per», «по состоянию на» или конец периода важнее
+   первой попавшейся. */
+const MON_PREFIX = [["jan", 1], ["jän", 1], ["янв", 1], ["feb", 2], ["fév", 2], ["fev", 2], ["фев", 2], ["mar", 3], ["mär", 3], ["мар", 3],
+  ["apr", 4], ["avr", 4], ["апр", 4], ["may", 5], ["mai", 5], ["мая", 5], ["май", 5], ["juin", 6], ["jun", 6], ["июн", 6],
+  ["juil", 7], ["jul", 7], ["июл", 7], ["aug", 8], ["aoû", 8], ["aou", 8], ["авг", 8], ["sep", 9], ["сен", 9],
+  ["oct", 10], ["okt", 10], ["окт", 10], ["nov", 11], ["ноя", 11], ["dec", 12], ["dez", 12], ["déc", 12], ["дек", 12]];
+const monthOf = w => { const l = String(w || "").toLowerCase(); const m = MON_PREFIX.find(([p]) => l.startsWith(p)); return m ? m[1] : null; };
+function pdfDate(text, keyed){
+  const found = [];
+  const add = (idx, len, y, m, d) => { y = +y; m = +m; d = +d;
+    if(y >= 2000 && y < 2100 && m >= 1 && m <= 12 && d >= 1 && d <= 31) found.push({idx, end: idx + len, v: iso(y, m, d)}); };
+  let r;
+  const numRe = /\b(\d{1,2})([./-])(\d{1,2})\2(20\d\d)\b|\b(20\d\d)-(\d{2})-(\d{2})\b/g;
+  while((r = numRe.exec(text))){
+    if(r[5]) add(r.index, r[0].length, r[5], r[6], r[7]);
+    // Через косую черту американский порядок встречается чаще: 08/31/2026. Иначе — день первым.
+    else if(r[2] === "/" && +r[3] > 12) add(r.index, r[0].length, r[4], r[1], r[3]);
+    else add(r.index, r[0].length, r[4], r[3], r[1]);
+  }
+  const wordRe = /\b(\d{1,2})\.?\s+([A-Za-zÀ-ÿА-Яа-яЁё]{3,})\.?,?\s+(20\d\d)\b|\b([A-Za-zÀ-ÿ]{3,})\.?\s+(\d{1,2}),?\s+(20\d\d)\b/g;
+  while((r = wordRe.exec(text))){
+    const m = monthOf(r[2] || r[4]);
+    if(m) add(r.index, r[0].length, r[3] || r[6], m, r[1] || r[5]);
+  }
+  if(!found.length) return null;
+  const KEY = /(as of|as at|valuation|statement date|report date|closing date|\bper\b|\bstand\b|\bau\b|\bdu\b|по состоянию|на дату|\bна\b|\bdate\b)[^\n\d]{0,12}$/i;
+  const score = f => {
+    const before = text.slice(Math.max(0, f.idx - 40), f.idx);
+    let s = KEY.test(before) ? 3 : 0;
+    if(/(-|–|—|\bto\b|\bbis\b|\bau\b|\bпо\b)\s*$/i.test(before) && found.some(g => g.end <= f.idx && f.idx - g.end < 8)) s += 2;
+    return s;
+  };
+  const best = found.map(f => ({...f, s: score(f)})).sort((a, b) => b.s - a.s || a.idx - b.idx)[0];
+  return keyed && best.s < 3 ? null : best.v;
+}
+function pdfBank(lines){
+  const known = WL.brokerByName ? lines.map(WL.brokerByName).find(Boolean) : null;
+  if(known) return known;
+  const BANK = /\b(bank|banque|banca|banco|bankhaus|privatbank|securities|brokerage|brokers?|wealth management|asset management|trust company|банк|брокер)\b/i;
+  const small = /^(&|and|und|et|of|de|du|des|la|le|di|y|и)$/i;
+  return lines.slice(0, 12).find(s => BANK.test(s) && s.length <= 48 && !/\d/.test(s) &&
+    s.split(/\s+/).length <= 6 && s.split(/\s+/).every(w => small.test(w) || /^[A-ZÀ-ÞА-ЯЁ"«(]/.test(w))) || null;
+}
+
 WL.parseFile = async function(file){
   // Таблицу разбирает sheet.js: у выгрузки колонки уже размечены, и гадать не нужно.
   if(!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") return WL.parseSheet(file);
@@ -234,7 +425,21 @@ WL.parseFile = async function(file){
   const head = pages.slice(0, 2).flat().map(l => l.text).join("\n");
   if(/Schwab One|Charles Schwab/.test(head)) return parseSchwab(pages, file.name);
   if(/Swissquote Bank/.test(head)) return parseSwissquote(pages, file.name);
-  return {unknown: true, fileName: file.name};
+  // Скан — это картинка без текста: читать в нём нечего, и сказать надо именно это.
+  if(!pages.some(lines => lines.length)) return {unknown: true, fileName: file.name, pdf: true, scan: true};
+  const tables = pdfTables(pages);
+  // Шапка документа — строки первой страницы до первой таблицы: ниже в позициях свои даты
+  // (погашения) и свои банки («UBS Group AG» среди акций).
+  const p1 = pages[0] || [];
+  const cut = p1.findIndex(L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); });
+  const top = p1.slice(0, cut < 0 ? 12 : Math.min(cut, 12)).map(l => l.text);
+  const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top)};
+  const doc = tables.length && WL.parseRows ? WL.parseRows(tables, file, ctx) : null;
+  // Узнанной шапки нет: разметку предлагаем, только если в файле правда есть таблица с числами —
+  // иначе договор или письмо откроются «таблицей» из дат, номеров пунктов и страниц.
+  const tabular = sh => sh.rows.filter(r => r.filter(c => c && NUMLIKE.test(c)).length >= 2 && r.some(c => c && !NUMLIKE.test(c))).length >= 3;
+  if(!doc || (doc.unknown && !doc.sheets.some(tabular))) return {unknown: true, fileName: file.name, pdf: true};
+  return doc;
 };
 WL.util = {num, dmy, iso, pad, round2, titleCase};
 })();

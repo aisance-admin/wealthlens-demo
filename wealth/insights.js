@@ -116,7 +116,9 @@ WL.insights = function(P){
   if(withCost.length >= 2){
     const s = [...withCost].sort((a, b) => b.usd - a.usd), best = s[0], worst = s[s.length - 1];
     const isLive = withCost.some(x => x.p.live);
-    const noCost = P.positions.filter(p => WL.eq(p) && p.cost == null).map(p => p.symbol);
+    // Бумаги из PDF банка часто без тикера — тогда по названию; длинный список обрезаем.
+    const noCostAll = P.positions.filter(p => WL.eq(p) && p.cost == null).map(p => p.symbol || p.name);
+    const noCost = noCostAll.length > 5 ? [...noCostAll.slice(0, 4), t(`ещё ${noCostAll.length - 4}`, `${noCostAll.length - 4} more`)] : noCostAll;
     out.push({level: "info", kind: "pnl",
       title: t(`Лучший результат к покупке — ${tick(best.p)} ${fmt.signed(best.usd)}, худший — ${tick(worst.p)} ${fmt.signed(worst.usd)}`,
                `Best result vs cost: ${tick(best.p)} ${fmt.signed(best.usd)}; worst: ${tick(worst.p)} ${fmt.signed(worst.usd)}`),
