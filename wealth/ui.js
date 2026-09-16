@@ -502,7 +502,7 @@ async function runQueue(){
     }
   }finally{
     if(gen === Q.gen){
-      Q.running = false; setBusy(false);
+      Q.running = false; Q.aiOk = false; setBusy(false);
       if(Q.items.some(x => x.state === "error")) Q.hidden = false;           // об ошибке скажем, даже если лоток прятали
       renderTray(true);
       syncStore();
@@ -560,7 +560,8 @@ function later(it, kind, manual){
 }
 
 /* PDF, который не прочитался здесь: ИИ (с согласия) или ручная разметка колонок. Согласие спрашиваем на файл;
-   «не спрашивать для этого отчёта» запоминается по номеру отчёта и отключается в «Документах». */
+   «не спрашивать для этого отчёта» действует до конца загрузки, а за отчётом запоминается, когда ИИ добавил
+   выписку. Отключается в «Документах». */
 async function resolveHard(it, manual, gen){
   if(inReport(it)) return setState(it, "skip", ALREADY());
   let choice = "ai", remember = false;
@@ -572,7 +573,7 @@ async function resolveHard(it, manual, gen){
   }
   if(choice === "manual" && manual) return mapAndCommit(it, manual, gen);
   if(choice !== "ai") return setState(it, "skip", t("пропущен", "skipped"));
-  if(remember){ Q.aiOk = true; if(!S.rid){ S.rid = newRid(); save(); } setAiAllowed(true); }
+  if(remember) Q.aiOk = true;
   const ctl = it.abort = new AbortController();
   setState(it, "ai", t("распознаю с помощью ИИ — обычно до минуты", "reading with AI — usually up to a minute"));
   const cancelled = () => setState(it, "skip", t("распознавание отменено — файл не добавлен", "recognition cancelled — file not added"));
@@ -658,6 +659,7 @@ async function commit(it, doc, gen){
   if(doc.from === "sheet" && doc.sheets) S_SHEETS[doc.fileName] = {file: it.file, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head, hash: doc.hash};
   if(!S.rid) S.rid = newRid();
   save();
+  if(doc.fromAi && Q.aiOk) setAiAllowed(true);
   if(!Q.lead){ Q.lead = true; track("Lead", {content_name: "statements_uploaded", documents: S.docs.length}); }
   const n = doc.kind === "ledger" ? null : doc.positions.length;
   setState(it, "ok", (n == null ? t("журнал операций", "transaction log") : `${n} ${WL.pl(n, ["позиция", "позиции", "позиций"], ["position", "positions"])}`) +
@@ -863,6 +865,7 @@ function buildSafe(){
     S.docs.forEach(d => { try{ WL.build(ok.concat(d), TODAY); ok.push(d); }
       catch(err){ toast(t(`${d.fileName}: выписку не удалось показать, она убрана из отчёта`, `${d.fileName}: this statement could not be shown and was removed from the report`)); } });
     S.docs = ok; save();
+    if(!S.docs.length) setAiAllowed(false);
     return WL.build(S.docs, TODAY);
   }
 }
@@ -1154,7 +1157,7 @@ function renderDocs(){
     </div>`).join("") + (aiAllowed() ? `<p class="muted ai-line no-print">${t("Нечитаемые PDF в этом отчёте распознаются ИИ без вопроса.", "Unreadable PDFs in this report are read by AI without asking.")}
       <button class="linkbtn" type="button" data-ai-off>${t("Спрашивать снова", "Ask again")}</button></p>` : "");
   $("#docs").onclick = async e => {
-    if(e.target.closest("[data-ai-off]")){ setAiAllowed(false); renderDocs(); toast(t("Перед распознаванием ИИ снова будем спрашивать", "We will ask before using AI again")); return; }
+    if(e.target.closest("[data-ai-off]")){ setAiAllowed(false); Q.aiOk = false; renderDocs(); toast(t("Перед распознаванием ИИ снова будем спрашивать", "We will ask before using AI again")); return; }
     const rm = e.target.closest("[data-remove]");
     if(rm) return removeDoc(rm.dataset.remove);
     const b = e.target.closest("[data-remap]"); if(!b) return;
@@ -1426,7 +1429,7 @@ window.addEventListener("storage", e => {
   if(e.key === UNLOCKS){ if(S.P) renderApp(); return; }
   if(e.key !== STORE) return;
   if(Q.running || MODALS.length){ toast(t("Отчёт изменили в другой вкладке. Обновите страницу, когда закончите здесь.", "The report was changed in another tab. Reload the page when you are done here.")); return; }
-  S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT;
+  S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; Q.aiOk = false;
   Object.keys(S_SHEETS).forEach(k => delete S_SHEETS[k]);
   load();
   if(S.docs.length) refresh(); else { S.P = null; renderUpload(); }
@@ -1441,6 +1444,8 @@ WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
     return refresh();
   }
   load();
+  // Отчёт без выписок выглядит как новый: разрешение на ИИ без вопроса, оставшееся от неудачной попытки, не действует.
+  if(S.rid && !S.docs.length) setAiAllowed(false);
   await handlePaymentReturn();
   if(!S.docs.length) return renderUpload();
   await recoverPendingPayment();
