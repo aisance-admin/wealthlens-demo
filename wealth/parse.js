@@ -28,7 +28,9 @@ const titleCase = s => String(s || "").split(/\s+/).map(w =>
   KEEP_UPPER.has(w) ? w : w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
 
 async function pdfLines(buf){
-  const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+  // isEvalSupported: false — рекомендованная Mozilla защита от CVE-2024-4367 для PDF.js до 4.2.67: шрифты из чужого файла
+  // не превращаются в исполняемый код.
+  const pdf = await pdfjsLib.getDocument({data: buf, isEvalSupported: false}).promise;
   const pages = [];
   for(let p = 1; p <= pdf.numPages; p++){
     const page = await pdf.getPage(p);
@@ -70,7 +72,13 @@ function parseSchwab(pages, fileName){
   S.market = pair(/\bMarket Appreciation/);
   S.ending = nums(lineOf(/^Ending Account Value \$/))[0] ?? null;
   S.unrealized = nums(lineOf(/^Unrealized \$/))[0] ?? null;
-  const cash = nums(lineOf(/^Total Cash and Cash Investments/))[1] ?? null;
+  let cash = nums(lineOf(/^Total Cash and Cash Investments/))[1] ?? null;
+  // В новом шаблоне страница с деньгами и сводкой бывает картинкой без текста (так её сохраняют программы
+  // для закрашивания реквизитов). Тогда деньги и итог счёта берём из «Asset Allocation» — она текстом.
+  const alloc = re => { const l = lineOf(re), it = l && l.items.find(i => i.x > 200 && i.x < 420 && isNumTok(i.s)); return it ? num(it.s) : null; };
+  if(cash == null) cash = alloc(/^Cash and Cash Investments \$?[\d(]/);
+  if(S.ending == null) S.ending = alloc(/^Total \$[\d(]/);
+  doc.imagePages = pages.map((ls, i) => ls.length ? 0 : i + 1).filter(Boolean);
 
   const section = (from, to) => {
     const a = all.findIndex(l => from.test(l.text)); if(a < 0) return [];
@@ -78,7 +86,27 @@ function parseSchwab(pages, fileName){
     return all.slice(a + 1, b < 0 ? undefined : b + 1);
   };
   const isSym = it => it && it.x < 40 && /^[A-Z][A-Z0-9.]{0,6}$/.test(it.s);
-  const numbersRight = l => l.items.filter(it => it.x >= 300).map(it => /^N\/A/.test(it.s) ? null : num(it.s));
+  /* Числа позиции раскладываем по колонкам шапки над строкой, а не по порядку: пометка короткой позиции «S»
+     стоит между количеством и ценой, и порядок сдвигал стоимость в цену. Шапки нет (другой шаблон) — по порядку. */
+  const mid = it => it.x + (it.w || it.s.length * 4.5) / 2;
+  const HEADS = [["qty", /^Quantity/], ["price", /^Price/], ["value", /^Market Value/], ["cost", /^Cost Basis/], ["unreal", /^Gain/]];
+  const heads = all.filter(l => l.items.some(i => /^Market Value/.test(i.s)) && l.items.some(i => /^Quantity/.test(i.s)))
+    .map(l => ({page: l.page, y: l.y, cols: HEADS.map(([k, re]) => { const it = l.items.find(i => re.test(i.s)); return it && {k, c: mid(it)}; }).filter(Boolean)}));
+  const numbersOf = (items, at) => {
+    const cells = items.filter(it => it.x >= 300 && (isNumTok(it.s) || /^N\/A/.test(it.s)));
+    const h = heads.filter(x => x.page === at.page && x.y < at.y).pop();
+    if(!h || h.cols.length < 5){ const v = cells.map(it => /^N\/A/.test(it.s) ? null : num(it.s)); return {qty: v[0], price: v[1], value: v[2], cost: v[3], unreal: v[4]}; }
+    const out = {};
+    cells.forEach(it => {
+      const c = h.cols.reduce((a, b) => Math.abs(mid(it) - b.c) < Math.abs(mid(it) - a.c) ? b : a);
+      if(Math.abs(mid(it) - c.c) < 45 && !(c.k in out)) out[c.k] = /^N\/A/.test(it.s) ? null : num(it.s);
+    });
+    return out;
+  };
+  // Строка позиции бывает разорвана: пометка «S» на 3 pt выше, название — на 3 pt ниже. Собираем всё в пределах
+  // 4 pt от строки с тикером, если там не начинается другая позиция.
+  const rowItems = (sec, l) => [...l.items, ...sec.filter(m => m !== l && m.page === l.page && Math.abs(m.y - l.y) <= 4 && !isSym(m.items[0])).flatMap(m => m.items)]
+    .sort((a, b) => a.x - b.x);
 
   // Акции. Над строкой позиции стоит строка-маркер: (M) и «i» в колонке себестоимости,
   // если та неполная. Неполную себестоимость показываем как неизвестную.
@@ -87,12 +115,13 @@ function parseSchwab(pages, fileName){
   eq.forEach((l, i) => {
     if(/^Total Equities/.test(l.text)){ doc.checks.push(check(WL.t("Акции Schwab", "Schwab equities"), round2(sumEq), nums(l)[0])); return; }
     if(!isSym(l.items[0])) return;
-    const v = numbersRight(l); if(v.length < 5) return;
+    const items = rowItems(eq, l);
+    const {qty, price, value, cost, unreal} = numbersOf(items, l);
+    if(qty == null && value == null) return;
     const prev = i > 0 && Math.abs(eq[i - 1].y - l.y) < 8 ? eq[i - 1] : null;
     const costFlag = !!prev && prev.items.some(it => it.s === "i" && it.x > 560 && it.x < 610);
-    const [qty, price, value, cost, unreal] = v;
     const sym = l.items[0].s;
-    const name = l.items.filter(it => it.x > 40 && it.x < 300 && it.s !== "F").map(it => it.s).join(" ");
+    const name = items.filter(it => it.x > 40 && it.x < 300 && it.s !== "F").map(it => it.s).join(" ");
     sumEq += value || 0;
     doc.positions.push({id: "SCHW:" + sym, broker: doc.broker, brokerShort: "Schwab", type: "stock",
       symbol: sym, name: titleCase(name), qty, price, priceDate: doc.asOf, value, ccy: "USD",
@@ -106,22 +135,29 @@ function parseSchwab(pages, fileName){
   let sumOp = 0;
   op.forEach((l, i) => {
     if(/^Total Options/.test(l.text)){ doc.checks.push(check(WL.t("Опционы Schwab", "Schwab options"), round2(sumOp), nums(l)[0])); return; }
-    const d = l.items[1];
-    if(!isSym(l.items[0]) || !d || !/^(CALL|PUT) /.test(d.s)) return;
-    const [qty, price, value, cost, unreal] = numbersRight(l);
-    let strike = null, expiry = null;
-    for(const n of op.slice(i + 1, i + 4)){
+    if(!isSym(l.items[0])) return;
+    const items = rowItems(op, l), d = items.find(it => it.x > 40 && it.x < 300 && /^(CALL|PUT) /.test(it.s));
+    if(!d) return;
+    const {qty, price, value, cost, unreal} = numbersOf(items, l);
+    // Страйк и экспирация — в строках под позицией. «ADJ EXP» и «REPS 100 FDX+50 FDXF» — скорректированный контракт:
+    // поставка по нему не 100 акций одного тикера, и сравнивать страйк с ценой одной акции нельзя.
+    let strike = null, expiry = null, adjusted = false, deliverable = null;
+    for(const n of op.filter(m => m.page === l.page && m.y > l.y + 4 && m.y <= l.y + 44 && !isSym(m.items[0]))){
       const st = n.items.find(it => /^\$[\d.]+$/.test(it.s));
-      const ex = n.items.find(it => /^EXP \d{2}\/\d{2}\/\d{2}$/.test(it.s));
-      if(st && ex){ strike = num(st.s); const m = /(\d{2})\/(\d{2})\/(\d{2})/.exec(ex.s); expiry = `20${m[3]}-${m[1]}-${m[2]}`; break; }
+      const ex = n.items.find(it => /^(ADJ )?EXP \d{2}\/\d{2}\/\d{2}$/.test(it.s));
+      if(st && ex && strike == null){ strike = num(st.s); adjusted = /^ADJ/.test(ex.s); const m = /(\d{2})\/(\d{2})\/(\d{2})/.exec(ex.s); expiry = `20${m[3]}-${m[1]}-${m[2]}`; }
+      const rep = n.items.find(it => /^REPS /.test(it.s));
+      if(rep) deliverable = rep.s.replace(/^REPS\s+/, "").replace(/\s*\+\s*/g, " + ");
     }
     const root = l.items[0].s, right = d.s.startsWith("CALL") ? "C" : "P";
+    if(deliverable) adjusted = true;
     const occ = expiry && strike != null
       ? root + expiry.slice(2, 4) + expiry.slice(5, 7) + expiry.slice(8, 10) + right + String(Math.round(strike * 1000)).padStart(8, "0")
       : null;
     sumOp += value || 0;
     doc.positions.push({id: "SCHW:" + (occ || root + i), broker: doc.broker, brokerShort: "Schwab", type: "option",
-      right, underlying: root, underlyingName: titleCase(d.s.replace(/^(CALL|PUT) /, "")), strike, expiry, occ,
+      right, underlying: adjusted ? root.replace(/\d+$/, "") : root, underlyingName: titleCase(d.s.replace(/^(CALL|PUT) /, "")), strike, expiry, occ,
+      adjusted: adjusted || undefined, deliverable: deliverable || undefined,
       multiplier: 100, qty, price, priceDate: doc.asOf, value, ccy: "USD", cost, unrealized: unreal,
       purchaseDate: null, commission: null,
       name: WL.t(`${root} ${right === "C" ? "колл" : "пут"} ${strike}`, `${root} ${strike} ${right === "C" ? "call" : "put"}`)});
@@ -131,6 +167,10 @@ function parseSchwab(pages, fileName){
     name: WL.t("Денежные средства", "Cash"), symbol: "USD", value: cash, ccy: "USD", priceDate: doc.asOf});
   const total = round2(doc.positions.reduce((a, p) => a + (p.value || 0), 0));
   doc.checks.push(check(WL.t("Итог счёта Schwab", "Schwab account total"), total, S.ending));
+  // Страницы-картинки молча пропускать нельзя: если итог не сошёлся, на них и лежит недостающее.
+  if(doc.imagePages.length && doc.checks.some(c => !c.ok))
+    doc.note = WL.t(`страницы ${doc.imagePages.join(", ")} — картинки без текста, позиции на них не прочитаны`,
+      `pages ${doc.imagePages.join(", ")} are images without text; positions on them were not read`);
 
   // Операции месяца: дата, описание, сумма.
   section(/^Transaction Details/, /^Total Transactions/).forEach(l => {
@@ -225,6 +265,142 @@ function parseSwissquote(pages, fileName){
                  from: px ? +px[2] : null, to: px ? +px[4] : null, opening: px ? px[1] === "open" : false,
                  closing: px ? px[3] === "close" : false});
   });
+  return doc;
+}
+
+/* ── Частные банки: «Detailed positions» (EFG и похожие) ────────────────────────
+   Одна таблица на много страниц: CCY | NOMINAL | DESCRIPTION | COST PRICE | COST VALUE | MARKET PRICE | MARKET VALUE |
+   WEIGHT | P/L. Позиция — строка с кодом валюты слева; под ней купон и погашение, накопленный купонный доход (НКД)
+   в колонке стоимости, ISIN. Разделы (CASH…, BONDS, EQUITIES) и подразделы («Bonds», «Investment Funds») задают класс.
+   Числа выровнены по правому краю, поэтому колонку определяем по правому краю числа между началами заголовков.
+   Сверка: итоги разделов, «Total market value», «Total accrued interest» и «TOTAL NET ASSETS». НКД — отдельной
+   строкой: в рыночной стоимости бумаг его нет, а в чистых активах счёта он есть. */
+const MON3 = {jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12};
+function parseDetailed(pages, fileName){
+  const all = pages.flat();
+  const title = all.find(l => /^DETAILED POSITIONS OF PORTFOLIO/i.test(l.text));
+  const valCcy = (/Val\. Ccy ([A-Z]{3})/.exec(title.text) || [])[1] || "USD";
+  const known = WL.brokerByName ? all.map(l => WL.brokerByName(l.text)).find(Boolean) : null;
+  const broker = known || pdfBank(all.slice(0, 60).map(l => l.text)) || WL.t("Частный банк", "Private bank");
+  const doc = {broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…", kind: "positions", fileName,
+    asOf: pdfDate(title.text), currency: valCcy, positions: [], checks: [], transactions: []};
+  const head = all.find(l => l.items.some(i => /^CCY$/.test(i.s)) && l.items.some(i => /^NOMINAL$/.test(i.s)) && l.items.some(i => /^MARKET VALUE/.test(i.s)));
+  const at = re => { const it = head.items.find(i => re.test(i.s)); return it ? it.x : null; };
+  const X = {costPrice: at(/^COST PRICE/), costValue: at(/^COST VALUE/), marketPrice: at(/^MARKET PRICE/), marketValue: at(/^MARKET VALUE/),
+             weight: 685, pl: at(/^UNREALIZED/)};
+  const right = it => it.x + (it.w || it.s.length * 4.5);
+  const isNum = s => /^-?[\d',]*\d(\.\d+)?%?$/.test(s);
+  const val = s => { const v = parseFloat(String(s).replace(/[',%]/g, "")); return isFinite(v) ? v : null; };
+  // Колонка числа: полоса от начала своего заголовка до начала следующего, по правому краю числа.
+  const bands = [["costPrice", X.costPrice], ["costValue", X.costValue], ["marketPrice", X.marketPrice], ["marketValue", X.marketValue],
+                 ["weight", X.marketValue != null ? X.marketValue + 64 : null], ["pl", X.pl]].filter(b => b[1] != null);
+  const colOf = it => { const r = right(it); let k = null; bands.forEach(([name, x]) => { if(r > x + 4) k = name; }); return k; };
+  const isHeadLine = l => l === head || /^(CCY|MATURITY DATE|PORTF\.|MARKET P\/L)/.test(l.text) || /^DETAILED POSITIONS/i.test(l.text) || /^Page \d+ \/ \d+$/.test(l.text) ||
+    l.items.some(i => /^(COST PRICE|FX RATE|ACCRUED INTEREST|WEIGHT|MARKET P\/L|CURRENCY P\/L)/.test(i.s));
+  const dateOf = s => { const m = /^(\d{1,2}) ([A-Za-z]{3})[a-z]* (\d{4})$/.exec(s); return m && MON3[m[2].toLowerCase()] ? iso(m[3], MON3[m[2].toLowerCase()], m[1]) : null; };
+  const classOf = (sec, sub) => /cash/i.test(sub || sec) && !/fund/i.test(sub || "") ? "cash"
+    : /fund|etf|sicav|ucits/i.test(sub || "") ? "fund" : /bond|note|fixed income|convertible/i.test(sub || "") ? "bond"
+    : /share|stock|equit/i.test(sub || "") ? "stock" : /structured/i.test(sub || "") ? "note"
+    : /bond|fixed income/i.test(sec) ? "bond" : /equit/i.test(sec) ? "stock" : /cash|liquid/i.test(sec) ? "cash" : "other";
+
+  const rows = [], totals = {}, secTotals = [];
+  let sec = null, sub = null, cur = null, starts = 0, page = 0, pageTop = false;
+  for(const l of all){
+    if(l.page < title.page || isHeadLine(l)) continue;
+    if(l.page !== page){ page = l.page; pageTop = true; }
+    const top = pageTop; pageTop = false;
+    const f = l.items[0], nums = l.items.filter(it => isNum(it.s));
+    let m;
+    if((m = /^(Total market value|Total accrued interest|TOTAL NET ASSETS)/i.exec(l.text)) && nums.length){ totals[m[1].toLowerCase()] = val(nums[nums.length - 1].s); cur = null; continue; }
+    if(/^YEAR-TO-DATE|^DISCLAIMER|^TRANSACTIONS/i.test(l.text)) break;
+    // Раздел: заглавные буквы слева, итог и доля портфеля.
+    if(f.x < 80 && /^[A-Z][A-Z &,/-]{2,}$/.test(f.s) && !/^[A-Z]{3}$/.test(f.s)){
+      sec = f.s; sub = null; cur = null;
+      const t = nums.find(it => !/%$/.test(it.s));
+      if(t) secTotals.push({sec, value: val(t.s), rows: []});
+      continue;
+    }
+    // Позиция: код валюты слева. У денежного счёта сумма и описание слиты в одну ячейку.
+    if(f.x < 80 && /^[A-Z]{3}$/.test(f.s) && sec){
+      starts++;
+      const second = l.items[1] || {s: ""};
+      const glued = /^(-?[\d',]*\d(?:\.\d+)?) (.+)$/.exec(second.s);
+      const nominalIt = glued ? null : l.items.find(it => it !== f && it.x < 125 && isNum(it.s));
+      const nominal = glued ? val(glued[1]) : nominalIt ? val(nominalIt.s) : null;
+      const desc = glued ? glued[2] : l.items.filter(it => it.x >= 120 && it.x < (X.costPrice || 420) - 10 && !isNum(it.s)).map(it => it.s).join(" ");
+      const cells = {};
+      l.items.filter(it => it.x > 300 && isNum(it.s)).forEach(it => {
+        const k = /%$/.test(it.s) ? (cells.weight == null && right(it) < (X.pl || 740) ? "weight" : "plPct") : colOf(it);
+        if(k && cells[k] == null) cells[k] = val(it.s);
+      });
+      cur = {ccy: f.s, nominal, desc, cells, lines: [], sec, sub, page: l.page};
+      rows.push(cur);
+      const st = secTotals[secTotals.length - 1]; if(st && st.sec === sec) st.rows.push(cur);
+      continue;
+    }
+    // Подраздел: текст у колонки описания; с итогом и долей — в начале, без чисел — продолжение на новой странице.
+    // На новой странице таблица продолжается названием подраздела без итога.
+    if(f.x > 100 && f.x < 150 && (nums.some(it => /%$/.test(it.s)) || (top && !nums.length))){
+      sub = l.items.filter(it => !isNum(it.s)).map(it => it.s).join(" "); cur = null; continue;
+    }
+    if(cur) cur.lines.push(l);
+  }
+
+  const pos = [];
+  rows.forEach((r, i) => {
+    const type = classOf(r.sec, r.sub);
+    const info = r.lines.map(L => L.text);
+    const isinLine = info.find(t => /^ISIN [A-Z]{2}[A-Z0-9]{9}\d/.test(t));
+    const isin = isinLine ? /^ISIN ([A-Z]{2}[A-Z0-9]{9}\d)/.exec(isinLine)[1] : null;
+    let accrued = null, maturity = null, priceDate = null, coupon = null;
+    r.lines.forEach(L => L.items.forEach(it => {
+      const d = dateOf(it.s); if(d && it.x > 330 && it.x < 420 && !maturity) maturity = d;
+      const pd = /^\(as at (\d{2})-(\d{2})-(\d{2})\)$/.exec(it.s); if(pd) priceDate = iso("20" + pd[3], pd[2], pd[1]);
+      if(isNum(it.s) && !/%$/.test(it.s) && colOf(it) === "marketValue" && accrued == null) accrued = val(it.s);
+    }));
+    const cp = info.map(t => /^(\d+(?:\.\d+)?) ?% /.exec(t)).find(Boolean); if(cp) coupon = +cp[1];
+    // Продолжение названия (у длинных фондов) — строки до краткого имени «…/Sh USD» и до ISIN, не купон и не условия.
+    const cont = [];
+    for(const t of info){ if(/^ISIN |\/Sh\b|\/SH\b|^(Half-yearly|Quarterly|Annual|Monthly|Yearly|for a price|Rating|Last acq)|^\d+(\.\d+)? ?% /i.test(t) || cont.length >= 1) break; cont.push(t.replace(/ \(as at .*\)$/, "")); }
+    const c = r.cells, mvRef = c.marketValue ?? null;
+    const unit = type === "bond" || type === "note" ? 100 : 1;
+    const native = r.nominal != null && c.marketPrice != null ? Math.round(r.nominal * c.marketPrice / unit * 100) / 100 : null;
+    const base = {id: `DET:${isin || r.ccy + ":" + i}`, broker: doc.broker, brokerShort: doc.brokerShort, ccy: r.ccy, isin,
+      priceDate: priceDate || doc.asOf, valueRef: mvRef, refCcy: valCcy, page: r.page};
+    if(type === "cash"){
+      pos.push({...base, type: "cash", symbol: r.ccy, name: WL.t(`Текущий счёт ${r.ccy}`, `Current account ${r.ccy}`),
+        value: r.ccy === valCcy ? mvRef ?? r.nominal : r.nominal});
+      return;
+    }
+    // Стоимость в валюте бумаги: номинал × цена (для облигаций — в процентах номинала). Для валюты отчёта сверяем с колонкой банка.
+    const value = r.ccy === valCcy ? mvRef : native;
+    let name = [r.desc, ...cont].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    if(type === "bond" && coupon != null) name += ` ${coupon}%` + (maturity ? ` ${maturity.slice(0, 4)}` : "");
+    pos.push({...base, type, name, symbol: null, qty: r.nominal, price: c.marketPrice ?? null, priceBasis: unit === 100 ? "percent" : "unit",
+      value: value ?? mvRef, ccy: value != null ? r.ccy : valCcy, cost: r.ccy === valCcy ? c.costValue ?? null : null,
+      costNote: r.ccy === valCcy ? null : WL.t("себестоимость в выписке — в валюте отчёта", "cost is shown in the report currency"),
+      costPrice: c.costPrice ?? null, unrealized: r.ccy === valCcy ? c.pl ?? null : null, accruedRef: accrued, maturity, coupon,
+      purchaseDate: null, commission: null,
+      purchaseNote: (info.find(t => /^Last acq\. /.test(t)) || "").replace(/^Last acq\. ([A-Za-z]{3} \d{4}).*$/, "$1") || null});
+  });
+  const accruedTotal = Math.round(pos.reduce((a, p) => a + (p.accruedRef || 0), 0) * 100) / 100;
+  doc.positions = pos.slice();
+  if(accruedTotal) doc.positions.push({id: "DET:ACCRUED", broker: doc.broker, brokerShort: doc.brokerShort, type: "bond", accruedLine: true,
+    name: WL.t("Накопленный купонный доход", "Accrued interest"), symbol: null, qty: null, price: null, value: accruedTotal, ccy: valCcy,
+    valueRef: accruedTotal, refCcy: valCcy, priceDate: doc.asOf, cost: null, costNote: WL.t("не бумага: купон, накопленный к дате выписки", "not a security: coupon accrued to the statement date")});
+
+  const ref = ps => Math.round(ps.reduce((a, p) => a + (p.valueRef || 0) + (p.accruedLine ? 0 : p.accruedRef || 0), 0) * 100) / 100;
+  doc.checks.push({label: WL.t("Строк с позициями прочитано", "Position rows read"), parsed: pos.length, stated: starts, ok: pos.length === starts && starts > 0, count: true});
+  secTotals.forEach(t => {
+    doc.checks.push(check(WL.t(`Раздел «${titleCase(t.sec)}»`, `Section “${titleCase(t.sec)}”`), ref(t.rows.map(r => pos[rows.indexOf(r)]).filter(Boolean)), t.value));
+  });
+  const mv = Math.round(pos.reduce((a, p) => a + (p.valueRef || 0), 0) * 100) / 100;
+  if(totals["total market value"] != null) doc.checks.push(check(WL.t("Рыночная стоимость без НКД", "Market value excluding accrued interest"), mv, totals["total market value"]));
+  if(totals["total accrued interest"] != null) doc.checks.push(check(WL.t("Накопленный купонный доход", "Accrued interest"), accruedTotal, totals["total accrued interest"]));
+  doc.checks.push(check(WL.t(`Чистые активы счёта, ${valCcy}`, `Net assets, ${valCcy}`), Math.round((mv + accruedTotal) * 100) / 100, totals["total net assets"] ?? null));
+  doc.checks.forEach(ch => { if(!ch.count) ch.ccy = valCcy; });
+  doc.note = WL.t("стоимость бумаг — без НКД, НКД отдельной строкой; цены облигаций — в процентах номинала",
+    "securities are valued without accrued interest, which is shown as a separate line; bond prices are in percent of nominal");
   return doc;
 }
 
@@ -484,6 +660,12 @@ WL.parseFile = async function(file){
     schwabTried = true;
   }
   if(/Swissquote Bank/.test(head)) return parseSwissquote(pages, file.name);
+  // Выписка частного банка с таблицей «Detailed positions» (EFG и похожие): обложки и сводка идут раньше таблицы.
+  if(pages.some(ls => ls.some(l => /^DETAILED POSITIONS OF PORTFOLIO/i.test(l.text))) &&
+     pages.some(ls => ls.some(l => l.items.some(i => /^CCY$/.test(i.s)) && l.items.some(i => /^NOMINAL$/.test(i.s))))){
+    const doc = parseDetailed(pages, file.name);
+    if(doc.positions.length) return doc;
+  }
   // Скан — это картинка без текста: читать в нём нечего, и сказать надо именно это.
   if(!pages.some(lines => lines.length)) return {unknown: true, fileName: file.name, pdf: true, scan: true};
   const tables = pdfTables(pages);
@@ -495,8 +677,12 @@ WL.parseFile = async function(file){
   const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top)};
   if(schwabTried && !ctx.broker) ctx.broker = "Charles Schwab";
   const doc = tables.length && WL.parseRows ? WL.parseRows(tables, file, ctx) : null;
-  // Только движение денег (даты, суммы, без количества и цен) — это выписка операций, позиций в ней нет.
-  if(doc && doc.unknown && tables.every(tb => tb.ops)) return {unknown: true, fileName: file.name, pdf: true, ops: true};
+  // Только движение денег (даты, суммы, без количества и цен) — это выписка операций, позиций в ней нет. Но таблица
+  // движения денег бывает и в конце выписки о портфеле, а сложные шапки позиций мы можем не узнать: если в заголовках
+  // страниц есть признаки портфеля, файл не называем выпиской операций — его можно разметить вручную или распознать ИИ.
+  const PORTFOLIO = /\b(portfolio valuation|valuation|detailed positions|positions|holdings|asset allocation|portfolio statement|vermögensaufstellung|depotauszug|vermögensübersicht|relevé de portefeuille|évaluation)\b|состав портфеля|оценка портфеля|позиции/i;
+  const portfolioLike = pages.some(ls => ls.slice(0, 15).some(l => PORTFOLIO.test(l.text)));
+  if(doc && doc.unknown && tables.every(tb => tb.ops) && !portfolioLike) return {unknown: true, fileName: file.name, pdf: true, ops: true};
   // Узнанной шапки нет: разметку предлагаем, только если в файле правда есть таблица с числами —
   // иначе договор или письмо откроются «таблицей» из дат, номеров пунктов и страниц.
   const tabular = sh => sh.rows.filter(r => r.filter(c => c && NUMLIKE.test(c)).length >= 2 && r.some(c => c && !NUMLIKE.test(c))).length >= 3;
@@ -533,17 +719,22 @@ function maskLine(line){
     .replace(/\+\d[\d ()-]{7,}\d/g, MASK)                                                             // телефон
     .replace(/(^|[^\d.,'’])0\d{1,3}[ /]\d{2,4}(?: \d{2}){2}(?![\d.,])/g, (m, pre) => pre + MASK)         // телефон без кода страны: 044 123 45 67
     .replace(/\b\d{3,}(?:[./-]\d+){2,}\b/g, (m, at, str) =>                                            // номера счетов: 537630.120.6
-      /^(19|20)\d\d[./-]\d{1,2}[./-]\d{1,2}$/.test(m) || /^,\d{2}/.test(str.slice(at + m.length)) ? m : MASK)
+      /^(19|20)\d\d[./-]\d{1,2}[./-]\d{1,2}$/.test(m) || /^(19|20)\d\d-\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(m) || /^,\d{2}/.test(str.slice(at + m.length)) ? m : MASK)
     .replace(/\b\d{4,}-\d{2,}\b/g, m => /^(19|20)\d\d-(\d\d|(19|20)\d\d)$/.test(m) ? m : MASK)            // 123456-78, 1234-5678; год и месяц, годы — нет
     .replace(/\b\d{2,3}-\d{5,}\b/g, MASK)                                                            // 12-345678
     .replace(/\b0\d{5,}\b/g, (m, at, str) => /^[.,]\d/.test(str.slice(at + m.length)) ? m : MASK)         // номер с нулём впереди: 0123456
     .replace(/\b\d{8,}\b/g, (m, at, str) => /^[.,]\d{2}\b/.test(str.slice(at + m.length)) ? m : MASK); // длинные номера
 }
+// Служебные слова шапок: фразу только из них («PORTFOLIO VALUATION», «This page is intentionally left blank») именем не считаем.
+const GENERIC_HEAD = /^(portfolio|valuation|statement|report|account|accounts|summary|documents?|electronic|detailed|positions?|page|this|is|intentionally|left|blank|investment|type|risk|scoring|your|our|relationship|officer|manager|advisor|client|private|banking|wealth|management|the|of|and|for|as|at|to|in|on|a|an|confidential|period|date|overview|nickname|mandate|active|advisory|currency|valuation)$/i;
 WL.pdfAiText = async function(file){
   const pages = await pdfLines(await file.arrayBuffer());
-  const p1 = pages[0] || [];
-  const first = p1.findIndex(L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); });
-  const top = p1.slice(0, first < 0 ? 12 : Math.min(first, 12)).map(l => l.text);
+  const tableLine = L => { const cells = lineCells(L); return headKeyOf(cells) || (cells.length >= 3 && cells.some(isNumCell)); };
+  // Шапка документа — всё до первой таблицы: обложки, адрес банка, номер счёта, имена клиента и сотрудника банка.
+  // У одних банков это верх первой страницы, у других — несколько страниц перед таблицами.
+  const fp = Math.max(0, pages.findIndex(ls => ls.some(tableLine)));
+  const p1 = pages[fp] || [];
+  const first = p1.findIndex(tableLine);
   // Шапку таблицы на незнакомом языке («Bezeichnung | Stück | Kurswert») мы не узнаём, и первой найдётся строка
   // с числами. Шапку и заголовок раздела прямо над ней отправляем: без них ИИ не поймёт колонок. Строки с цифрами
   // (адрес, номер портфеля, дата) сюда не попадают, а одиночная строка — только знакомое название раздела:
@@ -556,28 +747,37 @@ WL.pdfAiText = async function(file){
       cut--;
     }
   }
-  const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top)};
+  const headLines = [...pages.slice(0, fp).flat(), ...p1.slice(0, cut < 0 ? p1.length : cut)];
+  const top = headLines.map(l => l.text);
+  const ctx = {asOf: pdfDate(top.join("\n")) || pdfDate(p1.map(l => l.text).join("\n"), true), broker: pdfBank(top.length ? top : p1.slice(0, 12).map(l => l.text))};
   const norm = t => t.replace(/\d/g, "#").replace(/\s+/g, " ").trim();
   const freq = new Map();
   pages.forEach(ls => new Set(ls.map(l => norm(l.text))).forEach(k => freq.set(k, (freq.get(k) || 0) + 1)));
-  // Строки шапки первой страницы, которые повторяются дальше (шапка на каждой странице), тоже не уходят, а имя из
-  // шапки («Mr Ivan Petrov») закрываем и внутри других строк. Берём только строки без сумм и без названий колонок:
+  // Строки шапки, которые повторяются дальше (шапка на каждой странице), тоже не уходят, а имя из шапки
+  // («Mr Ivan Petrov») закрываем и внутри других строк. Берём только строки без сумм и без названий колонок:
   // «Market value | 1 234 567» в сводке — подпись, а не имя, и в шапках таблиц её закрывать нельзя.
-  const headLines = p1.slice(0, cut < 0 ? p1.length : cut);
   const head = new Set(headLines.map(L => norm(L.text)).filter(k => k.length >= 10));
   const names = [...new Set(headLines.filter(L => !lineCells(L).some(isNumCell)).flatMap(L => lineCells(L).map(c => c.s.replace(/\s+/g, " ").trim()))
-    .filter(x => !/\d/.test(x) && x.length >= 5 && x.length <= 48 && /^\S+(\s+\S+){1,5}$/.test(x) && !SECTION.test(x) && !Object.keys(WL.sheetMap ? WL.sheetMap([x]) : {}).length))]
+    .filter(x => !/\d/.test(x) && x.length >= 5 && x.length <= 48 && /^\S+(\s+\S+){1,5}$/.test(x) && !SECTION.test(x) && !Object.keys(WL.sheetMap ? WL.sheetMap([x]) : {}).length &&
+      x.split(/[\s:.,;-]+/).filter(Boolean).some(w => !GENERIC_HEAD.test(w))))]
     .sort((a, b) => b.length - a.length)
     .map(x => new RegExp(`(^|[^\\p{L}\\p{N}])${x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "giu"));
-  const hide = line => names.reduce((a, re) => a.replace(re, (m, pre) => pre + MASK), line);
-  const out = [], numbers = new Set();
+  // Номера счёта, портфеля и договора из подписей «ACCOUNT NUMBER: 537630», «PORTFOLIO 537630-1» на любой странице —
+  // и дальше закрываем их везде, где они встречаются: в заголовках таблиц, описаниях счетов, ссылках.
+  const ids = new Set();
+  const LABEL = /(account|acct|portfolio|portefeuille|depot|konto|client|customer|kunden|relationship|mandate|contract|vertrag|reference|cif|номер|сч[её]т|договор|портфел)[^\d\n|]{0,24}?([A-Z]{0,4}\d[\d.\/-]{2,}\d)/gi;
+  pages.flat().forEach(L => { let m; LABEL.lastIndex = 0; while((m = LABEL.exec(L.text))) (m[2].match(/\d{5,}/g) || []).forEach(d => ids.add(d)); });
+  const idRe = ids.size ? new RegExp(`[A-Z]{0,4}[\\d.\\/-]*(?:${[...ids].join("|")})[\\d.\\/-]*`, "g") : null;
+  const hide = line => { let a = names.reduce((x, re) => x.replace(re, (m, pre) => pre + MASK), line); return idRe ? a.replace(idRe, MASK) : a; };
+  const out = [], numbers = new Set(), lines = [];
   pages.forEach((ls, pi) => {
+    if(pi < fp) return;                                                  // страницы до первой таблицы
     const rows = [];
     ls.forEach((L, li) => {
-      if(pi === 0 && (cut < 0 || li < cut)) return;                      // шапка документа
+      if(pi === fp && (cut < 0 || li < cut)) return;                     // шапка на странице с первой таблицей
       const cells = lineCells(L), k = norm(L.text);
-      if(!(pi === 0 && li < first)){                                      // шапку первой таблицы оставляем как есть
-        if(head.has(k) && !SECTION.test(L.text.trim())) return;           // повтор шапки документа
+      if(!(pi === fp && li < first)){                                    // шапку первой таблицы оставляем как есть
+        if(head.has(k) && !SECTION.test(L.text.trim())) return;          // повтор шапки документа
         // Колонтитул: строка без сумм, которая есть на многих страницах. Строки с суммами («Итого») остаются.
         if(k.length >= 8 && !headKeyOf(cells) && !cells.some(isNumCell) && !SECTION.test(L.text.trim()) &&
           pages.length >= 2 && freq.get(k) >= Math.max(2, pages.length * 0.34)) return;
@@ -586,10 +786,21 @@ WL.pdfAiText = async function(file){
     });
     if(!rows.length) return;
     out.push(`--- page ${pi + 1} ---`, ...rows);
+    rows.forEach(r => lines.push({page: pi + 1, text: r}));
   });
   const text = out.join("\n");
-  (text.match(/[(\-−]?\d[\d'’ .,]*\d\)?|\d/g) || []).forEach(tok => { const v = parseAmount(tok.trim()); if(v != null) numbers.add(Math.round(Math.abs(v) * 100)); });
-  return {text, ctx, numbers};
+  // Числа каждой строки со знаком: по ним ответ ИИ проверяется в строке своей бумаги, а не где-нибудь в документе.
+  const TOK = /[(\-−]?\d[\d'’ .,]*\d\)?-?|\d/g;
+  lines.forEach(L => {
+    L.lower = L.text.toLowerCase(); L.signed = new Set(); L.abs = new Set();
+    (L.text.match(TOK) || []).forEach(tok => {
+      const trailing = /\d-$/.test(tok), v = parseAmount(tok.trim().replace(/-$/, ""));
+      if(v == null) return;
+      const c = Math.round(Math.abs(v) * 100);
+      numbers.add(c); L.abs.add(c); L.signed.add((trailing ? -1 : 1) * Math.sign(v || 1) * c);
+    });
+  });
+  return {text, ctx, numbers, lines};
 };
 WL.util = {num, dmy, iso, pad, round2, titleCase};
 })();

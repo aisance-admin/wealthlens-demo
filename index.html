@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" integrity="sha512-q+4liFwdPC/bNdhUpZx6aXDx/h77yEQtn4I1slHydcbZK34nLaR3cAeYSJshoxIOq3mjEf7xJE8YWIUHMn+oCQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 :root{
   /* Фирменная тёмная палитра сайта wealth.euroaff.eu: чернила, золото, бирюза для «сошлось» */
@@ -287,6 +287,22 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .dlg-list .k{font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-family:var(--mono)}
 .dlg-list .f{font:500 13px/1.35 var(--mono); color:var(--ink); overflow-wrap:anywhere}
 .dlg-list .m{font-size:12.5px; color:var(--ink-2)}
+.ai-preview{margin-top:12px; font-size:13px}
+.ai-preview summary{cursor:pointer; color:var(--ink-2)}
+.ai-preview pre{margin:8px 0 0; max-height:240px; overflow:auto; padding:10px 12px; border-radius:10px; background:var(--surface-2); border:1px solid var(--line);
+  font:12px/1.45 var(--mono); color:var(--ink-2); white-space:pre-wrap; overflow-wrap:anywhere}
+.ai-preview p{margin:6px 0 0; font-size:12.5px}
+.dlg-issues{margin:12px 0 0; padding:10px 12px 10px 28px; border-radius:10px; background:var(--risk-soft); color:var(--ink); font-size:13px; line-height:1.5; display:grid; gap:4px}
+/* Неполный отчёт: над выводами, заметно, с тем, что потеряно, и что сделать */
+.quality{margin:18px 0 0; padding:16px 18px; border-color:rgba(255,123,108,.45); background:linear-gradient(0deg, var(--risk-soft), var(--risk-soft)), var(--surface)}
+.quality .q-top{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.quality h2{font-size:17px; margin:0; text-wrap:balance}
+.quality p{margin:8px 0 0; color:var(--ink-2); font-size:13.5px; line-height:1.5}
+.q-list{list-style:none; margin:10px 0 0; padding:0; display:grid; gap:8px}
+.q-list li{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:10px; background:rgba(6,9,14,.35)}
+.q-list .q-why{font-size:12.5px; color:var(--ink-2); margin-top:3px; line-height:1.45}
+.q-actions{margin-top:10px}
+@media (max-width:760px){ .q-list li{flex-direction:column} }
 .ai-actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:18px}
 .ai-status{display:flex; gap:10px; align-items:center}
 .ai-more{font-size:12.5px} .ai-more a{color:var(--ink-2)}
@@ -329,7 +345,7 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 .ut-x:hover{background:rgba(226,236,255,.07); color:var(--ink)}
 .ut-bar{height:2px; margin:0 16px 6px; background:rgba(226,236,255,.07); border-radius:2px; overflow:hidden}
 .ut-bar i{display:block; height:100%; background:var(--accent); transition:width .3s ease}
-.ut-list{list-style:none; margin:0; padding:2px 8px 10px; overflow:auto; display:grid; gap:2px}
+.ut-list{list-style:none; margin:0; padding:2px 8px 10px; overflow:auto; display:grid; grid-template-columns:minmax(0, 1fr); gap:2px}
 .ut-item{display:flex; align-items:center; gap:11px; padding:8px; border-radius:10px}
 .ut-item.ai,.ut-item.ask,.ut-item.mapping{background:rgba(243,189,88,.06)}
 .ut-main{min-width:0; flex:1}
@@ -345,6 +361,8 @@ table.mini{width:100%; border-collapse:collapse; font-size:12.5px}
 .ut-item.ok .ut-ic{background:var(--good)} .ut-item.ok .ut-ic::after{content:"✓"}
 .ut-item.skip .ut-ic{background:var(--muted)} .ut-item.skip .ut-ic::after{content:"–"}
 .ut-item.error .ut-ic{background:var(--risk)} .ut-item.error .ut-ic::after{content:"!"}
+.ut-item.partial .ut-ic{background:var(--watch)} .ut-item.partial .ut-ic::after{content:"!"}
+.ut-item.partial .ut-text{color:var(--watch)}
 @media (max-width:760px){
   .uptray{left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom)); width:auto; max-height:50vh}
   .toasts{top:12px; bottom:auto}
@@ -497,6 +515,8 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
   .sbar,.sbar i,.pill,.lvl,.q,.tick,.mix-bar i,.mix-legend .k,.broker .share .trk i,.cdot{-webkit-print-color-adjust:exact; print-color-adjust:exact}
   .insight::before{display:none}
   .demobar{background:#fff}
+  .quality{border:1.5px solid var(--risk) !important; break-inside:avoid}
+  .q-list li{background:#fff; border:1px solid var(--line)}
   .broker .share .trk,.sbar{background:#EDF0F4}
   /* Заголовок раздела не остаётся внизу страницы без содержимого. */
   .sec-h{break-after:avoid}

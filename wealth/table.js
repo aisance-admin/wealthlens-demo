@@ -36,7 +36,9 @@ function row(P, p, per){
   // Цена и дата покупки — один пункт у велса, одна колонка здесь.
   let buyMain = "", buyNote = "";
   if(!contracts && p.type !== "cash"){
-    if(p.cost != null && p.qty){ buyMain = fmt.px(p.cost / p.qty); buyNote = WL.t("средняя", "average"); }
+    // Облигации и ноты котируются в процентах номинала: 99,47, а не 0,9947 за единицу номинала.
+    if(p.priceBasis === "percent" && (p.costPrice != null || (p.cost != null && p.qty))){ buyMain = fmt.px(p.costPrice ?? p.cost / p.qty * 100) + "%"; buyNote = WL.t("средняя, % номинала", "average, % of nominal"); }
+    else if(p.cost != null && p.qty){ buyMain = fmt.px(p.cost / p.qty); buyNote = WL.t("средняя", "average"); }
     else buyMain = unk(p.costNote || NOT_IN());
   } else if(p.type === "option"){
     const prem = p.cost != null ? p.cost : p.premium;
@@ -53,7 +55,7 @@ function row(P, p, per){
   if(p.type !== "cash"){
     if(cur.live) px = fmt.px(cur.price) + sub(WL.t(`сейчас${p.live.delta != null ? " · дельта " + fmt.px(Math.abs(p.live.delta)) : ""}`,
                                                    `now${p.live.delta != null ? " · delta " + fmt.px(Math.abs(p.live.delta)) : ""}`));
-    else if(p.price != null) px = fmt.px(p.price) + sub(WL.t(`на ${fmt.date(p.priceDate)}`, `as of ${fmt.date(p.priceDate)}`));
+    else if(p.price != null) px = fmt.px(p.price) + (p.priceBasis === "percent" ? "%" : "") + sub(WL.t(`на ${fmt.date(p.priceDate)}`, `as of ${fmt.date(p.priceDate)}`));
     else px = dash(NOT_IN());
   }
   td.push(`<td class="px" data-l="${WL.t("Цена", "Price")}">${px}</td>`);

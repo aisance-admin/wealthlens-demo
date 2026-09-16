@@ -45,6 +45,26 @@ const fmt = WL.fmt = {
 };
 WL.days = days; WL.plural = plural; WL.pl = pl;
 
+/* ── Насколько выписке можно верить ───────────────────────────────────────
+   partial — известно, что прочитано не всё: сверка с итогом банка не сошлась, итога не нашлось, часть сумм ИИ не нашлась
+   в тексте выписки. Такая выписка может стоять в отчёте только с пометкой, и продавать отчёт с ней нельзя.
+   unverified — сверять не с чем (в выгрузке нет итоговой строки), ok — всё сошлось с итогами банка. */
+WL.quality = d => {
+  const issues = [];
+  (d.checks || []).forEach(c => {
+    if(c.ok) return;
+    if(c.count) issues.push(t(`${c.label}: ${c.parsed} из ${c.stated}`, `${c.label}: ${c.parsed} of ${c.stated}`));
+    else if(c.stated == null) issues.push(t(`${c.label}: итога в выписке не нашлось`, `${c.label}: no total found in the statement`));
+    else issues.push(t(`${c.label}: прочитано ${fmt.money(c.parsed, c.ccy || "USD")} вместо ${fmt.money(c.stated, c.ccy || "USD")}`,
+      `${c.label}: read ${fmt.money(c.parsed, c.ccy || "USD")} instead of ${fmt.money(c.stated, c.ccy || "USD")}`));
+  });
+  if(issues.length && d.imagePages && d.imagePages.length)
+    issues.push(t(`страницы ${d.imagePages.join(", ")} — картинки без текста, прочитать их нельзя`, `pages ${d.imagePages.join(", ")} are images without text and cannot be read`));
+  if(d.aiDoubt && d.aiDoubt.length)
+    issues.push(t(`суммы ИИ не подтверждены текстом выписки: ${d.aiDoubt.join(", ")}`, `AI amounts not confirmed by the statement text: ${d.aiDoubt.join(", ")}`));
+  return {status: issues.length ? "partial" : (d.checks || []).some(c => !c.count) ? "ok" : "unverified", issues};
+};
+
 /* ── Календарь контрактов CME: даты без учёта биржевых праздников ──────── */
 const TREASURY = {
   ZN: {name: t("10-летние казначейские облигации США", "10-year US Treasury notes"), short: t("10-летние UST", "10-year UST"), mult: 1000, ltd: (y, m) => shiftBiz(lastBiz(y, m), -7)},
@@ -178,8 +198,9 @@ function applyLive(P, L){
     if(p.type === "option" && p.occ){
       const x = options[p.occ], u = quotes[p.underlying];
       if(x && !x.error && (x.mid != null || x.last != null)) p.live = {price: x.mid ?? x.last, bid: x.bid, ask: x.ask, delta: x.delta, time: u && u.time};
-      if(u && u.price) p.underlyingLive = u.price;
-      else if(x && !x.error && x.underlying_price) p.underlyingLive = x.underlying_price;   // цена базового актива из цепочки опционов
+      // У скорректированного контракта (FDX1: 100 FDX + 50 FDXF) поставка — не одна акция: сравнивать страйк с её ценой нельзя.
+      if(!p.adjusted && u && u.price) p.underlyingLive = u.price;
+      else if(!p.adjusted && x && !x.error && x.underlying_price) p.underlyingLive = x.underlying_price;   // цена базового актива из цепочки опционов
     }
   });
 }
@@ -236,8 +257,9 @@ WL.eq = p => p.type === "stock" || p.type === "fund";
 WL.clsKey = type => ["stock", "fund", "bond", "note", "cash"].includes(type) ? type : "other";
 WL.usd = (P, ccy) => ccy === "USD" ? 1 : (P.live && P.live.fx && P.live.fx[ccy] ? 1 / P.live.fx[ccy] : null);
 WL.current = (P, p) => {
-  if(WL.eq(p) && p.live) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};
-  if(p.type === "option" && p.live && p.multiplier) return {price: p.live.price, value: round2(p.qty * p.live.price * p.multiplier), live: true};
+  // Без количества новая цена ничего не говорит о стоимости: null × цена дал бы ноль вместо суммы из выписки.
+  if(WL.eq(p) && p.live && p.qty != null) return {price: p.live.price, value: round2(p.qty * p.live.price), live: true};
+  if(p.type === "option" && p.live && p.multiplier && p.qty != null) return {price: p.live.price, value: round2(p.qty * p.live.price * p.multiplier), live: true};
   return {price: p.price, value: p.value, live: false};
 };
 

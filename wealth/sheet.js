@@ -200,6 +200,9 @@ function loadXLSX(){
   return new Promise((res, rej) => {
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    // Хеш содержимого: подменённый на CDN файл браузер не выполнит — у страницы есть доступ к выпискам.
+    s.integrity = "sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==";
+    s.crossOrigin = "anonymous"; s.referrerPolicy = "no-referrer";
     s.onload = res; s.onerror = () => rej(new Error(WL.t("не удалось загрузить чтение Excel", "could not load the Excel reader")));
     document.head.appendChild(s);
   });
@@ -230,6 +233,13 @@ function buildDoc(rows, head, file, ctx){
   const headBroker = brokerFromHead(rows, head.row) || (ctx && ctx.broker) || null;
   let dataRows = 0, sectionStart = 0, afterTotal = false;
 
+  // Валюта: колонка валюты, код или знак в самой сумме («$1,234.56»), валюта в заголовке («Market Value (USD)»).
+  // Не нашлась нигде — не подставляем доллары молча: позиция помечается, и очередь спрашивает валюту у человека.
+  const CCY = /\b(USD|EUR|CHF|GBP|JPY|CAD|AUD|NZD|HKD|SGD|SEK|NOK|DKK|PLN|CZK|HUF|RUB|CNY|CNH|INR|AED|ILS|TRY|ZAR|MXN|BRL|KRW|TWD|THB)\b/;
+  const SIGN = {"$": "USD", "€": "EUR", "£": "GBP", "₽": "RUB", "¥": "JPY"};
+  const ccyIn = v => { const x = String(v == null || v instanceof Date ? "" : v).toUpperCase(), m = CCY.exec(x); if(m) return m[1];
+    const g2 = /[$€£₽¥]/.exec(x); return g2 ? SIGN[g2[0]] : null; };
+  const headCcy = [map.value, map.price, map.costTotal].filter(i => i != null).map(i => ccyIn((rows[row] || [])[i])).find(Boolean) || null;
   const sect = sectionBody(rows, row);
   const body = sect ? sect.data : rows.slice(row + 1);
   // Порядок дня и месяца — по всей колонке дат: 14/03/2024 бывает только «день первым»,
@@ -266,7 +276,8 @@ function buildDoc(rows, head, file, ctx){
     if(afterTotal){ sectionStart = positions.length; afterTotal = false; }
     dataRows++;
 
-    const ccy = ccy3(g(r, "ccy")) || "USD";
+    const ccyFound = ccy3(g(r, "ccy")) || ccyIn(g(r, "value")) || ccyIn(g(r, "price")) || headCcy;
+    const ccy = ccyFound || "USD";
     const kind = clean(g(r, "type")).toLowerCase();
     const ib = ibOption(symRaw) || ibOption(nameCol.toUpperCase());
     const sym = ib ? ib.occ : symRaw.replace(/\s+/g, "").replace(/\.(NASDAQ|NYSE|NYSEARCA|ARCA|AMEX|BATS|NMS|US)$/, "");
@@ -280,6 +291,7 @@ function buildDoc(rows, head, file, ctx){
     const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
     const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
                   name: label || WL.t("Позиция ", "Position ") + i, ccy, value: value != null ? round2(value) : null};
+    if(!ccyFound) base.ccyGuessed = true;
 
     if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || WL.t("Денежные средства", "Cash")}); continue; }
 
@@ -367,8 +379,9 @@ function buildDoc(rows, head, file, ctx){
   if(!totals.length) notes.push(WL.t("итоговой строки в файле нет — сверять сумму не с чем",
     "no total row in the file — nothing to reconcile the sum against"));
 
+  const ccyGuessed = positions.filter(p => p.ccyGuessed).length;
   return {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
-          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
+          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, ccyGuessed: ccyGuessed || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
           positions, checks, transactions: []};
 }
 

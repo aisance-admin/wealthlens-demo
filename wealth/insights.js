@@ -25,6 +25,8 @@ WL.insights = function(P){
       const inDays = `${d} ${pl(d, ["день", "дня", "дней"], ["day", "days"])}`, shares = n === 1 ? "share" : "shares";
       const text = t(`${p.underlying} ${p.right === "C" ? "колл" : "пут"} ${K} · ${fmt.date(p.expiry)}, через ${inDays}`,
                      `${p.underlying} ${K} ${p.right === "C" ? "call" : "put"} · ${fmt.date(p.expiry)}, ${d === 0 ? "expires today" : "in " + inDays}`);
+      if(p.adjusted) return {text, note: t(`скорректированный контракт${p.deliverable ? `: поставка ${p.deliverable}` : ""} — статус по цене одной акции не определить`,
+        `adjusted contract${p.deliverable ? `: delivers ${p.deliverable}` : ""} — its status cannot be judged from one share price`)};
       if(u == null) return {text, note: t("текущей цены базового актива нет", "no current price for the underlying")};
       const itm = p.right === "C" ? u > K : u < K;
       if(itm) itmAny = true;
@@ -74,10 +76,18 @@ WL.insights = function(P){
   const assets = P.positions.filter(p => p.type !== "option" && p.type !== "future")
     .map(p => ({p, v: usdOf(p)})).filter(x => x.v != null && x.v > 0);
   const totalUsd = sum(assets, x => x.v);
-  const single = assets.filter(x => ["stock", "note", "other"].includes(x.p.type)).sort((a, b) => b.v - a.v);
+  // Одна бумага бывает несколькими строками (лоты, разные счета): долю считаем по бумаге целиком — по ISIN, тикеру
+  // в своей валюте или названию. Иначе десять строк одной акции дали бы «10%» вместо 100%.
+  const keyOf = p => p.isin ? "I:" + p.isin : p.symbol ? `S:${p.symbol}:${p.ccy}` : "N:" + String(p.name || "").toLowerCase().replace(/[^a-zа-яё0-9]/g, "");
+  const byKey = new Map();
+  assets.filter(x => ["stock", "note", "other"].includes(x.p.type) && !x.p.accruedLine).forEach(x => {
+    const k = keyOf(x.p), a = byKey.get(k) || {p: x.p, v: 0, rows: []};
+    a.v += x.v; a.rows.push(x.p); byKey.set(k, a);
+  });
+  const single = [...byKey.values()].sort((a, b) => b.v - a.v);
   if(single.length && totalUsd > 0){
     const top = single[0], share = top.v / totalUsd * 100, top3 = sum(single.slice(0, 3), x => x.v) / totalUsd * 100;
-    const where = [...new Set(P.positions.filter(p => (p.symbol || p.name) === (top.p.symbol || top.p.name)).map(p => p.brokerShort))];
+    const where = [...new Set(top.rows.map(p => p.brokerShort))];
     const big3 = single.slice(0, 3).map(x => tick(x.p)).join(", ");
     if(share >= 10) out.push({level: share >= 25 ? "watch" : "info", kind: "concentration",
       title: t(`${top.p.name} — ${Math.round(share)}% всего портфеля`, `${top.p.name} is ${Math.round(share)}% of the whole portfolio`),
