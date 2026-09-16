@@ -542,8 +542,8 @@ function renderUpload(){
     <button class="btn small" id="tplBtn" type="button">${t("Шаблон CSV", "CSV template")}</button></div>
     <p class="demo-link">${t(`<a href="?demo=1">Посмотреть пример отчёта</a> — вымышленный портфель у четырёх брокеров`,
       `<a href="?demo=1&amp;lang=en">See a sample report</a> — a fictional portfolio across four brokers`)}</p>
-    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере: наружу уходят только тикеры и названия компаний — для котировок и новостей. Если файл не прочитается, его таблицу можно распознать с помощью ИИ — только с вашего согласия и без шапки выписки.",
-      "Or drop files here. Statements are processed in this browser: only tickers and company names leave it, to fetch quotes and news. If a file can't be read, its table can be read with AI — only with your consent and without the statement header.")}</p>
+    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере: наружу уходят только тикеры, ISIN и названия компаний — чтобы сопоставить бумаги с биржей и получить котировки и новости. Если файл не прочитается, его таблицу можно распознать с помощью ИИ — только с вашего согласия и без шапки выписки.",
+      "Or drop files here. Statements are processed in this browser: only tickers, ISINs and company names leave it, to match holdings to exchange listings and fetch quotes and news. If a file can't be read, its table can be read with AI — only with your consent and without the statement header.")}</p>
     ${SUPPORT ? `<p class="hint">${t(`Выписка не читается или нужен другой банк — напишите на ${supportLink()}. Сами выписки присылать не нужно, достаточно названия банка.`,
       `Statement not read, or need another bank? Email ${supportLink()}. No need to send the statement itself — the bank's name is enough.`)}</p>` : ""}
     <p class="hint lang-link"><a href="${esc(langUrl(EN ? "ru" : "en"))}" hreflang="${EN ? "ru" : "en"}" lang="${EN ? "ru" : "en"}">${EN ? "Русский" : "English"}</a></p>
