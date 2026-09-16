@@ -145,7 +145,7 @@ WL.insights = function(P){
             (expired ? t(`${expired === derivs.length ? "Все " : ""}${expired} ${pl(expired, ["контракт", "контракта", "контрактов"], ["contract", "contracts"])} с тех пор ${expired === 1 ? "истёк" : "истекли"}; что открыто сейчас, из этой выписки не узнать.`,
                          `${expired !== derivs.length ? `${expired} ${expired === 1 ? "contract has" : "contracts have"}` : expired === 1 ? "The contract has" : `All ${expired} contracts have`} since expired; this statement does not show what is open now.`) : ""),
       basis: t(`журнал ${d.brokerShort} за ${fmt.date(d.periodFrom)}–${fmt.date(d.asOf)}`, `${d.brokerShort} ledger for ${fmt.date(d.periodFrom)} – ${fmt.date(d.asOf)}`)});
-    const f = (P.flows[d.brokerShort] || {}).USD;
+    const f = (P.flows[d.fileName] || {}).USD;
     if(f){
       const result = sum(Object.entries(f).filter(([k]) => k !== "deposits"), ([, v]) => v);
       out.push({level: result < 0 ? "watch" : "info", kind: "period",

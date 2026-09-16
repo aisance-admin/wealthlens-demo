@@ -121,6 +121,11 @@ function numOrNull(v){
   if(typeof v === "number") return isFinite(v) ? v : null;
   let t = String(v).trim();
   if(!t || /^[—–-]+$/.test(t)) return null;
+  // Текст с цифрами — не число: «Portfolio 537630.120.6» из колонтитула иначе стал бы суммой в миллиарды.
+  // Рядом с числом бывают только код и знак валюты, процент и подписи вроде «Stk.», «Cr», «Fr.».
+  t = t.replace(/(?<![A-Za-z])[A-Z]{3}(?![A-Za-z])/g, " ")
+    .replace(/(?<!\p{L})(stk|stück|pcs|shares?|units?|nom|nominal|fr|sfr|cr|dr|p\.?\s?a|шт|руб)(?!\p{L})\.?/giu, " ").trim();
+  if(/\p{L}/u.test(t)) return null;
   const neg = /^\(.*\)$/.test(t) || /^-/.test(t);
   t = t.replace(/[\s'’ ]/g, "").replace(/[()]/g, "").replace(/[^\d.,]/g, "");
   if(!/\d/.test(t)) return null;
@@ -132,7 +137,11 @@ function numOrNull(v){
     const groups = /^[1-9]\d{0,2}(,\d{3})+$/.test(t);
     t = groups ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
   }
-  else if(hasD && (t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
+  else if(hasD && (t.match(/\./g) || []).length > 1){
+    // Несколько точек — разделители разрядов (1.234.567). С другими группами это номер или дата, а не сумма.
+    if(!/^\d{1,3}(\.\d{3})+$/.test(t)) return null;
+    t = t.replace(/\./g, "");
+  }
   const n = parseFloat(t);
   return isFinite(n) ? (neg ? -Math.abs(n) : n) : null;
 }
@@ -196,13 +205,13 @@ function loadXLSX(){
   });
 }
 
-const BROKER_BY_NAME = [[/exante/i, "Exante"], [/interactive|\bibkr\b|\bib_/i, "Interactive Brokers"],
-  [/schwab/i, "Charles Schwab"], [/swissquote|\bsq[_-]/i, "Swissquote"], [/\bubs\b/i, "UBS"],
-  [/jpmorgan|\bjpm\b|morgan/i, "J.P. Morgan"], [/goldman|\bgs[_-]/i, "Goldman Sachs"], [/\bciti\b/i, "Citi"],
+const BROKER_BY_NAME = [[/exante/i, "Exante"], [/interactive|(?<![a-z])ibkr(?![a-z])|(?<![a-z])ib_/i, "Interactive Brokers"],
+  [/schwab/i, "Charles Schwab"], [/swissquote|(?<![a-z])sq[_-]/i, "Swissquote"], [/(?<![a-z])ubs(?![a-z])/i, "UBS"],
+  [/morgan stanley/i, "Morgan Stanley"], [/jpmorgan|j\.?\s?p\.?\s?morgan|(?<![a-z])jpm(?![a-z])|morgan/i, "J.P. Morgan"], [/goldman|(?<![a-z])gs[_-]/i, "Goldman Sachs"], [/(?<![a-z])citi(?![a-z])/i, "Citi"],
   [/saxo/i, "Saxo Bank"], [/pictet/i, "Pictet"], [/julius|baer/i, "Julius Baer"], [/lombard/i, "Lombard Odier"],
-  [/\befg\b/i, "EFG Bank"], [/vontobel/i, "Vontobel"], [/\blgt\b/i, "LGT"], [/mirabaud/i, "Mirabaud"], [/rothschild/i, "Rothschild"],
-  [/credit suisse/i, "Credit Suisse"], [/safra sarasin/i, "J. Safra Sarasin"], [/morgan stanley/i, "Morgan Stanley"],
-  [/emirates nbd/i, "Emirates NBD"], [/\bhsbc\b/i, "HSBC"], [/barclays/i, "Barclays"]];
+  [/(?<![a-z])efg(?![a-z])/i, "EFG Bank"], [/vontobel/i, "Vontobel"], [/(?<![a-z])lgt(?![a-z])/i, "LGT"], [/mirabaud/i, "Mirabaud"], [/rothschild/i, "Rothschild"],
+  [/credit suisse/i, "Credit Suisse"], [/safra sarasin/i, "J. Safra Sarasin"],
+  [/emirates nbd/i, "Emirates NBD"], [/(?<![a-z])hsbc(?![a-z])/i, "HSBC"], [/barclays/i, "Barclays"]];
 const brokerFromFile = name => (BROKER_BY_NAME.find(b => b[0].test(name)) || [null, null])[1];
 
 function brokerFromHead(rows, upto){
@@ -319,6 +328,7 @@ function buildDoc(rows, head, file, ctx){
       if(y) asOf = `${y[1]}-${y[2]}-${y[3]}`;
     }
   }
+  const asOfGuessed = !asOf;
   if(!asOf){ asOf = new Date().toISOString().slice(0, 10);
     notes.push(WL.t("даты оценки в файле нет — взята сегодняшняя", "no valuation date in the file — today's date used")); }
   positions.forEach(p => { if(p.priceDate == null) p.priceDate = asOf; });
@@ -358,7 +368,7 @@ function buildDoc(rows, head, file, ctx){
     "no total row in the file — nothing to reconcile the sum against"));
 
   return {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
-          kind: "positions", asOf, fileName: file.name, from: "sheet", note: notes.join(" · "),
+          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
           positions, checks, transactions: []};
 }
 

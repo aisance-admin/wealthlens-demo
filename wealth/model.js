@@ -128,14 +128,19 @@ function ledgerFlows(d){
 WL.build = function(docs, today){
   const P = {today, docs, positions: [], events: [], flows: {}, live: null, history: {}};
   docs.forEach(d => {
+    // Имя файла уникально в отчёте (ui.js следит): им и помечаем позиции. Иначе у двух выписок одного
+    // брокера совпадают id («SCHW:AAPL»), и строка таблицы открывает чужую позицию.
+    const key = d.fileName + "|";
     if(d.kind === "positions"){
-      d.positions.forEach(p => P.positions.push({...p, asOf: d.asOf, source: d.fileName}));
+      d.positions.forEach(p => P.positions.push({...p, id: key + p.id, asOf: d.asOf, source: d.fileName}));
       d.positions.filter(p => p.type === "option" && p.expiry).forEach(p =>
-        P.events.push({date: p.expiry, kind: "expiry", posId: p.id, text: t(`${p.name}: экспирация`, `${p.name}: expiry`)}));
+        P.events.push({date: p.expiry, kind: "expiry", posId: key + p.id, text: t(`${p.name}: экспирация`, `${p.name}: expiry`)}));
     }
     if(d.kind === "ledger"){
       const r = fromLedger(d);
-      P.positions.push(...r.positions); P.events.push(...r.events); P.flows[d.brokerShort] = ledgerFlows(d);
+      r.positions.forEach(p => { p.id = key + p.id; });
+      r.events.forEach(ev => { if(ev.posId != null) ev.posId = key + ev.posId; });
+      P.positions.push(...r.positions); P.events.push(...r.events); P.flows[d.fileName] = ledgerFlows(d);
     }
   });
   P.events.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
@@ -152,7 +157,36 @@ WL.getJSON = async (path, ms = 90000) => {
 };
 const getJSON = WL.getJSON;
 
+/* Последние котировки и курсы. Портфель пересобирается после каждой добавленной выписки, и без
+   них итог на секунду падал бы до цен из выписок, а позиции в других валютах выпадали из суммы.
+   Котировка годится 15 минут с момента, когда её получили: старше — это уже не «цена сейчас», и бумага
+   показывается по цене из выписки. Курсы ЕЦБ дневные и подписаны своей датой — их держим дольше. */
+const FRESH = 15 * 60000;
+let LIVE = null;
+function applyLive(P, L){
+  const now = Date.now(), fresh = m => Object.fromEntries(Object.entries(m || {}).filter(([, x]) => x && now - x._at < FRESH));
+  const quotes = fresh(L.quotes), options = fresh(L.options);
+  const oldest = Math.min(...[...Object.values(quotes), ...Object.values(options)].map(x => x._at));
+  // «Получены в …» — время самой старой из показанных котировок; «сервер ответил» — если есть что показать.
+  P.live = {quotes, fx: L.fx, fxDate: L.fxDate, fxSource: L.fxSource, at: isFinite(oldest) ? new Date(oldest).toISOString() : L.at,
+            ok: L.ok || Object.keys(quotes).length > 0};
+  P.positions.forEach(p => {
+    delete p.live; delete p.underlyingLive;
+    if(WL.eq(p) && p.ccy === "USD" && quotes[p.symbol] && quotes[p.symbol].price) {
+      const x = quotes[p.symbol]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time};
+    }
+    if(p.type === "option" && p.occ){
+      const x = options[p.occ], u = quotes[p.underlying];
+      if(x && !x.error && (x.mid != null || x.last != null)) p.live = {price: x.mid ?? x.last, bid: x.bid, ask: x.ask, delta: x.delta, time: u && u.time};
+      if(u && u.price) p.underlyingLive = u.price;
+      else if(x && !x.error && x.underlying_price) p.underlyingLive = x.underlying_price;   // цена базового актива из цепочки опционов
+    }
+  });
+}
+WL.applyLiveCache = P => { if(LIVE) applyLive(P, LIVE); };
+
 WL.fetchLive = async function(P){
+  const started = Date.now();
   const opts = P.positions.filter(p => p.type === "option" && p.occ);
   // CBOE — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем:
   // у Roche в франках тикер ROG, а в США ROG — это Rogers Corp.
@@ -169,19 +203,17 @@ WL.fetchLive = async function(P){
     const q2 = await getJSON("/market/quotes?symbols=" + missed.join(","));
     Object.entries((q2 && q2.quotes) || {}).forEach(([s, v]) => { if(v && v.price) quotes[s] = v; });
   }
-  P.live = {quotes, fx: fx && fx.rates ? fx.rates : null, fxDate: fx && fx.date, fxSource: fx && fx.source, at: new Date().toISOString(),
-    ok: !!((q && q.quotes) || (o && o.options) || (fx && fx.rates))};   // сервер данных ответил хоть чем-то
-  P.positions.forEach(p => {
-    if(WL.eq(p) && p.ccy === "USD" && quotes[p.symbol] && quotes[p.symbol].price) {
-      const x = quotes[p.symbol]; p.live = {price: x.price, prevClose: x.prev_close, time: x.time};
-    }
-    if(p.type === "option" && p.occ){
-      const x = options[p.occ], u = quotes[p.underlying];
-      if(x && !x.error && (x.mid != null || x.last != null)) p.live = {price: x.mid ?? x.last, bid: x.bid, ask: x.ask, delta: x.delta, time: u && u.time};
-      if(u && u.price) p.underlyingLive = u.price;
-      else if(x && !x.error && x.underlying_price) p.underlyingLive = x.underlying_price;   // цена базового актива из цепочки опционов
-    }
-  });
+  const ok = !!((q && q.quotes) || (o && o.options) || (fx && fx.rates));   // сервер данных ответил хоть чем-то
+  // Кэш дополняется, а не перезаписывается: бумаги, которых в этом запросе не было, сохраняют свои цены. Ошибка
+  // котировки прежнюю не затирает, но и не продлевает; ответ, пришедший позже более свежего, его не перекрывает.
+  const put = (was, got, usable) => { const m = Object.assign({}, was);
+    Object.entries(got).forEach(([k, v]) => { if(usable(v) && !(m[k] && m[k]._at > started)) m[k] = {...v, _at: started}; });
+    return m; };
+  LIVE = {quotes: put(LIVE && LIVE.quotes, quotes, v => v && v.price),
+    options: put(LIVE && LIVE.options, options, v => v && !v.error && (v.mid != null || v.last != null || v.underlying_price)),
+    fx: fx && fx.rates ? fx.rates : LIVE && LIVE.fx || null, fxDate: fx && fx.rates ? fx.date : LIVE && LIVE.fxDate,
+    fxSource: fx && fx.rates ? fx.source : LIVE && LIVE.fxSource, at: new Date().toISOString(), ok};
+  applyLive(P, LIVE);        // курсы из прошлого удачного запроса лучше, чем выпавшие из итога позиции в других валютах
 };
 /* История грузится по одной бумаге: CBOE ограничивает частоту. Неудачу не
    запоминаем как «истории нет» — при ограничении останавливаемся и повторим позже. */

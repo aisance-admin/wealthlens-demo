@@ -36,10 +36,63 @@ const HOME = location.pathname + t("", "?lang=en");
 const S = {docs: [], P: null, period: "1d", filter: "all", broker: "all", bench: "SPY", client: DEFAULT_CLIENT, showPast: false,
   rid: null, demo: false};
 
-const save = () => { if(S.demo) return; try{ localStorage.setItem(STORE, JSON.stringify({client: S.client, docs: S.docs, rid: S.rid})); }catch(e){} };
-const load = () => { try{ const v = JSON.parse(localStorage.getItem(STORE) || "null");
-  if(v && v.docs){ S.docs = v.docs; S.client = localName(v.client) || S.client; S.rid = v.rid || null; } }catch(e){} };
-const toast = msg => { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 3200); };
+/* Отчёт живёт в хранилище браузера, и открыт он может быть в нескольких вкладках. Пока одна вкладка занята
+   (читает выписки, ждёт ответа в окне), другая может его поменять. Тогда при сохранении правки складываются:
+   берём сохранённое там и добавляем то, что добавили или убрали здесь. Если там начали другой отчёт или этот
+   удалили («Новый отчёт»), эта вкладка его не перезаписывает и просит обновить страницу. */
+let saveWarned = false, seenRaw = null, seenNames = [], conflict = false, conflictWarned = false;
+const remember = raw => { seenRaw = raw; try{ const v = JSON.parse(raw || "null"); seenNames = (v && v.docs || []).map(d => d.fileName); }catch(e){ seenNames = []; } };
+const save = () => {
+  if(S.demo) return true;
+  try{
+    const raw = localStorage.getItem(STORE);
+    if(!conflict && raw !== seenRaw){
+      const other = JSON.parse(raw || "null"), mine = JSON.parse(seenRaw || "null");
+      const theirRid = other && other.rid || null, myRid = mine && mine.rid || null;
+      if(other && (other.docs || []).length && theirRid !== S.rid && theirRid !== myRid) conflict = true;
+      else if(!other && myRid && myRid === S.rid) conflict = true;
+      else if(other && theirRid === S.rid){
+        const removed = seenNames.filter(n => !S.docs.some(d => d.fileName === n));
+        const added = S.docs.filter(d => !seenNames.includes(d.fileName));
+        S.docs = (other.docs || []).filter(d => !removed.includes(d.fileName) && !added.some(a => a.fileName === d.fileName)).concat(added);
+        setTimeout(() => { if(!S.demo && S.docs.length){ renderNow(); liveSoon(); } }, 0);
+      }
+    }
+    if(conflict){
+      if(!conflictWarned){ conflictWarned = true; toast(t("В другой вкладке этот отчёт удалили или начали другой. Эта вкладка его не перезапишет — обновите страницу.",
+        "In another tab this report was deleted or a different one was started. This tab will not overwrite it — reload the page.")); }
+      return false;
+    }
+    const v = JSON.stringify({client: S.client, docs: S.docs, rid: S.rid});
+    localStorage.setItem(STORE, v); remember(v);
+    return true;
+  }catch(e){
+    // Молчать нельзя: после перезагрузки или возврата с оплаты отчёта не окажется.
+    if(!saveWarned){ saveWarned = true; toast(t("Браузер не сохраняет отчёт: закончилось место или хранилище запрещено. Не закрывайте вкладку, пока работаете с ним.",
+      "The browser is not saving the report: storage is full or blocked. Keep this tab open while you work with it.")); }
+    return false;
+  }
+};
+const load = () => { try{ const raw = localStorage.getItem(STORE), v = JSON.parse(raw || "null");
+  if(v && v.docs){ S.docs = v.docs; S.client = localName(v.client) || S.client; S.rid = v.rid || null; }
+  remember(raw); conflict = false; conflictWarned = false; }catch(e){} };
+// Вкладка была занята, а отчёт тем временем поменяли в другой: когда освободилась — складываем правки и показываем.
+function syncStore(){
+  if(S.demo || conflict || Q.running || MODALS.length) return;
+  let raw; try{ raw = localStorage.getItem(STORE); }catch(e){ return; }
+  if(raw !== seenRaw && S.docs.length) save();
+}
+// Уведомления стопкой: при нескольких файлах они шли одно поверх другого. Длинное держится дольше.
+const liveBox = (id, cls) => { let el = $("#" + id);
+  if(!el){ el = document.createElement("div"); el.id = id; el.className = cls; el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); document.body.appendChild(el); }
+  return el; };
+const toast = msg => {
+  const box = liveBox("toasts", "toasts no-print");
+  const el = document.createElement("div"); el.className = "toast"; el.textContent = msg;
+  box.appendChild(el);
+  while(box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => el.remove(), Math.min(9000, 3200 + String(msg).length * 30));
+};
 /* ── Платный отчёт ─────────────────────────────────────────────────────── */
 /* На своём домене полный отчёт открывается после оплаты; копия для партнёров (GitHub Pages)
    и локальная работа остаются бесплатными. Выписки по-прежнему разбираются в браузере:
@@ -57,26 +110,60 @@ const locked = () => PAYWALL && !S.demo && !(S.rid && unlocks()[S.rid]);
 const track = (name, params) => { if(WL.track) WL.track(name, params); };
 
 const hasPositions = () => !!(S.P && S.P.positions.length);
+let checkoutBusy = false;
+const setBuyDisabled = on => document.querySelectorAll("[data-buy]").forEach(b => { b.disabled = on; });
 async function openCheckout(source){
   // Отчёт без единой позиции продавать нельзя: человек заплатит за пустую страницу.
   if(!hasPositions()){ toast(t("В загруженных файлах не нашлось позиций — оплачивать пока нечего. Загрузите выписку о портфеле.",
     "No positions were found in the uploaded files, so there is nothing to pay for yet. Upload a portfolio statement.")); return; }
-  if(!S.rid){ S.rid = newRid(); save(); }
+  if(Q.running){ toast(t("Дождитесь, пока загрузятся выписки: оплачивается отчёт со всеми файлами.", "Wait until the statements finish uploading: you pay for the report with all its files.")); return; }
+  if(checkoutBusy) return;
+  // Оплатили в другой вкладке: полный отчёт уже открыт, второй раз платить не нужно.
+  const paid = () => { if(locked()) return false; checkoutBusy = false; setBuyDisabled(false); renderApp();
+    toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked")); return true; };
+  if(paid()) return;
+  if(!S.rid) S.rid = newRid();
+  // Отчёт, который браузер не сохраняет, после возврата с оплаты не найдётся: деньги спишутся, а открыть будет нечего.
+  if(!save()){ toast(conflict ? t("Сначала обновите страницу: в другой вкладке этот отчёт удалили или начали другой.", "Reload the page first: in another tab this report was deleted or a different one was started.")
+    : t("Браузер не сохраняет отчёт, поэтому после оплаты открыть его здесь не получится. Разрешите сайту хранить данные и попробуйте снова.",
+        "The browser is not saving the report, so it could not be opened here after payment. Allow this site to store data and try again.")); return; }
+  checkoutBusy = true; setBuyDisabled(true);
+  // Пока ждём сервер, отчёт могли начать заново, оплатить в другой вкладке, добавить в него файл или убрать последнюю выписку.
+  const rid = S.rid, stale = () => {
+    if(rid === S.rid && paid()) return true;
+    if(rid === S.rid && !Q.running && hasPositions()) return false;
+    checkoutBusy = false; setBuyDisabled(false);
+    if(rid === S.rid) toast(Q.running ? t("Дождитесь, пока загрузятся выписки: оплачивается отчёт со всеми файлами.", "Wait until the statements finish uploading: you pay for the report with all its files.")
+      : t("В отчёте не осталось позиций — оплачивать пока нечего.", "The report has no positions left, so there is nothing to pay for yet."));
+    return true;
+  };
+  // Оплату этого отчёта уже начинали (вкладку закрыли до возврата со Stripe): сначала проверяем её, чтобы не заплатить дважды.
+  let pend = null;
+  try{ pend = JSON.parse(localStorage.getItem(PENDING) || "null"); }catch(e){}
+  if(pend && pend.rid === rid && pend.sid && Date.now() - pend.at < 2 * 864e5){
+    let v = null;
+    try{ v = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(pend.sid)}&rid=${rid}`).then(x => x.json()); }catch(e){}
+    if(stale()) return;
+    if(v && v.ok){
+      unlockWith(pend.sid, v); checkoutBusy = false;
+      toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked"));
+      renderApp(); return;
+    }
+  }
   track("InitiateCheckout", {value: PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
-  const btns = [...document.querySelectorAll("[data-buy]")];
-  btns.forEach(b => { b.disabled = true; });
-  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid: S.rid, lang: WL.lang, path: location.pathname});
+  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname});
   let r = null;
   try{
     r = await fetch(PAY_API + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
       .then(x => x.json());
   }catch(e){}
+  if(stale()) return;
   if(r && r.url){
     // Запоминаем начатую оплату: если после неё вкладку закроют до возврата на сайт, отчёт откроется при следующем заходе.
-    try{ localStorage.setItem(PENDING, JSON.stringify({rid: S.rid, sid: r.id, at: Date.now()})); }catch(e){}
-    location.href = r.url; return;
+    try{ localStorage.setItem(PENDING, JSON.stringify({rid, sid: r.id, at: Date.now()})); }catch(e){}
+    leaving = true; location.href = r.url; return;
   }
-  btns.forEach(b => { b.disabled = false; });
+  checkoutBusy = false; setBuyDisabled(false);
   toast(r && r.error === "payments_not_configured"
     ? (SUPPORT ? t(`Оплата подключается. Напишите на ${SUPPORT} — откроем отчёт вручную.`, `Payments are being set up. Email ${SUPPORT} and we will unlock the report manually.`)
                : t("Оплата скоро заработает. Попробуйте, пожалуйста, чуть позже.", "Payments are coming soon. Please try again a little later."))
@@ -128,7 +215,7 @@ function renderPaywall(){
   const el = $("#paywall"); if(!el) return;
   const lock = locked();
   document.body.classList.toggle("is-locked", lock);
-  $("#printBtn").textContent = lock ? t(`Полный отчёт · ${PRICE.label}`, `Full report · ${PRICE.label}`) : t("Отчёт PDF", "PDF report");
+  $("#printBtn").textContent = lock && hasPositions() ? t(`Полный отчёт · ${PRICE.label}`, `Full report · ${PRICE.label}`) : t("Отчёт PDF", "PDF report");
   if(!lock){ el.hidden = true; el.innerHTML = ""; return; }
   if(!hasPositions()){
     el.hidden = false;
@@ -160,10 +247,11 @@ function renderPaywall(){
       </ul></div>
     <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>
       <button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button>
-      <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается в вашем браузере, выписки на сервере не хранятся.",
-        "Payment via Stripe. The report is built in your browser; statements are not stored on a server.")}</div>
+      <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
+        "Payment via Stripe. The report is built and kept in this browser, and statements are not stored on a server, so open the report here.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
         `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}
+      <div class="muted pw-note">${t("Выписки можно добавлять и после оплаты — платить снова не нужно.", "You can add statements after paying — no need to pay again.")}</div>
       ${SUPPORT ? `<div class="muted pw-note">${t("Вопрос по оплате:", "Payment question:")} ${supportLink()}</div>` : ""}</div>
   </div>`;
 }
@@ -182,7 +270,9 @@ const lockedInsight = x => `<article class="card insight lockcard"><span class="
 
 /* ── Загрузка ─────────────────────────────────────────────────────────── */
 function renderUpload(){
+  closeDrawer();
   $("#bar").hidden = true;
+  document.body.classList.add("on-upload");
   $("#app").innerHTML = `<div class="drop" id="drop">
     <div class="drop-mark" aria-hidden="true"></div>
     <div class="eyebrow">${ON_SITE ? `<a class="home" href="${t("/", "/en/")}">WealthLens</a>` : "WealthLens"} · ${INVESTOR ? t("сводный отчёт", "consolidated report") : t("портфель клиента", "client portfolio")}</div>
@@ -193,8 +283,8 @@ function renderUpload(){
     <button class="btn small" id="tplBtn" type="button">${t("Шаблон CSV", "CSV template")}</button></div>
     <p class="demo-link">${t(`<a href="?demo=1">Посмотреть пример отчёта</a> — вымышленный портфель у четырёх брокеров`,
       `<a href="?demo=1&amp;lang=en">See a sample report</a> — a fictional portfolio across four brokers`)}</p>
-    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере: наружу уходят только тикеры и названия компаний — для котировок и новостей. Если файл не прочитается, его таблицу можно распознать с помощью ИИ — только с вашего согласия и без имён и номеров счетов.",
-      "Or drop files here. Statements are processed in this browser: only tickers and company names leave it, to fetch quotes and news. If a file can't be read, its table can be read with AI — only with your consent, without names or account numbers.")}</p>
+    <p class="hint">${t("Или перетащите файлы сюда. Выписки разбираются в этом браузере: наружу уходят только тикеры и названия компаний — для котировок и новостей. Если файл не прочитается, его таблицу можно распознать с помощью ИИ — только с вашего согласия и без шапки выписки.",
+      "Or drop files here. Statements are processed in this browser: only tickers and company names leave it, to fetch quotes and news. If a file can't be read, its table can be read with AI — only with your consent and without the statement header.")}</p>
     ${SUPPORT ? `<p class="hint">${t(`Выписка не читается или нужен другой банк — напишите на ${supportLink()}. Сами выписки присылать не нужно, достаточно названия банка.`,
       `Statement not read, or need another bank? Email ${supportLink()}. No need to send the statement itself — the bank's name is enough.`)}</p>` : ""}
     <p class="hint lang-link"><a href="${esc(langUrl(EN ? "ru" : "en"))}" hreflang="${EN ? "ru" : "en"}" lang="${EN ? "ru" : "en"}">${EN ? "Русский" : "English"}</a></p>
@@ -208,7 +298,7 @@ function renderUpload(){
       <li><b>Swissquote</b> — account documents → portfolio statement (PDF).</li>
       <li><b>Other banks</b> — a portfolio statement in PDF, or a positions export (Positions, Holdings or Portfolio) to CSV or Excel. Scans cannot be read: the PDF text must be selectable.</li>`)}
     </ul></details>
-    <div class="progress" id="progress" aria-live="polite"></div></div>
+    </div>
     ${PAYWALL ? `<p class="drop-foot muted">${t(`Итог по счетам и первый вывод — бесплатно · полный отчёт ${PRICE.label} · оплата через Stripe`,
       `Account totals and the first finding are free · full report ${PRICE.label} · payment via Stripe`)}</p>` : ""}`;
   $("#pick").onclick = () => $("#file").click();
@@ -223,149 +313,432 @@ function renderUpload(){
 }
 if(INVESTOR) document.title = t("Мой портфель · WealthLens", "My portfolio · WealthLens");
 else if(EN) document.title = "Client portfolio · WealthLens";
-async function addFiles(files){
-  if(S.demo){ S.demo = false; S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; history.replaceState(null, "", HOME); }
-  const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
-  if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
-  const prog = $("#progress");
-  const pending = [];      // таблицы, которые надо разметить руками
-  const hard = [];         // PDF, которые здесь не прочитались: их можно отдать ИИ (с согласия) или разметить руками
-  const isPdf = f => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
-  for(const f of list){
-    if(prog) prog.insertAdjacentHTML("beforeend", `<div>${t("Читаю", "Reading")} ${esc(f.name)}…</div>`);
-    try{
-      const doc = await WL.parseFile(f);
-      if(doc.unknown){
-        if(doc.ops){ toast(t(`${f.name}: это выписка операций — в ней движение денег, а не позиции. Для отчёта нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
-          `${f.name}: this is a transaction statement — cash movements, not positions. The report needs a portfolio statement (Portfolio, Holdings, Valuation).`)); continue; }
-        if(doc.scan){ toast(t(`${f.name}: это скан — в PDF нет текста. Нужна электронная выписка из интернет-банка или выгрузка CSV или Excel.`,
-          `${f.name}: this is a scan with no text layer. Download an electronic statement from online banking, or a CSV or Excel export.`)); continue; }
-        const manual = doc.sheets ? {file: f, sheets: doc.sheets} : null;
-        if(doc.plain){ toast(t(`${f.name}: в PDF нет таблиц с суммами — похоже, это не выписка. Нужна выписка о портфеле (Portfolio, Holdings, Valuation).`,
-          `${f.name}: this PDF has no tables with amounts — it does not look like a statement. Upload a portfolio statement (Portfolio, Holdings, Valuation).`)); continue; }
-        if(isPdf(f)){ hard.push({file: f, manual}); continue; }
-        // Таблицу CSV или Excel, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
-        if(manual){ pending.push(manual); continue; }
-        toast(t(`${f.name}: формат выписки пока не распознаётся`, `${f.name}: this statement format is not supported yet`));
-        continue;
-      }
-      // Таблица из PDF другого банка. Уверенный разбор — сразу в отчёт: ничего не упало в сверке, у позиций есть
-      // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — ИИ или ручная разметка.
-      if(doc.fromPdf){
-        const m = doc.head.map, totals = doc.checks.filter(c => !c.count);
-        const valued = doc.positions.filter(p => p.value != null).length;
-        const sure = doc.checks.every(c => c.ok) && doc.positions.length >= 2 && m.value != null && (m.name != null || m.ticker != null) &&
-          (totals.some(c => c.ok) || valued >= doc.positions.length * 0.8);
-        if(!sure){ hard.push({file: f, manual: {file: f, sheets: doc.sheets, pre: {sheetIndex: doc.sheetIndex || 0, head: doc.head, pdf: true}}}); continue; }
-        doc.note = [doc.note, t("таблица найдена в PDF автоматически — если что-то не так, «Сопоставить колонки» ниже",
-          "table found in the PDF automatically — use “Map columns” below if something is off")].filter(Boolean).join(" · ");
-      }
-      addDoc(doc, f);
-    }catch(e){ toast(t(`${f.name}: не удалось прочитать файл`, `${f.name}: could not read the file`)); }
-  }
-  if(hard.length){
-    const choice = await askAi(hard);
-    if(choice === "ai"){
-      for(let i = 0; i < hard.length; i++){
-        const h = hard[i];
-        aiProgress(t(`Распознаю ${i + 1} из ${hard.length}: ${h.file.name}. Обычно это занимает до минуты.`,
-                     `Reading ${i + 1} of ${hard.length}: ${h.file.name}. This usually takes up to a minute.`));
-        try{
-          const doc = await aiRead(h.file);
-          addDoc(doc, h.file);
-          track("AiRecognized", {positions: doc.positions.length});
-          toast(t(`${h.file.name}: ИИ распознал ${doc.positions.length} ${WL.pl(doc.positions.length, ["позицию", "позиции", "позиций"], ["position", "positions"])}`,
-                  `${h.file.name}: AI read ${doc.positions.length} ${WL.pl(doc.positions.length, ["position", "positions"], ["position", "positions"])}`));
-        }catch(e){
-          track("AiFailed", {reason: String(e.message || e).slice(0, 40)});
-          toast(`${h.file.name}: ${aiErrorText(e.message)}`);
-          if(h.manual && !/^(transactions|rate_limited)$/.test(e.message)) pending.push(h.manual);
-        }
-      }
-      aiProgress(null);
-    } else if(choice === "manual") hard.forEach(h => { if(h.manual) pending.push(h.manual); });
-  }
-  const askMapping = () => { const p = pending.shift(); if(p) openMapper(p.file, p.sheets, p.pre || null, askMapping); };
-  if(!S.docs.length){ renderUpload(); askMapping(); return; }
-  if(!S.rid) S.rid = newRid();
-  track("Lead", {content_name: "statements_uploaded", documents: S.docs.length});
-  save();
-  await refresh();
-  askMapping();
+/* ── Окна поверх страницы ─────────────────────────────────────────────────
+   Одно правило для всех окон (ИИ, «тот же счёт», разметка колонок): Escape закрывает только верхнее,
+   Tab не уходит из окна, после закрытия фокус возвращается туда, где был. */
+const MODALS = [];
+document.addEventListener("keydown", e => {
+  const top = MODALS[MODALS.length - 1]; if(!top) return;
+  if(e.key === "Escape"){ e.preventDefault(); e.stopImmediatePropagation(); top.dismiss(); return; }
+  if(e.key !== "Tab") return;
+  const f = [...top.el.querySelectorAll("button, select, input, a[href], [tabindex]:not([tabindex='-1'])")]
+    .filter(x => !x.disabled && x.offsetParent !== null);
+  if(!f.length) return;
+  const i = f.indexOf(document.activeElement);
+  if(e.shiftKey && i <= 0){ e.preventDefault(); f[f.length - 1].focus(); }
+  else if(!e.shiftKey && (i === f.length - 1 || i < 0)){ e.preventDefault(); f[0].focus(); }
+}, true);
+function pushModal(wrap, dismiss){
+  const back = document.activeElement, entry = {el: wrap, dismiss};
+  MODALS.push(entry);
+  return () => {
+    const i = MODALS.indexOf(entry); if(i >= 0) MODALS.splice(i, 1);
+    wrap.remove();
+    if(back && back.focus && document.contains(back)) back.focus();
+    if(!MODALS.length) setTimeout(syncStore, 0);
+  };
 }
-function addDoc(doc, f){
-  if(doc.from === "sheet" && doc.sheets)
-    S_SHEETS[f.name] = {file: f, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head};
-  S.docs = S.docs.filter(d => d.fileName !== doc.fileName && !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
-  S.docs.push(doc);
-}
-
-/* ── Распознавание с помощью ИИ ───────────────────────────────────────────
-   Запасной путь для PDF, которые не прочитались в браузере, и только с согласия, которое спрашиваем
-   на каждую загрузку. Что уходит на сервер и что нет — см. WL.pdfAiText в parse.js. Ответ ИИ не
-   принимаем на веру: каждая сумма и количество должны найтись в тексте выписки, а итоги файла
-   сверяются тем же разбором, что и у таблиц. */
-function askAi(hard){
+let dlgSeq = 0;
+function dialog({eyebrow, title, body, buttons, cancel, read}){
   return new Promise(resolve => {
-    const canManual = hard.some(h => h.manual);
-    const wrap = document.createElement("div");
+    const wrap = document.createElement("div"), id = "dlg" + (++dlgSeq);
     wrap.className = "modal no-print";
-    wrap.innerHTML = `<div class="card aimodal" role="dialog" aria-modal="true" aria-labelledby="aiTitle">
-      <div class="eyebrow">${t("Распознавание", "Recognition")}</div>
-      <h2 id="aiTitle">${hard.length === 1 ? t("Файл не прочитался автоматически", "This file could not be read automatically")
-                                           : t("Не все файлы прочитались автоматически", "Some files could not be read automatically")}</h2>
-      <ul class="ai-files">${hard.map(h => `<li>${esc(h.file.name)}</li>`).join("")}</ul>
-      <p>${t(`Таблицу позиций можно распознать с помощью ИИ. Для этого текст таблиц из файла уйдёт на наш сервер и в модель Claude компании Anthropic.
-        Шапку документа с именем и адресом мы не отправляем, номера счетов, IBAN, почту и телефоны маскируем. Ни файл, ни текст не сохраняются.`,
-        `The positions table can be read with AI. The text of the file's tables will be sent to our server and to Anthropic's Claude model.
-        The document header with names and addresses is not sent; account numbers, IBANs, emails and phone numbers are masked. Neither the file nor the text is stored.`)}</p>
-      <div class="ai-actions" data-ai-actions>
-        <button class="btn primary" type="button" data-ai="ai">${t("Распознать с помощью ИИ", "Read with AI")}</button>
-        ${canManual ? `<button class="btn" type="button" data-ai="manual">${t("Разметить колонки вручную", "Map columns manually")}</button>` : ""}
-        <button class="btn" type="button" data-ai="cancel">${t("Отмена", "Cancel")}</button>
-      </div>
-      <p class="ai-status muted" data-ai-status hidden></p>
-      ${ON_SITE ? `<p class="muted ai-more"><a href="${t("/legal/privacy/", "/en/legal/privacy/")}" target="_blank" rel="noopener">${t("Как мы обращаемся с данными", "How we handle data")}</a></p>` : ""}
-    </div>`;
+    wrap.innerHTML = `<div class="card dialog" role="dialog" aria-modal="true" aria-labelledby="${id}" tabindex="-1">
+      ${eyebrow ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ""}<h2 id="${id}">${esc(title)}</h2>${body}
+      <div class="dlg-actions">${buttons.map(x => `<button class="btn${x.primary ? " primary" : ""}" type="button" data-dlg="${x.id}">${esc(x.label)}</button>`).join("")}</div></div>`;
     document.body.appendChild(wrap);
-    wrap.querySelector('[data-ai="ai"]').focus();
-    const done = choice => {
-      document.removeEventListener("keydown", onKey);
-      if(choice === "ai"){ wrap.querySelector("[data-ai-actions]").hidden = true; activeAi = wrap; resolve(choice); return; }
-      wrap.remove(); resolve(choice);
-    };
-    const onKey = e => { if(e.key === "Escape") done("cancel"); };
-    document.addEventListener("keydown", onKey);
-    wrap.addEventListener("click", e => { const b = e.target.closest("[data-ai]"); if(b) done(b.dataset.ai); });
+    let done = false;
+    const finish = choice => { if(done) return; done = true; const extra = read ? read(wrap) : null; close(); resolve({choice, extra}); };
+    const close = pushModal(wrap, () => finish(cancel));
+    wrap.addEventListener("click", e => { if(e.target === wrap) return finish(cancel); const x = e.target.closest("[data-dlg]"); if(x) finish(x.dataset.dlg); });
+    // Окна из очереди появляются, когда до файла дошла очередь, — возможно, посреди набора текста. Фокус на самом
+    // окне, а не на кнопке: случайный Enter не отправит выписку в ИИ и не заменит выписку.
+    wrap.querySelector(".dialog").focus();
   });
 }
-let activeAi = null;
-function aiProgress(text){
-  if(!activeAi) return;
-  if(text == null){ activeAi.remove(); activeAi = null; return; }
-  const st = activeAi.querySelector("[data-ai-status]");
-  st.hidden = false; st.innerHTML = `<span class="spin" aria-hidden="true"></span>${esc(text)}`;
+
+/* ── Загрузка выписок: одна очередь ───────────────────────────────────────
+   Выписки приносят пачкой или по одной — в том числе пока предыдущая ещё читается, ждёт решения или
+   распознаётся ИИ. Всё идёт через одну очередь: окна не накладываются, отчёт не пересобирается наперегонки,
+   а лоток загрузок показывает, что с каждым файлом. Прочитанная выписка сразу попадает в отчёт и
+   сохраняется, не дожидаясь остальных. Тот же файл второй раз не читается и не уходит в ИИ. */
+const Q = {items: [], running: false, gen: 0, seq: 0, lead: false, hidden: false, aiOk: false};
+const ACTIVE = /^(queued|reading|later|ask|ai|ready|mapping)$/;
+const isPdf = f => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+const AI_CACHE = new Map();            // хеш файла → ответ ИИ; только в памяти этой вкладки
+const AI_OK = "wl_ai_consent_v1";      // отчёты, где пользователь разрешил ИИ без вопроса
+// Разрешение действует, пока в отчёте есть выписки: пустой отчёт выглядит как новый — там снова спрашиваем.
+// В рамках одной загрузки галочка действует сразу, даже если ни одна выписка ещё не добавлена.
+const aiAllowed = () => { if(Q.aiOk) return true; try{ return !!(S.rid && S.docs.length && JSON.parse(localStorage.getItem(AI_OK) || "{}")[S.rid]); }catch(e){ return false; } };
+const setAiAllowed = on => { try{ const m = JSON.parse(localStorage.getItem(AI_OK) || "{}"); if(on) m[S.rid] = 1; else delete m[S.rid];
+  localStorage.setItem(AI_OK, JSON.stringify(m)); }catch(e){} };
+const MSG = {
+  ops: () => t("это выписка операций — в ней движение денег, а не позиции. Нужна выписка о портфеле (Portfolio, Holdings, Valuation)",
+               "this is a transaction statement — cash movements, not positions. Upload a portfolio statement (Portfolio, Holdings, Valuation)"),
+  scan: () => t("это скан без текста — нужна электронная выписка из интернет-банка или выгрузка CSV или Excel",
+                "this is a scan with no text — download an electronic statement or a CSV or Excel export"),
+  plain: () => t("в PDF нет таблиц с суммами — похоже, это не выписка", "this PDF has no tables with amounts — it does not look like a statement"),
+};
+
+async function fileHash(file){
+  try{
+    const d = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(d).slice(0, 12), x => x.toString(16).padStart(2, "0")).join("");
+  }catch(e){ return `${file.name}:${file.size}:${file.lastModified}`; }
 }
+// Имя файла — ключ документа во всём отчёте (позиции, сверки, разметка), поэтому у разных файлов оно разное.
+function uniqueName(name, free){
+  const taken = n => n !== free && S.docs.some(d => d.fileName === n);
+  if(!taken(name)) return name;
+  const m = /^(.*?)(\.[^.]+)?$/.exec(name);
+  let k = 2; while(taken(`${m[1]} (${k})${m[2] || ""}`)) k++;
+  return `${m[1]} (${k})${m[2] || ""}`;
+}
+// Выписка без количества и цены, но с датой в шапке — движение денег, а не позиции.
+function looksLikeOps(doc){
+  const sh = doc.sheets && doc.sheets[doc.sheetIndex || 0], h = doc.head;
+  if(!sh || !h || h.map.qty != null || h.map.price != null) return false;
+  return (sh.rows[h.row] || []).some(c => /(^|\s)(date|datum|дата|valuta|booking)(\s|$)/i.test(String(c ?? "").trim()));
+}
+/* Выписка того же счёта. Молча заменять нельзя — в одном банке бывают два счёта с одинаковыми бумагами (у супругов
+   одна модель портфеля); молча складывать тоже — тогда счёт посчитается дважды. Поэтому спрашиваем, а по сравнению
+   подсказываем ответ:
+   · те же бумаги и количества на ту же дату — это та же выписка;
+   · тот же банк, и бумаги в основном общие (по ISIN, тикеру или названию, от объединения обоих списков) — выписка
+     того же счёта; маленький счёт внутри большого так не совпадёт;
+   · банк неизвестен (выгрузка без названия банка) — нужно больше общих бумаг;
+   · бумаг слишком мало, чтобы сравнивать, но банк и имя файла или дата те же — тоже спрашиваем;
+   · журнал операций (Swissquote) бумаг не перечисляет — для него хватает того же банка. */
+const normName = x => String(x || "").toLowerCase().replace(/[^a-zа-яё0-9]/g, "");
+const tagOf = name => String(name || "").replace(/ \(\d+\)(?=\.[^.]+$)/, "").replace(/\.[^.]+$/, "").slice(0, 40);
+// Банк выписки для сравнения. У выгрузки без банка вместо его названия имя файла — такому «банку» не верим.
+const bankOf = d => { const known = WL.brokerByName && WL.brokerByName(String(d.broker || ""));
+  if(known) return normName(known);
+  return d.from === "sheet" && (d.broker === tagOf(d.fileName) || /·/.test(d.broker || "")) ? null : normName(d.brokerShort || d.broker) || null; };
+function sameAccount(doc){
+  const norm = normName, bank = bankOf;
+  const ids = p => [p.isin, p.occ, p.type === "cash" ? "CASH:" + (p.ccy || p.symbol) : p.symbol, p.name && "N:" + norm(p.name)].filter(Boolean).map(x => String(x).toUpperCase());
+  // Пары одинаковых бумаг: бумага совпадает с другой, если совпал хоть один признак. exact — ещё и количество со стоимостью.
+  const pairs = (a, b, exact) => { const used = new Set(); let m = 0;
+    a.forEach(p => { const k = ids(p);
+      const j = b.findIndex((q, i) => !used.has(i) && ids(q).some(x => k.includes(x)) &&
+        (!exact || ((p.qty ?? null) === (q.qty ?? null) && Math.abs((p.value || 0) - (q.value || 0)) < 0.01)));
+      if(j >= 0){ used.add(j); m++; } });
+    return m; };
+  const b2 = bank(doc);
+  if(doc.kind === "positions"){
+    let best = null;
+    S.docs.forEach(d => {
+      if(d.kind !== "positions") return;
+      const b1 = bank(d); if(b1 && b2 && b1 !== b2) return;
+      const all1 = doc.positions || [], all2 = d.positions || [];
+      let hit = null;
+      // Дата «на сегодня» (в файле её нет) у одной и той же выгрузки, добавленной в разные дни, разная — такие даты не сравниваем.
+      const sameDay = doc.asOf === d.asOf || (dateGuessed(doc) && dateGuessed(d));
+      if(sameDay && all1.length && all1.length === all2.length && pairs(all1, all2, true) === all1.length) hit = {doc: d, share: 1, identical: true, rank: 3};
+      else {
+        const h1 = all1.filter(p => p.type !== "cash"), h2 = all2.filter(p => p.type !== "cash");
+        const m = pairs(h1, h2), union = h1.length + h2.length - m, share = union ? m / union : 0, sameBank = !!(b1 && b1 === b2);
+        if(sameBank ? m >= 2 && share >= 0.5 : m >= 3 && share >= 0.7) hit = {doc: d, share, rank: 2};
+        // Сравнить по бумагам нечего или банк не указан: тогда подсказкой служит то же имя файла (выгрузка за другую неделю).
+        else if(sameBank ? (h1.length < 2 || h2.length < 2) && (tagOf(d.fileName) === tagOf(doc.fileName) || (d.asOf === doc.asOf && !dateGuessed(d) && !dateGuessed(doc)))
+                         : (!b1 || !b2) && tagOf(d.fileName) === tagOf(doc.fileName)) hit = {doc: d, share: null, few: true, noBank: !sameBank, rank: 1};
+      }
+      if(hit && (!best || hit.rank > best.rank || (hit.rank === best.rank && (hit.share || 0) > (best.share || 0)))) best = hit;
+    });
+    if(best) return best;
+  }
+  if(!b2 || (doc.kind !== "ledger" && doc.kind !== "positions")) return null;
+  const log = S.docs.find(d => (d.kind === "ledger" || doc.kind === "ledger") && (d.kind === "ledger" || d.kind === "positions") && bank(d) === b2);
+  return log ? {doc: log, share: null, log: true} : null;
+}
+const ALREADY = () => t("уже в отчёте", "already in the report");
+// Даты оценки в файле не было, и взята сегодняшняя (у выписок, сохранённых раньше, — только пометка в примечании).
+const dateGuessed = x => !!(x.asOfGuessed || /взята сегодняшняя|today's date used/.test(x.note || ""));
+const inReport = it => !!(it.hash && S.docs.some(d => d.hash === it.hash));
+
+function addFiles(files){
+  const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
+  if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
+  if(S.demo) leaveDemo();
+  list.forEach(f => Q.items.push({id: ++Q.seq, file: f, name: f.name, state: "queued", text: t("в очереди", "queued")}));
+  Q.hidden = false;
+  renderTray(true);
+  if(Q.running) readQueued(Q.gen);
+  runQueue();
+}
+/* Порядок: файлы читаются, как только пришли, — даже если открыто окно или ИИ читает другой файл. Прочитанное
+   без вопросов сразу попадает в отчёт. Окна (ИИ, разметка, «тот же счёт») — по одному и после того, как всё
+   пришедшее прочитано. Запрос к ИИ идёт в фоне, его результат добавляется, когда придёт ответ. */
+let wakeQueue = null, reading = null;
+function readQueued(gen){
+  if(reading && reading.gen === gen) return reading.p;
+  const job = reading = {gen};
+  job.p = (async () => {
+    try{ for(let it; gen === Q.gen && (it = Q.items.find(x => x.state === "queued"));) await processItem(it, gen); }
+    catch(e){ console.error(e); }
+    finally{ if(reading === job) reading = null; if(wakeQueue) wakeQueue(); }
+  })();
+  return job.p;
+}
+async function runQueue(){
+  if(Q.running){ if(wakeQueue) wakeQueue(); return; }
+  const gen = Q.gen;
+  Q.running = true; Q.lead = false; setBusy(true);
+  try{
+    while(gen === Q.gen){
+      if(Q.items.some(x => x.state === "queued")) readQueued(gen);
+      const it = !reading && (Q.items.find(x => x.state === "ready") || Q.items.find(x => x.state === "later"));
+      if(it){
+        if(it.state === "ready") await commit(it, it.ready, gen);
+        else if(it.later.kind === "hard") await resolveHard(it, it.later.manual, gen);
+        else await mapAndCommit(it, it.later.manual, gen);
+        continue;
+      }
+      const waits = [reading && reading.p, ...Q.items.filter(x => x.state === "ai" && x.job).map(x => x.job)].filter(Boolean);
+      if(!waits.length) break;
+      await Promise.race([...waits, new Promise(r => { wakeQueue = r; })]);     // дочитали, пришёл ответ ИИ или новые файлы
+      wakeQueue = null;
+    }
+  }finally{
+    if(gen === Q.gen){
+      Q.running = false; setBusy(false);
+      if(Q.items.some(x => x.state === "error")) Q.hidden = false;           // об ошибке скажем, даже если лоток прятали
+      renderTray(true);
+      syncStore();
+      if(S.docs.length) liveSoon(0);
+    }
+  }
+}
+function setState(it, state, text){
+  it.state = state; it.text = text;
+  renderTray(true);
+  if(!ACTIVE.test(state)) announce(`${it.name}: ${text}`);
+}
+
+async function processItem(it, gen){
+  setState(it, "reading", t("читаю…", "reading…"));
+  it.hash = await fileHash(it.file);
+  if(gen !== Q.gen) return;
+  if(inReport(it)) return setState(it, "skip", ALREADY());
+  if(Q.items.some(x => x !== it && x.hash === it.hash && ACTIVE.test(x.state))) return setState(it, "skip", t("этот файл уже в очереди", "this file is already in the queue"));
+  let doc;
+  try{ doc = await WL.parseFile(it.file); }catch(e){ return setState(it, "error", t("не удалось прочитать файл", "could not read the file")); }
+  if(gen !== Q.gen) return;
+  if(doc.unknown){
+    if(doc.ops) return setState(it, "error", MSG.ops());
+    if(doc.scan) return setState(it, "error", MSG.scan());
+    if(doc.plain) return setState(it, "error", MSG.plain());
+    const manual = doc.sheets ? {sheets: doc.sheets} : null;
+    if(isPdf(it.file)) return later(it, "hard", manual);
+    // Таблицу CSV или Excel, которую не удалось разметить самим, отдаём пользователю: он покажет колонки.
+    if(manual) return later(it, "map", manual);
+    return setState(it, "error", t("формат выписки пока не распознаётся", "this statement format is not supported yet"));
+  }
+  if(doc.from === "sheet" && !doc.fromPdf && looksLikeOps(doc)) return setState(it, "error", MSG.ops());
+  // Таблица из PDF другого банка. Уверенный разбор — сразу в отчёт: ничего не упало в сверке, у позиций есть
+  // названия и стоимость, итог файла сошёлся или стоимость есть почти у всех строк. Сомнительный — ИИ или ручная разметка.
+  if(doc.fromPdf){
+    const m = doc.head.map, totals = doc.checks.filter(c => !c.count);
+    const valued = doc.positions.filter(p => p.value != null).length;
+    const sure = doc.checks.every(c => c.ok) && doc.positions.length >= 2 && m.value != null && (m.name != null || m.ticker != null) &&
+      (totals.some(c => c.ok) || valued >= doc.positions.length * 0.8);
+    if(!sure) return later(it, "hard", {sheets: doc.sheets, pre: {sheetIndex: doc.sheetIndex || 0, head: doc.head, pdf: true}});
+    doc.note = [doc.note, t("таблица найдена в PDF автоматически", "table found in the PDF automatically")].filter(Boolean).join(" · ");
+  }
+  if(sameAccount(doc)){ it.ready = doc; return setState(it, "ready", t("прочитан — спрошу, тот ли это счёт", "read — will ask whether it is the same account")); }
+  return commit(it, doc, gen);
+}
+
+function later(it, kind, manual){
+  it.later = {kind, manual};
+  const more = Q.items.some(x => x.state === "queued"), unsure = !!(manual && manual.pre && manual.pre.pdf);
+  setState(it, "later", kind === "hard"
+    ? (unsure ? (more ? t("таблица найдена, но нужна проверка — после остальных файлов", "table found but needs a check — after the other files") : t("таблица найдена, но нужна проверка", "table found but needs a check"))
+      : more ? t("не прочитался автоматически — вернусь после остальных файлов", "not read automatically — back to it after the other files") : t("не прочитался автоматически", "not read automatically"))
+    : (more ? t("нужна разметка колонок — после остальных файлов", "needs column mapping — after the other files") : t("нужна разметка колонок", "needs column mapping")));
+}
+
+/* PDF, который не прочитался здесь: ИИ (с согласия) или ручная разметка колонок. Согласие спрашиваем на файл;
+   «не спрашивать для этого отчёта» запоминается по номеру отчёта и отключается в «Документах». */
+async function resolveHard(it, manual, gen){
+  if(inReport(it)) return setState(it, "skip", ALREADY());
+  let choice = "ai", remember = false;
+  if(!AI_CACHE.has(it.hash) && !aiAllowed()){
+    setState(it, "ask", t("ждёт вашего решения", "waiting for your decision"));
+    const r = await askAi(it, manual);
+    if(gen !== Q.gen) return;
+    choice = r.choice; remember = !!r.extra;
+  }
+  if(choice === "manual" && manual) return mapAndCommit(it, manual, gen);
+  if(choice !== "ai") return setState(it, "skip", t("пропущен", "skipped"));
+  if(remember){ Q.aiOk = true; if(!S.rid){ S.rid = newRid(); save(); } setAiAllowed(true); }
+  const ctl = it.abort = new AbortController();
+  setState(it, "ai", t("распознаю с помощью ИИ — обычно до минуты", "reading with AI — usually up to a minute"));
+  const cancelled = () => setState(it, "skip", t("распознавание отменено — файл не добавлен", "recognition cancelled — file not added"));
+  // Не ждём ответа: очередь тем временем читает остальные файлы, а результат добавится, когда придёт.
+  it.job = aiRead(it.file, it.hash, ctl.signal).then(doc => {
+    it.abort = null; it.job = null;
+    if(gen !== Q.gen) return;
+    if(ctl.signal.aborted) return cancelled();
+    track("AiRecognized", {positions: doc.positions.length});
+    it.ready = doc;
+    setState(it, "ready", t("распознано — добавляю в отчёт", "read — adding to the report"));
+  }, e => {
+    it.abort = null; it.job = null;
+    if(gen !== Q.gen) return;
+    const code = String(e && e.message || e);
+    track("AiFailed", {reason: code.slice(0, 40)});
+    if(code === "aborted") return cancelled();
+    if(manual && !/^(transactions|no_positions)$/.test(code)){
+      toast(`${it.name}: ${aiErrorText(code)}`);
+      it.later = {kind: "map", manual};
+      return setState(it, "later", t("ИИ не прочитал файл — нужна разметка колонок", "AI could not read the file — needs column mapping"));
+    }
+    setState(it, "error", aiErrorText(code));
+  }).catch(e => { console.error(e); });
+}
+async function askAi(it, manual){
+  const canManual = !!manual, unsure = !!(manual && manual.pre && manual.pre.pdf);
+  return dialog({
+    eyebrow: t("Распознавание", "Recognition"),
+    title: unsure ? t("Не уверены, что таблица прочитана верно", "We are not sure the table was read correctly")
+      : t("Файл не прочитался автоматически", "This file could not be read automatically"),
+    body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
+      ${unsure ? `<p>${t("Таблицу позиций в файле нашли, но колонки или итог не сошлись. Проверьте колонки сами — это останется в браузере — или распознайте таблицу с помощью ИИ.",
+        "We found the positions table, but the columns or the total did not add up. Check the columns yourself — this stays in the browser — or read the table with AI.")}</p>` : ""}
+      <p>${t(`С помощью ИИ текст страниц файла, начиная с первой таблицы, уйдёт на наш сервер и в модель Claude компании Anthropic.
+        Шапку первой страницы и строки, повторяющиеся на страницах, — обычно там имя, адрес и номер портфеля — не отправляем;
+        IBAN, номера счетов, почту и телефоны стараемся замаскировать. Наш сервер не сохраняет ни файл, ни текст.`,
+        `With AI, the text of the file's pages, starting from the first table, will be sent to our server and to Anthropic's Claude model.
+        The first-page header and lines repeated on every page — usually the name, address and portfolio number — are not sent;
+        we try to mask IBANs, account numbers, emails and phone numbers. Our server stores neither the file nor the text.`)}</p>
+      <label class="ai-remember"><input type="checkbox" data-remember> ${t("Не спрашивать снова для этого отчёта", "Don't ask again for this report")}</label>
+      ${ON_SITE ? `<p class="ai-more"><a href="${t("/legal/privacy/", "/en/legal/privacy/")}" target="_blank" rel="noopener">${t("Как мы обращаемся с данными", "How we handle data")}</a></p>` : ""}`,
+    buttons: [{id: "ai", label: t("Распознать с помощью ИИ", "Read with AI"), primary: true},
+              canManual && {id: "manual", label: t("Разметить колонки вручную", "Map columns manually")},
+              {id: "cancel", label: t("Пропустить файл", "Skip this file")}].filter(Boolean),
+    cancel: "cancel",
+    read: wrap => { const c = wrap.querySelector("[data-remember]"); return !!(c && c.checked); },
+  });
+}
+async function mapAndCommit(it, manual, gen){
+  if(inReport(it)) return setState(it, "skip", ALREADY());
+  setState(it, "mapping", t("ждёт разметки колонок", "waiting for column mapping"));
+  const doc = await openMapper(it.file, manual.sheets, manual.pre || null);
+  if(gen !== Q.gen) return;
+  if(!doc) return setState(it, "skip", t("разметка закрыта — файл не добавлен", "mapping closed — file not added"));
+  return commit(it, doc, gen);
+}
+async function commit(it, doc, gen){
+  it.ready = null;
+  if(inReport(it)) return setState(it, "skip", ALREADY());
+  doc.hash = it.hash;
+  const twin = sameAccount(doc);
+  let replace = null;
+  if(twin){
+    setState(it, "ask", twin.identical ? t("похоже, эта выписка уже в отчёте — ждёт решения", "looks like this statement is already in the report — waiting for your decision")
+      : t("похоже на выписку того же счёта — ждёт решения", "looks like the same account — waiting for your decision"));
+    const {choice} = await askReplace(twin, doc);
+    if(gen !== Q.gen) return;
+    if(!S.docs.includes(twin.doc) && choice !== "skip"){ replace = null; }                 // пока окно было открыто, выписку убрали
+    else if(choice === "replace") replace = twin.doc.fileName;
+    if(choice === "skip") return setState(it, "skip", twin.identical ? ALREADY() : t("не добавлен — выписка этого счёта уже в отчёте", "not added — this account is already in the report"));
+    if(inReport(it)) return setState(it, "skip", ALREADY());
+  }
+  doc.fileName = uniqueName(doc.fileName, replace);
+  it.name = doc.fileName;
+  const next = replace ? S.docs.map(d => d.fileName === replace ? doc : d) : S.docs.concat(doc);
+  // Отчёт с новой выпиской должен собираться: иначе после сохранения страница была бы пустой при каждом открытии.
+  try{ WL.build(next, TODAY); }catch(e){
+    return setState(it, "error", t("файл прочитан, но отчёт с ним не собирается — напишите нам", "the file was read but the report cannot be built with it — contact us"));
+  }
+  if(replace) delete S_SHEETS[replace];
+  S.docs = next;
+  if(doc.from === "sheet" && doc.sheets) S_SHEETS[doc.fileName] = {file: it.file, sheets: doc.sheets, sheetIndex: doc.sheetIndex, head: doc.head, hash: doc.hash};
+  if(!S.rid) S.rid = newRid();
+  save();
+  if(!Q.lead){ Q.lead = true; track("Lead", {content_name: "statements_uploaded", documents: S.docs.length}); }
+  const n = doc.kind === "ledger" ? null : doc.positions.length;
+  setState(it, "ok", (n == null ? t("журнал операций", "transaction log") : `${n} ${WL.pl(n, ["позиция", "позиции", "позиций"], ["position", "positions"])}`) +
+    ` · ${doc.brokerShort || doc.broker}` + (doc.fromAi ? t(" · распознано ИИ", " · read by AI") : "") + (replace ? t(" · заменила прежнюю", " · replaced the earlier one") : ""));
+  renderNow(); liveSoon();
+  flashDoc(doc.fileName);
+}
+function askReplace(twin, doc){
+  const old = twin.doc, guessed = dateGuessed(doc) || dateGuessed(old);
+  const newer = !guessed && doc.asOf > old.asOf, log = !!twin.log, same = !guessed && doc.asOf === old.asOf, pct = twin.share != null ? Math.round(twin.share * 100) : null;
+  const line = (label, d) => `<li><span class="k">${label}</span><span class="f">${esc(d.fileName)}</span>
+    <span class="m">${d.kind === "ledger" ? t(`журнал операций за ${fmt.date(d.periodFrom)}–${fmt.date(d.asOf)}`, `transaction log ${fmt.date(d.periodFrom)}–${fmt.date(d.asOf)}`)
+      : `${t("на", "as of")} ${fmt.date(d.asOf)} · ${d.positions.length} ${WL.pl(d.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`}</span></li>`;
+  const known = !!(bankOf(doc) && bankOf(old));
+  const KEEP = known ? t("Если это разные счета в одном банке, оставьте обе.", "If these are different accounts at the same bank, keep both.")
+    : t("Если это разные счета, оставьте обе.", "If these are different accounts, keep both.");
+  const text = twin.identical ? t("Те же бумаги с теми же количествами и суммами на ту же дату — это та же выписка. Второй раз её добавлять не нужно: всё посчиталось бы дважды.",
+      "The same holdings with the same quantities and amounts as of the same date — this is the same statement. Adding it again would count everything twice.")
+    : log ? t("Журнал операций показывает деньги и открытые позиции на свою дату, выписка — на свою. Если это один и тот же счёт, оставьте одну, более новую, — иначе деньги посчитаются дважды.",
+      "A transaction log shows cash and open positions as of its own date, and a statement as of its own. If this is the same account, keep only the newer one — otherwise the cash is counted twice.") + " " + KEEP
+    : twin.few && twin.noBank ? t("Банк в файлах не указан, но имя файла то же — похоже на новую выгрузку того же счёта. Если это один и тот же счёт, оставьте одну выписку — иначе всё посчитается дважды.",
+      "The files do not name the bank, but the file name is the same — this looks like a new export of the same account. If it is the same account, keep one statement — otherwise everything is counted twice.") + " " + KEEP
+    : twin.few ? t("Бумаг в выписках мало, и по ним не понять, один ли это счёт, но банк и имя файла или дата совпадают. Если это один и тот же счёт, оставьте одну выписку — иначе всё посчитается дважды.",
+      "There are too few holdings to tell whether this is the same account, but the bank and the file name or date match. If it is the same account, keep one statement — otherwise everything is counted twice.") + " " + KEEP
+    : same ? t(`Дата та же, бумаги совпадают на ${pct}%, но количества или суммы разные — скорее это другой счёт${known ? " в том же банке" : ""}. Если это исправленная выписка того же счёта, замените прежнюю.`,
+      `Same date and ${pct}% of the holdings match, but quantities or amounts differ — most likely another account${known ? " at the same bank" : ""}. If this is a corrected statement of the same account, replace the earlier one.`)
+    : t(`Бумаги совпадают на ${pct}%. Если это один и тот же счёт, в отчёте должна остаться одна выписка — иначе всё посчитается дважды.`,
+      `${pct}% of the holdings match. If this is the same account, keep only one statement — otherwise everything is counted twice.`) + " " + KEEP;
+  const B = {replaceNew: {id: "replace", label: t("Заменить более новой", "Replace with the newer one")}, replace: {id: "replace", label: t("Заменить прежнюю", "Replace the earlier one")},
+    both: {id: "both", label: t("Это разные счета", "Different accounts")}, skip: {id: "skip", label: t("Не добавлять", "Don't add")}, keepNew: {id: "skip", label: t("Оставить более новую", "Keep the newer one")}};
+  const order = twin.identical ? [B.skip, B.replace, B.both]
+    : guessed ? [B.replace, B.both, B.skip]
+    : same ? (log ? [B.replace, B.both, B.skip] : [B.both, B.replace, B.skip])
+    : newer ? [B.replaceNew, B.both, B.skip] : [B.keepNew, {id: "replace", label: t("Заменить на эту", "Replace with this one")}, B.both];
+  return dialog({
+    eyebrow: bankOf(doc) ? doc.brokerShort || doc.broker : t("Выгрузка без названия банка", "Export without a bank name"),
+    title: twin.identical ? t("Эта выписка уже есть в отчёте", "This statement is already in the report")
+      : same && !log && !twin.few ? (known ? t("Похоже на другой счёт в том же банке", "Looks like another account at the same bank") : t("Похоже на другой счёт", "Looks like another account"))
+      : t("Похоже, это выписка того же счёта", "This looks like a statement of the same account"),
+    body: `<ul class="dlg-list">${line(t("В отчёте", "In the report"), old)}${line(t("Новая", "New"), doc)}</ul><p>${text}</p>`,
+    buttons: order.map((b, i) => ({...b, primary: i === 0})),
+    cancel: "skip",
+  });
+}
+// Пометка об ИИ: откуда цифры и какие суммы не нашлись в тексте выписки. Остаётся и после ручной разметки колонок.
+const aiNote = d => [t("распознано ИИ по тексту таблиц — сверьте суммы с выпиской", "read by AI from the table text — check the amounts against the statement"),
+  d.aiDoubt && d.aiDoubt.length ? t(`не найдено в тексте выписки: ${d.aiDoubt.join(", ")}`, `not found in the statement text: ${d.aiDoubt.join(", ")}`) : ""].filter(Boolean).join(" · ");
 function aiErrorText(code){
   return ({
-    ai_not_configured: t("распознавание ИИ ещё подключается — разметьте колонки вручную или напишите нам", "AI recognition is not set up yet — map the columns manually or contact us"),
+    ai_not_configured: t("распознавание ИИ ещё подключается", "AI recognition is not set up yet"),
     rate_limited: t("слишком много распознаваний подряд — попробуйте через 10 минут", "too many recognitions in a row — try again in 10 minutes"),
     too_large: t("файл слишком большой для распознавания", "the file is too large to read"),
     transactions: t("это выписка операций — позиций в ней нет", "this is a transaction statement with no positions"),
     no_positions: t("ИИ не нашёл в файле позиций", "AI found no positions in the file"),
     unverified: t("часть сумм из ответа ИИ не нашлась в выписке — такой разбор не принят", "some amounts in the AI result are not in the statement, so it was rejected"),
+    timeout: t("ИИ не ответил за три минуты — попробуйте ещё раз", "AI did not answer within three minutes — try again"),
+    network: t("нет связи с сервером распознавания", "no connection to the recognition server"),
   })[code] || t("не удалось распознать файл", "could not read the file");
 }
-async function aiRead(file){
+async function aiRead(file, hash, signal){
+  // Отменить можно и пока готовится текст: тогда он никуда не уходит.
+  const cancelled = () => { if(signal && signal.aborted) throw new Error("aborted"); };
   const prep = await WL.pdfAiText(file);
+  cancelled();
   if(prep.numbers.size < 2) throw new Error("no_positions");        // отправлять нечего: в тексте нет чисел
   if(prep.text.length > 160000) throw new Error("too_large");
-  let r, data = {};
-  try{
-    r = await fetch(PAY_API + "/ai/extract", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: prep.text})});
-    data = await r.json();
-  }catch(e){ throw new Error("network"); }
-  if(!r.ok || data.error) throw new Error(data.error || "http_" + r.status);
+  let data = AI_CACHE.get(hash);
+  if(!data){
+    const ctl = new AbortController(), stop = () => ctl.abort();
+    let timedOut = false, r;
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, 180000);
+    if(signal) signal.addEventListener("abort", stop);
+    try{
+      r = await fetch(PAY_API + "/ai/extract", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text: prep.text}), signal: ctl.signal});
+      data = await r.json();
+    }catch(e){ throw new Error(signal && signal.aborted ? "aborted" : timedOut ? "timeout" : "network"); }
+    finally{ clearTimeout(timer); if(signal) signal.removeEventListener("abort", stop); }
+    if(!r.ok || data.error) throw new Error(data.error || "http_" + r.status);
+    AI_CACHE.set(hash, data);
+  }
+  cancelled();
   if(data.document_kind === "transactions") throw new Error("transactions");
   const ps = (data.positions || []).filter(p => p && p.name && (p.market_value != null || p.quantity != null));
   if(!ps.length) throw new Error("no_positions");
@@ -384,12 +757,87 @@ async function aiRead(file){
   const head = WL.sheetFind(rows);
   const doc = WL.sheetDoc(rows, head, file, ctx);
   doc.fromAi = true;
-  doc.note = [doc.note, t("распознано ИИ по тексту таблиц — сверьте суммы с выпиской", "read by AI from the table text — check the amounts against the statement"),
-    doubtful.length ? t(`не найдено в тексте выписки: ${doubtful.map(p => p.name).slice(0, 3).join(", ")}`, `not found in the statement text: ${doubtful.map(p => p.name).slice(0, 3).join(", ")}`) : ""]
-    .filter(Boolean).join(" · ");
+  doc.aiDoubt = doubtful.map(p => p.name).slice(0, 3);
+  doc.note = [doc.note, aiNote(doc)].filter(Boolean).join(" · ");
   doc.sheetIndex = 0; doc.head = head;
   Object.defineProperty(doc, "sheets", {value: [{name: t("Распознано ИИ", "AI result"), rows, ctx}], enumerable: false});
   return doc;
+}
+
+/* Лоток загрузок: что происходит с каждым файлом. Сам прячется, когда всё добавлено без ошибок;
+   с ошибкой остаётся, пока его не закроют. */
+let trayTimer = null;
+function renderTray(show){
+  let el = $("#uptray");
+  if(!el){
+    el = document.createElement("aside");
+    el.id = "uptray"; el.className = "uptray no-print"; el.hidden = true;
+    el.setAttribute("aria-label", t("Загрузка выписок", "Statement uploads"));
+    document.body.appendChild(el);
+    el.addEventListener("click", e => {
+      const x = e.target.closest("button"); if(!x) return;
+      if(x.dataset.tray === "close") closeTray();
+      if(x.dataset.tray === "add") $("#file").click();
+      if(x.dataset.cancel){ const it = Q.items.find(i => i.id === +x.dataset.cancel);
+        if(it && it.abort && !it.abort.signal.aborted){ it.abort.abort(); it.text = t("отменяю…", "cancelling…"); renderTray(); } }
+    });
+  }
+  const items = Q.items;
+  if(!items.length){ el.hidden = true; el.innerHTML = ""; return; }
+  const active = items.filter(x => ACTIVE.test(x.state)).length, ok = items.filter(x => x.state === "ok").length;
+  const bad = items.some(x => x.state === "error");
+  const title = active ? t(`Загружаю выписки · ${items.length - active} из ${items.length}`, `Uploading statements · ${items.length - active} of ${items.length}`)
+    : ok ? t(`Добавлено ${ok} из ${items.length}`, `Added ${ok} of ${items.length}`) : t("Ничего не добавлено", "Nothing was added");
+  el.innerHTML = `<div class="ut-head"><b>${esc(title)}</b><span class="spacer"></span>
+      ${active ? "" : `<button class="btn small" type="button" data-tray="add">${t("Добавить ещё", "Add more")}</button>`}
+      <button class="ut-x" type="button" data-tray="close" aria-label="${t("Скрыть", "Hide")}">×</button></div>
+    ${active ? `<div class="ut-bar"><i style="width:${Math.round((items.length - active) / items.length * 100)}%"></i></div>` : ""}
+    <ul class="ut-list">${items.map(x => `<li class="ut-item ${x.state}">
+      <span class="ut-ic" aria-hidden="true"></span>
+      <div class="ut-main"><div class="ut-name" title="${esc(x.name)}">${esc(x.name)}</div><div class="ut-text">${esc(x.text)}</div></div>
+      ${x.state === "ai" && x.abort && !x.abort.signal.aborted ? `<button class="btn small" type="button" data-cancel="${x.id}">${t("Отменить", "Cancel")}</button>` : ""}</li>`).join("")}</ul>`;
+  el.classList.toggle("busy", !!active);
+  if(show && !Q.hidden) el.hidden = false;
+  clearTimeout(trayTimer);
+  if(!active && !bad) trayTimer = setTimeout(closeTray, 8000);
+}
+function closeTray(){
+  const el = $("#uptray"); if(el) el.hidden = true;
+  // Пока загрузка идёт, лоток только прячется: готовые строки и ошибки остаются до конца.
+  if(Q.items.some(x => ACTIVE.test(x.state))){ Q.hidden = true; return; }
+  Q.hidden = false; Q.items = [];
+  if(el) el.innerHTML = "";
+}
+function announce(text){
+  const el = liveBox("srStatus", "sr-only");
+  el.textContent = "";
+  requestAnimationFrame(() => { el.textContent = text; });
+}
+function setBusy(on){ document.body.classList.toggle("uploading", on); }
+let flash = null;
+function flashDoc(fileName){ flash = {fileName, at: Date.now()}; keepFlash(); }
+function keepFlash(){
+  const left = flash ? 1600 - (Date.now() - flash.at) : 0;
+  if(left <= 0) return;
+  const card = [...document.querySelectorAll("#brokers .broker")].find(c => c.dataset.file === flash.fileName);
+  if(card){ card.style.animationDelay = `${left - 1600}ms`; card.classList.remove("flash"); void card.offsetWidth; card.classList.add("flash"); }
+}
+function cancelQueue(){
+  Q.gen++; Q.running = false; Q.aiOk = false; Q.hidden = false; setBusy(false);
+  if(wakeQueue){ wakeQueue(); wakeQueue = null; }
+  reading = null;
+  Q.items.forEach(x => { if(x.abort) x.abort.abort(); });
+  Q.items = [];
+  MODALS.slice().reverse().forEach(m => m.dismiss());
+  renderTray();
+}
+// Файл из демо продолжает свой сохранённый отчёт, если он есть, а не затирает его.
+function leaveDemo(){
+  S.demo = false; S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; S.P = null;
+  load();
+  history.replaceState(null, "", HOME);
+  $("#app").innerHTML = "";
+  if(S.docs.length) refresh(); else renderUpload();
 }
 
 /* ── Портфель ─────────────────────────────────────────────────────────── */
@@ -404,17 +852,53 @@ async function loadHistory(attempt = 0){
   if(Object.values(P.historyStatus || {}).includes("limited") && attempt < 6)
     historyTimer = setTimeout(() => loadHistory(attempt + 1), 90000);
 }
-async function refresh(){
-  S.P = WL.build(S.docs, TODAY);
+/* Отчёт пересобирается после каждой добавленной или убранной выписки. Сразу — с последними известными
+   ценами и историей, чтобы итог не прыгал; котировки подтягиваются следом одной волной. Выписка, с которой
+   отчёт не собирается (например, сохранённая старой версией), убирается с сообщением, а не ломает страницу. */
+let refreshGen = 0, liveTimer = null;
+function buildSafe(){
+  try{ return WL.build(S.docs, TODAY); }
+  catch(e){
+    const ok = [];
+    S.docs.forEach(d => { try{ WL.build(ok.concat(d), TODAY); ok.push(d); }
+      catch(err){ toast(t(`${d.fileName}: выписку не удалось показать, она убрана из отчёта`, `${d.fileName}: this statement could not be shown and was removed from the report`)); } });
+    S.docs = ok; save();
+    return WL.build(S.docs, TODAY);
+  }
+}
+function renderNow(){
+  refreshGen++;
+  if(!S.docs.length){ S.P = null; renderUpload(); return; }
+  const prev = S.P;
+  S.P = buildSafe();
+  if(!S.docs.length){ S.P = null; renderUpload(); return; }
+  if(prev){ S.P.history = prev.history || {}; S.P.historyStatus = prev.historyStatus; }
+  WL.applyLiveCache(S.P);
   renderApp();
-  await WL.fetchLive(S.P);
+}
+function liveSoon(ms = 600){
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(goLive, ms);
+}
+async function goLive(){
+  const my = ++refreshGen, P = S.P;
+  if(!P) return;
+  await WL.fetchLive(P);
+  if(my !== refreshGen || P !== S.P) return;
   renderApp();
+  if(WL.updateMarketHoldings) WL.updateMarketHoldings(P);
   await loadHistory();
+}
+async function refresh(){
+  renderNow();
+  if(S.P) await goLive();
 }
 function renderApp(){
   const P = S.P;
+  if(!P) return;
+  document.body.classList.remove("on-upload");
   $("#bar").hidden = false;
-  $("#client").value = S.client;
+  if(document.activeElement !== $("#client")) $("#client").value = S.client;
   const allOk = S.docs.every(d => d.checks.every(c => c.ok)), dates = [...new Set(S.docs.map(d => fmt.date(d.asOf)))];
   $("#docChips").innerHTML = S.docs.length > 2
     ? `<span class="pill ${allOk ? "ok" : "bad"}" title="${esc(S.docs.map(d => `${d.brokerShort} · ${fmt.date(d.asOf)}`).join("\n"))}">${S.docs.length} ${WL.pl(S.docs.length, ["выписка", "выписки", "выписок"], ["statement", "statements"])}${dates.length === 1 ? ` · ${dates[0]}` : ""}</span>`
@@ -436,7 +920,8 @@ function renderApp(){
         <label class="no-print muted">${t("Бенчмарк", "Benchmark")} <select id="bench">${WL.BENCH.map(b => `<option value="${b[0]}">${esc(b[1])}</option>`).join("")}</select></label></div>
         <div class="card chart-card" id="chart"></div></section>
       <section id="market"></section>
-      <section><div class="sec-h"><h2>${t("Документы и чего не хватает", "Documents and gaps")}</h2></div><div class="docs"><div class="card doc" id="docs"></div><div class="card miss" id="missing"></div></div></section>
+      <section><div class="sec-h"><h2>${t("Документы и чего не хватает", "Documents and gaps")}</h2><span class="spacer"></span>
+        <button class="btn small no-print" type="button" data-add-file>${t("Добавить выписку", "Add statement")}</button></div><div class="docs"><div class="card doc" id="docs"></div><div class="card miss" id="missing"></div></div></section>
       <section class="print-only" id="printNotes"></section>
       <footer class="app-foot no-print">${[`WealthLens`, SUPPORT && `${t("Поддержка", "Support")}: ${supportLink()}`,
         ON_SITE && `<a href="${t("/legal/terms/", "/en/legal/terms/")}">${t("Условия", "Terms")}</a>`,
@@ -448,6 +933,11 @@ function renderApp(){
   $("#bench").value = S.bench;
   renderHero(); renderInsights(); renderStructure(); renderTimeline(); renderControls(); renderPositions(); renderChart(); renderDocs();
   renderPaywall(); renderDemoBar();
+  setBuyDisabled(checkoutBusy);
+  // Открытая карточка позиции показывает свежие данные, а не цены до пересборки.
+  if(S.drawerId && $("#drawer").classList.contains("open")){
+    if(S.P.positions.some(x => x.id === S.drawerId)) openDrawer(S.drawerId, true); else closeDrawer();
+  }
 }
 
 function renderHero(){
@@ -487,7 +977,7 @@ function renderHero(){
   $("#brokers").className = `brokers n${byDoc.length}`;
   $("#brokers").innerHTML = byDoc.map(x => {
     const bad = x.d.checks.filter(c => !c.ok).length;
-    return `<div class="card broker"><div class="name">${esc(x.d.broker)}
+    return `<div class="card broker" data-file="${esc(x.d.fileName)}"><div class="name">${esc(x.d.broker)}
         ${x.d.from === "demo" && !bad ? "" : !bad && x.d.from === "sheet" && !x.d.checks.some(c => !c.count) ? `<span class="pill">${t("итог не сверен", "total not reconciled")}</span>`
           : `<span class="pill ${bad ? "bad" : "ok"}">${bad ? t(`не сошлось: ${bad}`, `mismatch: ${bad}`) : x.d.from === "sheet" ? t("сошлось с итогом файла", "matches file totals") : t("сверено с банком", "matches bank statement")}</span>`}
         ${x.stale ? `<span class="pill stale">${t(`${WL.days(x.d.asOf, P.today)} дн. назад`, `${WL.days(x.d.asOf, P.today)} days old`)}</span>` : x.live ? `<span class="pill live">${t("цены сейчас", "live prices")}</span>` : ""}</div>
@@ -498,6 +988,7 @@ function renderHero(){
         ${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</div>
       ${byDoc.length > 1 && assets > 0 && x.usd > 0 ? `<div class="share" title="${esc(t("доля в портфеле", "share of the portfolio"))}"><span class="trk"><i style="width:${Math.min(100, Math.max(x.usd / assets * 100, 1)).toFixed(1)}%"></i></span><b>${pctLabel(x.usd / assets * 100)}</b></div>` : ""}</div>`;
   }).join("");
+  keepFlash();
   $("#printTitle").textContent = t(`${S.client} — портфель`, `${S.client} — portfolio`);
   $("#printSub").textContent = t(`Отчёт на ${fmt.date(TODAY)} · ${S.docs.map(d => `${d.brokerShort}: ${d.kind === "ledger" ? "журнал до" : "выписка на"} ${fmt.date(d.asOf)}`).join(" · ")}`,
     `Report as of ${fmt.date(TODAY)} · ${S.docs.map(d => `${d.brokerShort}: ${d.kind === "ledger" ? "transaction log to" : "statement as of"} ${fmt.date(d.asOf)}`).join(" · ")}`);
@@ -564,19 +1055,25 @@ function renderTimeline(){
 }
 
 function renderControls(){
+  const lock = locked();
   const types = ["all", ...["stock", "fund", "bond", "note", "other", "option", "future", "cash"]
     .filter(t => S.P.positions.some(p => p.type === t))];
+  const brokerList = [...new Set(S.P.positions.map(p => p.brokerShort))];
+  // До оплаты видны три строки: фильтры по типу и брокеру открыли бы другие. После добавления или удаления
+  // выписки выбранного типа или брокера может не остаться — тогда показываем всё.
+  if(lock || !types.includes(S.filter)) S.filter = "all";
+  if(lock || (S.broker !== "all" && !brokerList.includes(S.broker))) S.broker = "all";
+  const off = x => lock && x !== "all" ? ` disabled title="${t("Фильтры — в полном отчёте", "Filters are in the full report")}"` : "";
   $("#periods").innerHTML = WL.PERIODS.map(p => `<button type="button" data-per="${p.id}" aria-pressed="${S.period === p.id}">${p.label}</button>`).join("");
-  $("#filters").innerHTML = types.map(ty => `<button type="button" data-f="${ty}" aria-pressed="${S.filter === ty}">${ty === "all" ? t("Все", "All") : TYPE_RU[ty]}</button>`).join("");
+  $("#filters").innerHTML = types.map(ty => `<button type="button" data-f="${ty}" aria-pressed="${S.filter === ty}"${off(ty)}>${ty === "all" ? t("Все", "All") : TYPE_RU[ty]}</button>`).join("");
   $("#periods").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.period = b.dataset.per; renderControls(); renderPositions(); renderChart(); };
-  $("#filters").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.filter = b.dataset.f; renderControls(); renderPositions(); };
+  $("#filters").onclick = e => { const b = e.target.closest("button"); if(!b || b.disabled) return; S.filter = b.dataset.f; renderControls(); renderPositions(); };
   // Портфель по умолчанию общий; разбивка по площадкам — по желанию, поэтому переключатель
   // появляется, только когда брокеров больше одного.
-  const brokers = [...new Set(S.P.positions.map(p => p.brokerShort))];
-  $("#venues").hidden = brokers.length < 2;
-  $("#venues").innerHTML = ["all", ...brokers].map(b =>
-    `<button type="button" data-b="${esc(b)}" aria-pressed="${S.broker === b}">${b === "all" ? t("Все площадки", "All venues") : esc(b)}</button>`).join("");
-  $("#venues").onclick = e => { const b = e.target.closest("button"); if(!b) return; S.broker = b.dataset.b; renderControls(); renderPositions(); };
+  $("#venues").hidden = brokerList.length < 2;
+  $("#venues").innerHTML = ["all", ...brokerList].map(b =>
+    `<button type="button" data-b="${esc(b)}" aria-pressed="${S.broker === b}"${off(b)}>${b === "all" ? t("Все площадки", "All venues") : esc(b)}</button>`).join("");
+  $("#venues").onclick = e => { const b = e.target.closest("button"); if(!b || b.disabled) return; S.broker = b.dataset.b; renderControls(); renderPositions(); };
 }
 function renderPositions(){
   S.cap = locked() ? 3 : Infinity;
@@ -650,12 +1147,29 @@ function renderDocs(){
             `transaction log, ${d.records.length} ${WL.pl(d.records.length, ["строка", "строки", "строк"], ["row", "rows"])}, ${d.trades.length} ${WL.pl(d.trades.length, ["сделка", "сделки", "сделок"], ["trade", "trades"])}${d.cancelled.length ? `, cancelled by the bank: ${d.cancelled.length}` : ""}`)
         : t(`${d.from === "sheet" ? "выгрузка таблицей" : "снимок"}, позиции на ${fmt.date(d.asOf)}`, `${d.from === "sheet" ? "spreadsheet export" : "snapshot"}, positions as of ${fmt.date(d.asOf)}`)}${d.note ? " · " + esc(d.note) : ""}</div>
       ${d.checks.map(c => `<div class="check"><span>${c.ok ? "✓" : "✗"} ${esc(c.label)}</span><span class="num ${c.ok ? "" : "down"}">${c.count ? t(`${c.parsed} из ${c.stated}`, `${c.parsed} of ${c.stated}`) : `${fmt.money(c.parsed, ccyOf(c))}${c.ok ? "" : " ≠ " + fmt.money(c.stated, ccyOf(c))}`}</span></div>`).join("")}
-      ${d.from === "sheet" && S_SHEETS[d.fileName] ? `<button class="btn small no-print" type="button" data-remap="${esc(d.fileName)}" style="margin-top:8px">${t("Сопоставить колонки", "Map columns")}</button>` : ""}
-    </div>`).join("");
-  $("#docs").onclick = e => {
+      <div class="doc-actions no-print">
+        ${d.from === "sheet" && S_SHEETS[d.fileName] && S_SHEETS[d.fileName].hash === d.hash ? `<button class="btn small" type="button" data-remap="${esc(d.fileName)}">${t("Сопоставить колонки", "Map columns")}</button>` : ""}
+        <button class="btn small ghost" type="button" data-remove="${esc(d.fileName)}">${t("Убрать из отчёта", "Remove from report")}</button>
+      </div>
+    </div>`).join("") + (aiAllowed() ? `<p class="muted ai-line no-print">${t("Нечитаемые PDF в этом отчёте распознаются ИИ без вопроса.", "Unreadable PDFs in this report are read by AI without asking.")}
+      <button class="linkbtn" type="button" data-ai-off>${t("Спрашивать снова", "Ask again")}</button></p>` : "");
+  $("#docs").onclick = async e => {
+    if(e.target.closest("[data-ai-off]")){ setAiAllowed(false); renderDocs(); toast(t("Перед распознаванием ИИ снова будем спрашивать", "We will ask before using AI again")); return; }
+    const rm = e.target.closest("[data-remove]");
+    if(rm) return removeDoc(rm.dataset.remove);
     const b = e.target.closest("[data-remap]"); if(!b) return;
-    const st = S_SHEETS[b.dataset.remap];
-    if(st) openMapper(st.file, st.sheets, st);
+    const key = b.dataset.remap, st = S_SHEETS[key], old = S.docs.find(d => d.fileName === key);
+    if(!st || !old || st.hash !== old.hash) return;
+    const doc = await openMapper(st.file, st.sheets, st, key);
+    if(!doc || !S.docs.includes(old)) return;
+    doc.fileName = key; doc.hash = old.hash;
+    // Цифры по-прежнему из ответа ИИ: пометка об этом и о суммах, не найденных в выписке, остаётся.
+    if(old.fromAi){ doc.fromAi = true; doc.aiDoubt = old.aiDoubt; doc.note = [aiNote(doc), doc.note].filter(Boolean).join(" · "); }
+    S.docs = S.docs.map(d => d === old ? doc : d);
+    S_SHEETS[key] = {file: st.file, sheets: st.sheets, sheetIndex: doc.sheetIndex, head: doc.head, hash: doc.hash};
+    save();
+    toast(`${key}: ${doc.positions.length} ${WL.pl(doc.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`);
+    const done = refresh(); focusDocs(); await done;
   };
   const M = WL.missing(P);
   $("#missing").innerHTML = `<div class="sec-h" style="margin:12px 0 4px"><span class="eyebrow">${t("Чего не хватает", "What's missing")}</span><span class="spacer"></span>
@@ -668,12 +1182,32 @@ function renderDocs(){
   };
 }
 
+const focusDocs = () => { const b = $("#docs") && $("#docs").closest("section").querySelector("[data-add-file]"); if(b) b.focus(); };
+// Неверную или лишнюю выписку можно убрать, не начиная отчёт заново: номер отчёта и оплата остаются.
+async function removeDoc(fileName){
+  const d = S.docs.find(x => x.fileName === fileName); if(!d) return;
+  const {choice} = await dialog({
+    title: t("Убрать выписку из отчёта?", "Remove this statement from the report?"),
+    body: `<ul class="dlg-list"><li><span class="f">${esc(d.fileName)}</span><span class="m">${esc(d.brokerShort || d.broker)} · ${t("на", "as of")} ${fmt.date(d.asOf)}</span></li></ul>
+      <p>${t("Позиции этой выписки уйдут из отчёта. Файл можно добавить снова в любой момент.", "Its positions will be removed from the report. You can add the file again at any time.")}</p>`,
+    buttons: [{id: "remove", label: t("Убрать", "Remove"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
+    cancel: "cancel",
+  });
+  if(choice !== "remove" || !S.docs.includes(d)) return;
+  S.docs = S.docs.filter(x => x !== d);
+  delete S_SHEETS[fileName];
+  if(!S.docs.length){ setAiAllowed(false); Q.aiOk = false; }
+  save();
+  toast(t(`${fileName}: убрана из отчёта`, `${fileName}: removed from the report`));
+  if(S.docs.length){ refresh(); focusDocs(); } else { S.P = null; renderUpload(); const b = $("#pick"); if(b) b.focus(); }
+}
+
 /* ── Ручное сопоставление колонок ──────────────────────────────────────── */
 /* Нужно, когда заголовки в выгрузке названы по-своему. Инструмент честно говорит, что
    не понял файл, и даёт разметить таблицу руками: это лучше, чем угадать и посчитать не
    то. Панель показывает начало файла, выбор строки заголовков и то, что получится. */
 const S_SHEETS = {};        // строки принесённых таблиц: только в памяти сессии
-function openMapper(file, sheets, pre, onDone){
+function openMapper(file, sheets, pre, shownName){ return new Promise(resolve => {
   let si = pre && pre.sheetIndex != null ? pre.sheetIndex : 0;
   // Если разметить сами не смогли, подсвечиваем самую заполненную из первых строк:
   // заголовки почти всегда именно она, а не титул отчёта сверху.
@@ -687,12 +1221,20 @@ function openMapper(file, sheets, pre, onDone){
   let head = pre && pre.head ? {row: pre.head.row, map: {...pre.head.map}} : autoHead(si);
   const wrap = document.createElement("div");
   wrap.className = "modal no-print";
+  wrap.setAttribute("role", "dialog"); wrap.setAttribute("aria-modal", "true"); wrap.setAttribute("aria-label", t("Сопоставьте колонки", "Map columns"));
   document.body.appendChild(wrap);
-  const close = () => { wrap.remove(); document.removeEventListener("keydown", onKey); if(onDone) onDone(); };
-  const onKey = e => { if(e.key === "Escape") close(); };
-  document.addEventListener("keydown", onKey);
+  let done = false;
+  const close = doc => { if(done) return; done = true; unmodal(); resolve(doc || null); };
+  const unmodal = pushModal(wrap, () => close(null));
 
   function render(){
+    const a = document.activeElement, keep = a && wrap.contains(a) ? (a.dataset.f ? `[data-f="${a.dataset.f}"]` : a.dataset.row != null ? `[data-row="${a.dataset.row}"]`
+      : a.dataset.x ? `[data-x="${a.dataset.x}"]` : a.dataset.sheet != null ? `[data-sheet="${a.dataset.sheet}"]` : null) : null;
+    draw();
+    const back = keep && wrap.querySelector(keep);
+    (back || wrap.querySelector("select, button")).focus();
+  }
+  function draw(){
     const rows = sheets[si].rows;
     const width = Math.max(1, ...rows.slice(0, 60).map(r => r.length));
     const colLabel = c => { const h = String((rows[head.row] || [])[c] ?? "").replace(/\s+/g, " ").trim();
@@ -708,6 +1250,7 @@ function openMapper(file, sheets, pre, onDone){
                             "no positions in this table — pick another table above or other columns")
           : `${d.positions.length} ${WL.pl(d.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}` +
           (d.checks.length > 1 ? (bad ? t(" · с итогом файла не сходится", " · does not match file totals") : t(" · сходится с итогом файла", " · matches file totals")) : "") +
+          (looksLikeOps({sheets, sheetIndex: si, head}) ? t(" · похоже на выписку операций: нужны позиции, а не движение денег", " · looks like a transaction list: positions are needed, not cash movements") : "") +
           (d.note ? " · " + d.note : "");
         preview = d.positions.slice(0, 5).map(p => `<tr><td>${esc(p.name)}</td><td>${esc(TYPE_RU[p.type] || p.type)}</td>` +
           `<td>${esc(p.symbol || "")}</td><td>${p.qty != null ? fmt.qty(p.qty) : ""}</td>` +
@@ -716,13 +1259,13 @@ function openMapper(file, sheets, pre, onDone){
     } else status = t("укажите наименование или тикер и количество или стоимость", "choose a name or ticker, and a quantity or value");
 
     wrap.innerHTML = `<div class="card mapper">
-      <div class="sec-h"><h2>${t("Сопоставьте колонки", "Map columns")}</h2><span class="aside">${esc(file.name)}</span>
+      <div class="sec-h"><h2>${t("Сопоставьте колонки", "Map columns")}</h2><span class="aside">${esc(shownName || file.name)}</span>
         <span class="spacer"></span><button class="btn small" data-x="close" type="button">${t("Закрыть", "Close")}</button></div>
       ${sheets.length > 1 ? `<div class="seg" style="margin-bottom:10px">${sheets.map((sh, i) =>
         `<button type="button" data-sheet="${i}" aria-pressed="${i === si}">${esc(sh.name)}</button>`).join("")}</div>` : ""}
       <p class="muted" style="margin:0 0 8px">${t("Нажмите строку с заголовками — всё, что ниже, считается данными.", "Click the header row. Everything below it is treated as data.")}</p>
-      <div class="table-wrap"><table class="prev">${rows.slice(0, 8).map((r, i) =>
-        `<tr class="hdr${i === head.row ? " on" : ""}" data-row="${i}">${Array.from({length: width},
+      <div class="table-wrap"><table class="prev" role="radiogroup" aria-label="${t("Строка заголовков", "Header row")}">${rows.slice(0, 8).map((r, i) =>
+        `<tr class="hdr${i === head.row ? " on" : ""}" data-row="${i}" tabindex="0" role="radio" aria-checked="${i === head.row}" aria-label="${t(`Строка ${i + 1} — заголовки`, `Row ${i + 1} as headers`)}">${Array.from({length: width},
           (_, c) => `<td>${esc(String(r[c] ?? "").slice(0, 22))}</td>`).join("")}</tr>`).join("")}</table></div>
       <div class="map-grid">${WL.sheetFields.map(([f, label]) => `<label>${label}
         <select data-f="${f}"><option value="">${t("— нет —", "— none —")}</option>${Array.from({length: width}, (_, c) =>
@@ -742,8 +1285,12 @@ function openMapper(file, sheets, pre, onDone){
     if(v === "") delete head.map[f]; else head.map[f] = +v;
     render();
   });
-  wrap.addEventListener("click", async e => {
-    if(e.target === wrap) return close();
+  wrap.addEventListener("keydown", e => {
+    const tr = e.target.closest && e.target.closest("tr.hdr");
+    if(tr && (e.key === "Enter" || e.key === " ")){ e.preventDefault(); tr.click(); }
+  });
+  wrap.addEventListener("click", e => {
+    if(e.target === wrap) return close(null);
     const tr = e.target.closest("tr.hdr");
     if(tr){ head = {row: +tr.dataset.row, map: WL.sheetMap(sheets[si].rows[+tr.dataset.row] || [])}; return render(); }
     const b = e.target.closest("button"); if(!b) return;
@@ -753,29 +1300,25 @@ function openMapper(file, sheets, pre, onDone){
       return render();
     }
     if(b.dataset.x === "auto"){ head = {row: head.row, map: WL.sheetMap(sheets[si].rows[head.row] || [])}; return render(); }
-    if(b.dataset.x === "close") return close();
+    if(b.dataset.x === "close") return close(null);
     if(b.dataset.x === "ok"){
       const doc = WL.sheetDoc(sheets[si].rows, head, file, sheets[si].ctx);
       if(!doc.positions.length){ toast(t("Позиций не нашлось — выберите другую таблицу или колонки", "No positions found — pick another table or columns")); return; }
       doc.sheetIndex = si; doc.head = {row: head.row, map: {...head.map}};
       doc.note = [doc.note, pre && pre.pdf ? t("таблица взята из PDF, колонки проверены", "table read from PDF, columns reviewed")
         : t("колонки размечены вручную", "columns mapped manually")].filter(Boolean).join(" · ");
-      S_SHEETS[file.name] = {file, sheets, sheetIndex: si, head: doc.head};
-      S.docs = S.docs.filter(d => d.fileName !== doc.fileName &&
-        !(d.broker === doc.broker && d.asOf === doc.asOf && d.periodFrom === doc.periodFrom));
-      S.docs.push(doc);
-      if(!S.rid) S.rid = newRid();
-      save(); close();
-      toast(`${file.name}: ${doc.positions.length} ${WL.pl(doc.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`);
-      await refresh();
+      Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
+      close(doc);
     }
   });
   render();
-}
+}); }
 
 /* ── Детали позиции ───────────────────────────────────────────────────── */
-function openDrawer(id){
-  const P = S.P, p = P.positions.find(x => x.id === id); if(!p) return;
+function openDrawer(id, quiet){
+  const P = S.P, p = P && P.positions.find(x => x.id === id); if(!p) return;
+  const hadFocus = $("#drawer").contains(document.activeElement);
+  S.drawerId = id;
   const cur = WL.current(P, p), k = WL.usd(P, p.ccy);
   const kv = [];
   const add = (label, v) => { if(v != null && v !== "") kv.push(`<dt>${label}</dt><dd>${v}</dd>`); };
@@ -807,9 +1350,9 @@ function openDrawer(id){
     <dl class="kv">${kv.join("")}</dl>${changes}${trades}
     <p class="basis">${t("Источник:", "Source:")} ${esc(p.source)}${cur.live ? t(" · текущие цены CBOE с задержкой", " · delayed CBOE prices") : ""}</p>`;
   $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden", "false");
-  $("#closeDrawer").onclick = closeDrawer; $("#closeDrawer").focus();
+  $("#closeDrawer").onclick = closeDrawer; if(!quiet || hadFocus) $("#closeDrawer").focus();
 }
-function closeDrawer(){ $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true"); }
+function closeDrawer(){ S.drawerId = null; $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true"); }
 
 /* ── Подписи из разметки: по-русски они уже в wealth.html ───────────────── */
 if(EN){
@@ -837,21 +1380,60 @@ document.addEventListener("click", e => {
 window.addEventListener("beforeprint", () => { if(locked()) track("PrintBlocked", {}); });
 $("#resetBtn").onclick = () => {
   if(S.demo){ location.href = HOME; return; }
-  if(!confirm(t("Убрать выписки этого клиента с этого компьютера?", "Remove this client's statements from this computer?"))) return;
-  S.docs = []; S.P = null; S.rid = null; localStorage.removeItem(STORE); renderUpload();
+  const paid = !!(S.rid && unlocks()[S.rid]);
+  const msg = (Q.running ? t("Загрузка ещё идёт — она остановится. ", "An upload is still running — it will stop. ") : "") +
+    t("Убрать выписки этого клиента с этого компьютера и начать новый отчёт?", "Remove this client's statements from this computer and start a new report?") +
+    (paid ? t(" Оплата за этот отчёт к новому не перейдёт; чтобы поправить этот отчёт, уберите лишнюю выписку в «Документах».",
+              " Payment for this report does not carry over; to fix this report, remove the wrong statement under “Documents”.") : "");
+  if(!confirm(msg)) return;
+  cancelQueue(); closeDrawer();
+  refreshGen++; clearTimeout(liveTimer);
+  S.docs = []; S.P = null; S.rid = null; S.client = DEFAULT_CLIENT; S.filter = "all"; S.broker = "all";
+  Object.keys(S_SHEETS).forEach(k => delete S_SHEETS[k]);
+  try{ localStorage.removeItem(STORE); }catch(e){}
+  remember(null); conflict = false; conflictWarned = false;
+  renderUpload();
 };
-$("#client").oninput = e => { S.client = e.target.value.trim() || DEFAULT_CLIENT; save(); renderHero(); };
+let nameTimer = null;
+$("#client").oninput = e => { S.client = e.target.value.trim() || DEFAULT_CLIENT; renderHero(); clearTimeout(nameTimer); nameTimer = setTimeout(save, 400); };
 $("#scrim").onclick = closeDrawer;
 document.addEventListener("keydown", e => {
   if(e.key === "Escape") closeDrawer();
   if(e.key === "Enter" && e.target.matches && e.target.matches("tr.row")) openDrawer(e.target.dataset.id);
 });
 document.addEventListener("click", e => { const r = e.target.closest && e.target.closest("tr.row"); if(r) openDrawer(r.dataset.id); });
-["dragenter", "dragover"].forEach(t => window.addEventListener(t, e => { e.preventDefault(); const d = $("#drop"); if(d) d.classList.add("over"); }));
-window.addEventListener("dragleave", e => { if(!e.relatedTarget){ const d = $("#drop"); if(d) d.classList.remove("over"); } });
-window.addEventListener("drop", e => { e.preventDefault(); const d = $("#drop"); if(d) d.classList.remove("over"); if(e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+/* Файлы можно бросить на любую часть страницы: на экране загрузки подсвечивается рамка, на отчёте — подсказка
+   поверх страницы. Во время загрузки новые файлы встают в очередь. */
+document.body.dataset.drop = t("Отпустите — добавим выписки в отчёт", "Drop to add the statements to the report");
+const hasFiles = e => !!(e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files"));
+let dragDepth = 0;
+const dragOff = () => { dragDepth = 0; document.body.classList.remove("dragging"); const d = $("#drop"); if(d) d.classList.remove("over"); };
+window.addEventListener("dragenter", e => { if(!hasFiles(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); const d = $("#drop"); if(d) d.classList.add("over"); });
+let dragTimer = null;
+window.addEventListener("dragover", e => { if(!hasFiles(e)) return; e.preventDefault(); clearTimeout(dragTimer); dragTimer = setTimeout(dragOff, 1000); });
+window.addEventListener("blur", () => dragOff());
+window.addEventListener("dragleave", e => { if(hasFiles(e) && --dragDepth <= 0) dragOff(); });
+window.addEventListener("drop", e => { if(!hasFiles(e)) return; e.preventDefault(); dragOff(); if(e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
 
-WL.app = {addFiles, state: S, locked, openCheckout};
+// Пока выписки читаются или ждут решения, уход со страницы их потеряет — браузер переспросит.
+let leaving = false;
+window.addEventListener("beforeunload", e => { if(!leaving && Q.items.some(x => ACTIVE.test(x.state))){ e.preventDefault(); e.returnValue = ""; } });
+// Со страницы оплаты вернулись кнопкой «Назад»: браузер восстановил вкладку как была, с заблокированными кнопками оплаты.
+window.addEventListener("pageshow", e => { if(!e.persisted) return; leaving = false; checkoutBusy = false; setBuyDisabled(false); if(S.P) renderApp(); });
+// Тот же отчёт открыт в другой вкладке и там его поменяли: показываем актуальное, а не перезаписываем чужие изменения.
+window.addEventListener("storage", e => {
+  if(S.demo) return;
+  if(e.key === UNLOCKS){ if(S.P) renderApp(); return; }
+  if(e.key !== STORE) return;
+  if(Q.running || MODALS.length){ toast(t("Отчёт изменили в другой вкладке. Обновите страницу, когда закончите здесь.", "The report was changed in another tab. Reload the page when you are done here.")); return; }
+  S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT;
+  Object.keys(S_SHEETS).forEach(k => delete S_SHEETS[k]);
+  load();
+  if(S.docs.length) refresh(); else { S.P = null; renderUpload(); }
+});
+
+liveBox("toasts", "toasts no-print"); liveBox("srStatus", "sr-only");
+WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
 (async function boot(){
   if(new URLSearchParams(location.search).has("demo") && WL.demoDocs){
     S.demo = true; S.client = t("Демо-клиент", "Demo client"); S.docs = WL.demoDocs(WL.lang);

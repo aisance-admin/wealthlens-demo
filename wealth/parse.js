@@ -509,8 +509,8 @@ WL.parseFile = async function(file){
 };
 /* ── Текст для распознавания ИИ ────────────────────────────────────────────
    Уходит на сервер только по согласию пользователя и только когда выписку не удалось прочитать здесь.
-   Не отправляем шапку первой страницы (имя и адрес клиента) и короткие строки, повторяющиеся на многих
-   страницах (колонтитулы с именем и номером портфеля); шапки таблиц оставляем — без них не понять колонки.
+   Не отправляем шапку первой страницы (имя и адрес клиента), её повторы дальше и короткие строки, повторяющиеся
+   на страницах (колонтитулы с именем и номером портфеля); шапки таблиц оставляем — без них не понять колонки.
    Номера счетов, IBAN, почту и телефоны маскируем; имя файла не уходит. Числа текста запоминаем, чтобы
    проверить ответ: сумма, которой нет в выписке, — выдумка, и такой разбор не принимаем. */
 const MASK = "▇";
@@ -531,8 +531,12 @@ function maskLine(line){
     .replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/g, MASK)                  // IBAN
     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, MASK)                                                       // почта
     .replace(/\+\d[\d ()-]{7,}\d/g, MASK)                                                             // телефон
+    .replace(/(^|[^\d.,'’])0\d{1,3}[ /]\d{2,4}(?: \d{2}){2}(?![\d.,])/g, (m, pre) => pre + MASK)         // телефон без кода страны: 044 123 45 67
     .replace(/\b\d{3,}(?:[./-]\d+){2,}\b/g, (m, at, str) =>                                            // номера счетов: 537630.120.6
       /^(19|20)\d\d[./-]\d{1,2}[./-]\d{1,2}$/.test(m) || /^,\d{2}/.test(str.slice(at + m.length)) ? m : MASK)
+    .replace(/\b\d{4,}-\d{2,}\b/g, m => /^(19|20)\d\d-(\d\d|(19|20)\d\d)$/.test(m) ? m : MASK)            // 123456-78, 1234-5678; год и месяц, годы — нет
+    .replace(/\b\d{2,3}-\d{5,}\b/g, MASK)                                                            // 12-345678
+    .replace(/\b0\d{5,}\b/g, (m, at, str) => /^[.,]\d/.test(str.slice(at + m.length)) ? m : MASK)         // номер с нулём впереди: 0123456
     .replace(/\b\d{8,}\b/g, (m, at, str) => /^[.,]\d{2}\b/.test(str.slice(at + m.length)) ? m : MASK); // длинные номера
 }
 WL.pdfAiText = async function(file){
@@ -542,12 +546,13 @@ WL.pdfAiText = async function(file){
   const top = p1.slice(0, first < 0 ? 12 : Math.min(first, 12)).map(l => l.text);
   // Шапку таблицы на незнакомом языке («Bezeichnung | Stück | Kurswert») мы не узнаём, и первой найдётся строка
   // с числами. Шапку и заголовок раздела прямо над ней отправляем: без них ИИ не поймёт колонок. Строки с цифрами
-  // (адрес, номер портфеля, дата) и длинный текст сюда не попадают.
+  // (адрес, номер портфеля, дата) сюда не попадают, а одиночная строка — только знакомое название раздела:
+  // над таблицей часто стоит имя владельца.
   let cut = first;
   if(first > 0 && !headKeyOf(lineCells(p1[first]))){
     while(cut > 0 && first - cut < 3){
       const L = p1[cut - 1];
-      if(/\d/.test(L.text) || !(lineCells(L).length >= 2 || L.text.length <= 24)) break;
+      if(/\d/.test(L.text) || !(lineCells(L).length >= 2 || SECTION.test(L.text.trim()))) break;
       cut--;
     }
   }
@@ -555,15 +560,29 @@ WL.pdfAiText = async function(file){
   const norm = t => t.replace(/\d/g, "#").replace(/\s+/g, " ").trim();
   const freq = new Map();
   pages.forEach(ls => new Set(ls.map(l => norm(l.text))).forEach(k => freq.set(k, (freq.get(k) || 0) + 1)));
+  // Строки шапки первой страницы, которые повторяются дальше (шапка на каждой странице), тоже не уходят, а имя из
+  // шапки («Mr Ivan Petrov») закрываем и внутри других строк. Берём только строки без сумм и без названий колонок:
+  // «Market value | 1 234 567» в сводке — подпись, а не имя, и в шапках таблиц её закрывать нельзя.
+  const headLines = p1.slice(0, cut < 0 ? p1.length : cut);
+  const head = new Set(headLines.map(L => norm(L.text)).filter(k => k.length >= 10));
+  const names = [...new Set(headLines.filter(L => !lineCells(L).some(isNumCell)).flatMap(L => lineCells(L).map(c => c.s.replace(/\s+/g, " ").trim()))
+    .filter(x => !/\d/.test(x) && x.length >= 5 && x.length <= 48 && /^\S+(\s+\S+){1,5}$/.test(x) && !SECTION.test(x) && !Object.keys(WL.sheetMap ? WL.sheetMap([x]) : {}).length))]
+    .sort((a, b) => b.length - a.length)
+    .map(x => new RegExp(`(^|[^\\p{L}\\p{N}])${x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}])`, "giu"));
+  const hide = line => names.reduce((a, re) => a.replace(re, (m, pre) => pre + MASK), line);
   const out = [], numbers = new Set();
   pages.forEach((ls, pi) => {
     const rows = [];
     ls.forEach((L, li) => {
       if(pi === 0 && (cut < 0 || li < cut)) return;                      // шапка документа
-      const cells = lineCells(L);
-      const running = cells.length <= 2 && !headKeyOf(cells) && pages.length >= 3 && freq.get(norm(L.text)) >= Math.max(2, pages.length * 0.34);
-      if(running) return;                                                 // колонтитул
-      rows.push(maskLine(cells.map(c => c.s).join(" | ")));
+      const cells = lineCells(L), k = norm(L.text);
+      if(!(pi === 0 && li < first)){                                      // шапку первой таблицы оставляем как есть
+        if(head.has(k) && !SECTION.test(L.text.trim())) return;           // повтор шапки документа
+        // Колонтитул: строка без сумм, которая есть на многих страницах. Строки с суммами («Итого») остаются.
+        if(k.length >= 8 && !headKeyOf(cells) && !cells.some(isNumCell) && !SECTION.test(L.text.trim()) &&
+          pages.length >= 2 && freq.get(k) >= Math.max(2, pages.length * 0.34)) return;
+      }
+      rows.push(hide(maskLine(cells.map(c => c.s).join(" | "))));
     });
     if(!rows.length) return;
     out.push(`--- page ${pi + 1} ---`, ...rows);

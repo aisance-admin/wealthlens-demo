@@ -203,6 +203,28 @@ function renderHoldingNews(P){
   el.innerHTML = items.length ? items.map(x => newsItem(x.it, x.sym)).join("") : `<li class="muted">${WL.t("За неделю новостей не нашлось.", "No news in the past week.")}</li>`;
 }
 
+/* Новости по бумагам клиента. Выписки добавляют по одной, поэтому набор тикеров меняется после первого
+   показа: тогда новости загружаются заново. MP — портфель, по которому они показаны сейчас. */
+let MP = null;
+const holdKey = P => holdingTickers(P).map(x => x.sym).sort().join(",");
+function loadHoldings(P){
+  const ticks = holdingTickers(P), key = holdKey(P);
+  if(!ticks.length) return Promise.resolve();
+  // Пока шёл запрос, портфель могли пересобрать с теми же бумагами: ответ по-прежнему подходит.
+  return getJSON("/market/news?symbols=" + ticks.map(x => x.sym).join(",") +
+      "&q=" + ticks.map(x => encodeURIComponent(queryWord(x.sym, x.name).replace(/,/g, " "))).join(","))
+    .then(r => { if(!MP || holdKey(MP) !== key) return; M.holdings = r && r.symbols ? r : {symbols: {}, failed: true}; renderHoldingNews(MP); });
+}
+WL.updateMarketHoldings = function(P){
+  if(!document.querySelector("#holdNews")) return;
+  const changed = !MP || holdKey(MP) !== holdKey(P);
+  MP = P;
+  if(!changed) return;
+  M.holdings = null; M.tick = "all";
+  renderHoldingNews(P);
+  loadHoldings(P);
+};
+
 async function loadAll(P, {quotesOnly = false} = {}){
   const jobs = [getJSON("/market/quotes?symbols=" + QUOTES.map(q => q.sym).join(",")).then(r => {
     if(r && r.quotes){ M.quotes = r.quotes; M.quotesAt = new Date(); M.quotesFailed = false; } else if(!M.quotesAt) M.quotesFailed = true;
@@ -210,10 +232,7 @@ async function loadAll(P, {quotesOnly = false} = {}){
     getJSON("/fx?base=USD").then(r => { if(r && r.rates){ M.fx = r.rates; M.fxDate = r.date; } renderQuotes(); })];
   if(!quotesOnly){
     jobs.push(getJSON("/market/news").then(r => { M.market = r || {items: [], errors: [WL.t("все источники", "all sources")]}; renderMarketNews(); }));
-    const ticks = holdingTickers(P);
-    if(ticks.length) jobs.push(getJSON("/market/news?symbols=" + ticks.map(t => t.sym).join(",") +
-        "&q=" + ticks.map(t => encodeURIComponent(queryWord(t.sym, t.name).replace(/,/g, " "))).join(","))
-      .then(r => { M.holdings = r && r.symbols ? r : {symbols: {}, failed: true}; renderHoldingNews(P); }));
+    jobs.push(loadHoldings(P));
   }
   await Promise.all(jobs);
 }
@@ -245,16 +264,17 @@ WL.renderMarket = function(el, P){
           "Google News for the past week, excluding automated stories about funds buying or selling shares. Only tickers and company names are sent out for the search.")}</div>
       </div>
     </div>`;
+  MP = P; M.holdings = null; M.tick = "all";
   renderQuotes(); renderMarketNews(); renderHoldingNews(P);
   el.onclick = e => {
     const b = e.target.closest("button"); if(!b) return;
-    if(b.id === "mktRefresh"){ M.quotes = null; renderQuotes(); loadAll(P); }
+    if(b.id === "mktRefresh"){ M.quotes = null; renderQuotes(); loadAll(MP); }
     if(b.dataset.lang){ M.lang = b.dataset.lang; M.showAllMarket = false; renderMarketNews(); }
     if(b.dataset.more === "market"){ M.showAllMarket = true; renderMarketNews(); }
-    if(b.dataset.tick){ M.tick = b.dataset.tick; renderHoldingNews(P); }
+    if(b.dataset.tick){ M.tick = b.dataset.tick; renderHoldingNews(MP); }
   };
   loadAll(P);
   clearInterval(timer);
-  timer = setInterval(() => { if(!document.hidden) loadAll(P, {quotesOnly: true}); }, 5 * 60000);
+  timer = setInterval(() => { if(!document.hidden) loadAll(MP, {quotesOnly: true}); }, 5 * 60000);
 };
 })();
