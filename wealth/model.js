@@ -16,17 +16,22 @@ const shiftBiz = (d, n) => { let x = new Date(d), k = 0; while(k < Math.abs(n)){
 const nthWeekday = (y, m, wd, n) => { const f = new Date(Date.UTC(y, m - 1, 1)); return new Date(Date.UTC(y, m - 1, 1 + (wd - f.getUTCDay() + 7) % 7 + 7 * (n - 1))); };
 const yearOf = (code, ref) => { if(code.length === 2) return 2000 + +code; let y = Math.floor(ref / 10) * 10 + +code; if(y < ref - 5) y += 10; if(y > ref + 5) y -= 10; return y; };
 const plural = (n, a, b, c) => { const m = Math.abs(n) % 100, k = m % 10; return m > 10 && m < 20 ? c : k === 1 ? a : k > 1 && k < 5 ? b : c; };
+const EN = WL.lang === "en", t = WL.t || ((ru, en) => ru);
+const MONTH_EN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MON_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Форма слова по числу: WL.pl(n, ["позиция", "позиции", "позиций"], ["position", "positions"])
+const pl = (n, ru, en) => EN ? (Math.abs(n) === 1 ? en[0] : en[1]) : plural(n, ru[0], ru[1], ru[2]);
 
-/* ── Форматы: русская запись чисел, валюта впереди ─────────────────────── */
-const nf = (a, b) => new Intl.NumberFormat("ru-RU", {minimumFractionDigits: a, maximumFractionDigits: b});
+/* ── Форматы: запись чисел по языку интерфейса, валюта впереди ─────────── */
+const nf = (a, b) => new Intl.NumberFormat(EN ? "en-US" : "ru-RU", {minimumFractionDigits: a, maximumFractionDigits: b});
 const SYM = {USD: "$", EUR: "€", CHF: "CHF ", GBP: "£"};
 const fmt = WL.fmt = {
   money: (v, ccy = "USD", dec = 2) => v == null ? "—" : `${v < 0 ? "−" : ""}${SYM[ccy] || ccy + " "}${nf(dec, dec).format(Math.abs(v))}`,
   short: (v, ccy = "USD") => {
     if(v == null) return "—";
     const a = Math.abs(v), s = v < 0 ? "−" : "", c = SYM[ccy] || ccy + " ";
-    if(a >= 1e6) return `${s}${c}${nf(1, 2).format(a / 1e6)} млн`;
-    if(a >= 1e3) return `${s}${c}${nf(0, 1).format(a / 1e3)} тыс.`;
+    if(a >= 1e6) return `${s}${c}${nf(1, 2).format(a / 1e6)}${EN ? "M" : " млн"}`;
+    if(a >= 1e3) return `${s}${c}${nf(0, 1).format(a / 1e3)}${EN ? "K" : " тыс."}`;
     return `${s}${c}${nf(0, 2).format(a)}`;
   },
   px: v => v == null ? "—" : nf(2, v < 1 ? 4 : 2).format(v),
@@ -34,16 +39,18 @@ const fmt = WL.fmt = {
   qty: v => v == null ? "—" : (v < 0 ? "−" : "") + nf(0, 4).format(Math.abs(v)),
   pct: (v, dec = 1) => v == null || !isFinite(v) ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${nf(dec, dec).format(Math.abs(v))}%`,
   signed: (v, ccy = "USD") => v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt.short(Math.abs(v), ccy)}`,
-  date: s => s ? s.split("-").reverse().join(".") : "—",
+  date: s => !s ? "—" : EN ? `${+s.slice(8, 10)} ${MON_EN[+s.slice(5, 7) - 1]} ${s.slice(0, 4)}` : s.split("-").reverse().join("."),
+  // десятичная дробь без знака: «3,8» / «3.8»
+  dec: (v, d = 1) => v == null || !isFinite(v) ? "—" : nf(d, d).format(v),
 };
-WL.days = days; WL.plural = plural;
+WL.days = days; WL.plural = plural; WL.pl = pl;
 
 /* ── Календарь контрактов CME: даты без учёта биржевых праздников ──────── */
 const TREASURY = {
-  ZN: {name: "10-летние казначейские облигации США", short: "10-летние UST", mult: 1000, ltd: (y, m) => shiftBiz(lastBiz(y, m), -7)},
-  ZB: {name: "30-летние казначейские облигации США", short: "30-летние UST", mult: 1000, ltd: (y, m) => shiftBiz(lastBiz(y, m), -7)},
-  ZF: {name: "5-летние казначейские облигации США", short: "5-летние UST", mult: 1000, ltd: (y, m) => lastBiz(y, m)},
-  ZT: {name: "2-летние казначейские облигации США", short: "2-летние UST", mult: 2000, ltd: (y, m) => lastBiz(y, m)},
+  ZN: {name: t("10-летние казначейские облигации США", "10-year US Treasury notes"), short: t("10-летние UST", "10-year UST"), mult: 1000, ltd: (y, m) => shiftBiz(lastBiz(y, m), -7)},
+  ZB: {name: t("30-летние казначейские облигации США", "30-year US Treasury bonds"), short: t("30-летние UST", "30-year UST"), mult: 1000, ltd: (y, m) => shiftBiz(lastBiz(y, m), -7)},
+  ZF: {name: t("5-летние казначейские облигации США", "5-year US Treasury notes"), short: t("5-летние UST", "5-year UST"), mult: 1000, ltd: (y, m) => lastBiz(y, m)},
+  ZT: {name: t("2-летние казначейские облигации США", "2-year US Treasury notes"), short: t("2-летние UST", "2-year UST"), mult: 2000, ltd: (y, m) => lastBiz(y, m)},
 };
 const firstNotice = (y, m) => m === 1 ? lastBiz(y - 1, 12) : lastBiz(y, m - 1);
 function optionSpec(root, y, m){
@@ -55,8 +62,8 @@ function optionSpec(root, y, m){
   if((r = /^ZN(\d)$/.exec(root))) return {fut: "ZN", expiry: nthWeekday(y, m, 5, +r[1])};
   if((r = /^WY(\d)$/.exec(root))) return {fut: "ZN", expiry: nthWeekday(y, m, 3, +r[1])};
   if((r = /^VY(\d)$/.exec(root))) return {fut: "ZN", expiry: nthWeekday(y, m, 1, +r[1])};
-  if(root === "EUU") return {name: "фьючерс евро/доллар", expiry: new Date(+nthWeekday(y, m, 3, 3) - 12 * DAY)};
-  if(root === "NESN") return {name: "акции Nestlé (Eurex)", expiry: nthWeekday(y, m, 5, 3)};
+  if(root === "EUU") return {name: t("фьючерс евро/доллар", "EUR/USD future"), expiry: new Date(+nthWeekday(y, m, 3, 3) - 12 * DAY)};
+  if(root === "NESN") return {name: t("акции Nestlé (Eurex)", "Nestlé shares (Eurex)"), expiry: nthWeekday(y, m, 5, 3)};
   return null;
 }
 
@@ -71,7 +78,7 @@ function fromLedger(d){
     const commission = round2(ts.reduce((a, t) => a + t.commission + t.exchFees, 0));
     const first = ts.map(t => t.date).sort()[0];
     const base = {broker: d.broker, brokerShort: d.brokerShort, ccy: t0.ccy, code: label, trades: ts, commission,
-                  purchaseDate: first, purchaseNote: "первая сделка", asOf: d.asOf, priceDate: d.asOf, source: d.fileName};
+                  purchaseDate: first, purchaseNote: t("первая сделка", "first trade"), asOf: d.asOf, priceDate: d.asOf, source: d.fileName};
     if(t0.kind === "future"){
       if(!net || !m) continue;
       const spec = TREASURY[t0.root] || {name: t0.root, short: t0.root, mult: null, ltd: lastBiz};
@@ -79,30 +86,30 @@ function fromLedger(d){
       const vm = d.vm.filter(v => v.contract === label && v.to != null && !v.closing);
       const settle = vm.length ? vm[vm.length - 1].to : null;
       const id = "SQ:" + label;
-      out.push({...base, id, type: "future", root: t0.root, name: `Фьючерс на ${spec.short} · ${MONTH_RU[m - 1]} ${y}`,
+      out.push({...base, id, type: "future", root: t0.root, name: t(`Фьючерс на ${spec.short} · ${MONTH_RU[m - 1]} ${y}`, `${spec.short} future · ${MONTH_EN[m - 1]} ${y}`),
         qty: net, price: settle, multiplier: spec.mult, value: null,
-        valueNote: "переоценка ежедневно зачитывается деньгами (вариационная маржа)",
+        valueNote: t("переоценка ежедневно зачитывается деньгами (вариационная маржа)", "revaluation is settled in cash daily (variation margin)"),
         notional: settle != null && spec.mult ? round2(net * settle * spec.mult) : null,
         firstNotice: ISO(firstNotice(y, m)), expiry: ISO(spec.ltd(y, m))});
-      events.push({date: ISO(firstNotice(y, m)), kind: "roll", posId: id, text: `${label}: первый день уведомления — переложить до этой даты`});
-      events.push({date: ISO(spec.ltd(y, m)), kind: "expiry", posId: id, text: `${label}: последний торговый день`});
+      events.push({date: ISO(firstNotice(y, m)), kind: "roll", posId: id, text: t(`${label}: первый день уведомления — переложить до этой даты`, `${label}: first notice day — roll before this date`)});
+      events.push({date: ISO(spec.ltd(y, m)), kind: "expiry", posId: id, text: t(`${label}: последний торговый день`, `${label}: last trading day`)});
       continue;
     }
     const spec = m && optionSpec(t0.root, y, m);
     const expiry = spec ? ISO(spec.expiry) : null;
     if(!net || !expiry || expiry <= d.asOf) continue;          // закрыта или истекла внутри периода выписки
     const fut = spec.fut && TREASURY[spec.fut];
-    const under = fut ? `фьючерс на ${fut.short}` : spec.name;
+    const under = fut ? t(`фьючерс на ${fut.short}`, `${fut.short} future`) : spec.name;
     const id = "SQ:" + label;
     out.push({...base, id, type: "option", right: t0.right, strike: t0.strike, expiry, underlying: spec.fut || t0.root,
       underlyingName: under, multiplier: fut ? fut.mult : null,
-      name: `${t0.right === "P" ? "Пут" : "Колл"} на ${under} · страйк ${t0.strike}`, qty: net, price: null, value: null,
-      valueNote: "цены опциона нет в выписке", premium: round2(ts.reduce((a, t) => a + t.premium, 0)),
+      name: t(`${t0.right === "P" ? "Пут" : "Колл"} на ${under} · страйк ${t0.strike}`, `${t0.right === "P" ? "Put" : "Call"} on ${under} · strike ${t0.strike}`), qty: net, price: null, value: null,
+      valueNote: t("цены опциона нет в выписке", "option price is not in the statement"), premium: round2(ts.reduce((a, x) => a + x.premium, 0)),
       obligation: fut && net < 0 ? round2(Math.abs(net) * t0.strike * fut.mult) : null});
-    events.push({date: expiry, kind: "expiry", posId: id, text: `${label}: экспирация`});
+    events.push({date: expiry, kind: "expiry", posId: id, text: t(`${label}: экспирация`, `${label}: expiry`)});
   }
   Object.entries(d.balances).forEach(([ccy, v]) => out.push({id: "SQ:CASH:" + ccy, broker: d.broker, brokerShort: d.brokerShort,
-    type: "cash", name: "Денежные средства", symbol: ccy, value: v, ccy, priceDate: d.asOf, asOf: d.asOf, source: d.fileName}));
+    type: "cash", name: t("Денежные средства", "Cash"), symbol: ccy, value: v, ccy, priceDate: d.asOf, asOf: d.asOf, source: d.fileName}));
   return {positions: out, events};
 }
 
@@ -124,7 +131,7 @@ WL.build = function(docs, today){
     if(d.kind === "positions"){
       d.positions.forEach(p => P.positions.push({...p, asOf: d.asOf, source: d.fileName}));
       d.positions.filter(p => p.type === "option" && p.expiry).forEach(p =>
-        P.events.push({date: p.expiry, kind: "expiry", posId: p.id, text: `${p.name}: экспирация`}));
+        P.events.push({date: p.expiry, kind: "expiry", posId: p.id, text: t(`${p.name}: экспирация`, `${p.name}: expiry`)}));
     }
     if(d.kind === "ledger"){
       const r = fromLedger(d);
@@ -200,9 +207,9 @@ WL.current = (P, p) => {
 };
 
 WL.PERIODS = [
-  {id: "1d", label: "День"}, {id: "1m", label: "Месяц", days: 30}, {id: "3m", label: "Квартал", days: 91},
-  {id: "1y", label: "Год", days: 365}, {id: "5y", label: "5 лет", days: 1826}, {id: "all", label: "Вся история"},
-  {id: "stmt", label: "С даты выписки"}, {id: "cost", label: "С покупки"}];
+  {id: "1d", label: t("День", "Day")}, {id: "1m", label: t("Месяц", "Month"), days: 30}, {id: "3m", label: t("Квартал", "Quarter"), days: 91},
+  {id: "1y", label: t("Год", "Year"), days: 365}, {id: "5y", label: t("5 лет", "5 years"), days: 1826}, {id: "all", label: t("Вся история", "All time")},
+  {id: "stmt", label: t("С даты выписки", "Since statement"), }, {id: "cost", label: t("С покупки", "Since purchase")}];
 WL.priceAt = (h, target) => {
   if(!h || !h.length || h[0][0] > target) return null;
   let lo = 0, hi = h.length - 1;

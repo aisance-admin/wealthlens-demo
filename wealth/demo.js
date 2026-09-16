@@ -37,7 +37,7 @@ WL.demoDocs = function(lang){
     "Charles Schwab;Alphabet Inc;GOOGL;Stock;500;128,40;03.04.2023;0,00;;;USD",
     "Charles Schwab;Visa Inc;V;Stock;350;231,70;22.08.2023;0,00;;;USD",
     `Charles Schwab;${cash};USD;Cash;;;;;;40000,00;USD`,
-    `Charles Schwab;AAPL put 300;${occ};Option;-5;4,10;${new Date(Date.now() - 20 * 864e5).toISOString().slice(0, 10)};3,25;;;USD`,
+    `Charles Schwab;${lang === "en" ? "AAPL 300 put" : "AAPL пут 300"};${occ};Option;-5;4,10;${new Date(Date.now() - 20 * 864e5).toISOString().slice(0, 10)};3,25;;;USD`,
     "Saxo Bank;ASML Holding;ASML.AS;Stock;80;610,00;09.11.2023;12,00;598,00;47840,00;EUR",
     `Saxo Bank;${cash};EUR;Cash;;;;;;42000,00;EUR`];
   const csv = rows.join("\n");

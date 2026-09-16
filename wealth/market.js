@@ -10,18 +10,20 @@ const {fmt, esc} = WL;
 const QUOTES = [
   {sym: "_SPX", label: "S&P 500"}, {sym: "_NDX", label: "Nasdaq 100"}, {sym: "_RUT", label: "Russell 2000"},
   {sym: "_VIX", label: "VIX", vol: true},
-  {sym: "_IRX", label: "UST 3 мес.", yld: true}, {sym: "_FVX", label: "UST 5 лет", yld: true},
-  {sym: "_TNX", label: "UST 10 лет", yld: true}, {sym: "_TYX", label: "UST 30 лет", yld: true},
+  {sym: "_IRX", label: WL.t("UST 3 мес.", "US 3-month yield"), yld: true}, {sym: "_FVX", label: WL.t("UST 5 лет", "US 5-year yield"), yld: true},
+  {sym: "_TNX", label: WL.t("UST 10 лет", "US 10-year yield"), yld: true}, {sym: "_TYX", label: WL.t("UST 30 лет", "US 30-year yield"), yld: true},
   // Сырьё и крипто — через биржевые фонды: у них есть котировки CBOE, и в отличие от ленты
   // TradingView они попадают в печатный отчёт.
-  {sym: "GLD", label: "Золото · фонд GLD"}, {sym: "BNO", label: "Brent · фонд BNO"}, {sym: "IBIT", label: "Биткоин · фонд IBIT"}];
+  {sym: "GLD", label: WL.t("Золото · фонд GLD", "Gold · GLD ETF")}, {sym: "BNO", label: WL.t("Brent · фонд BNO", "Brent crude · BNO ETF")},
+  {sym: "IBIT", label: WL.t("Биткоин · фонд IBIT", "Bitcoin · IBIT ETF")}];
 const FXQ = [{ccy: "EUR", label: "EUR/USD", inv: true}, {ccy: "CHF", label: "USD/CHF"}, {ccy: "GBP", label: "GBP/USD", inv: true}];
 const TAPE = [
   {proName: "FX_IDC:EURUSD", title: "EUR/USD"}, {proName: "FX_IDC:USDCHF", title: "USD/CHF"},
-  {proName: "FX_IDC:GBPUSD", title: "GBP/USD"}, {proName: "OANDA:XAUUSD", title: "Золото"},
-  {proName: "TVC:UKOIL", title: "Brent"}, {proName: "BITSTAMP:BTCUSD", title: "Биткоин"}];
+  {proName: "FX_IDC:GBPUSD", title: "GBP/USD"}, {proName: "OANDA:XAUUSD", title: WL.t("Золото", "Gold")},
+  {proName: "TVC:UKOIL", title: "Brent"}, {proName: "BITSTAMP:BTCUSD", title: WL.t("Биткоин", "Bitcoin")}];
+// В английском интерфейсе лента рынка по умолчанию — англоязычные источники.
 const M = {quotes: null, quotesAt: null, quotesFailed: false, fx: null, fxDate: null, market: null, holdings: null,
-  lang: "all", tick: "all", showAllMarket: false};
+  lang: WL.lang === "en" ? "en" : "all", tick: "all", showAllMarket: false};
 let timer = null;
 
 const getJSON = (u, ms = 120000) => WL.getJSON(u, ms);
@@ -30,14 +32,19 @@ const dark = () => document.documentElement.dataset.theme === "dark" ||
 const ago = iso => {
   if(!iso) return "";
   const m = Math.round((Date.now() - new Date(iso)) / 60000);
-  if(m < 1) return "только что";
-  if(m < 60) return `${m} мин назад`;
+  if(m < 1) return WL.t("только что", "just now");
+  if(m < 60) return WL.t(`${m} мин назад`, `${m} min ago`);
   const h = Math.round(m / 60);
-  if(h < 24) return `${h} ч назад`;
+  if(h < 24) return WL.t(`${h} ч назад`, `${h} ${h === 1 ? "hour" : "hours"} ago`);
   const d = Math.round(h / 24);
-  return d === 1 ? "вчера" : `${d} ${WL.plural(d, "день", "дня", "дней")} назад`;
+  return d === 1 ? WL.t("вчера", "yesterday") : `${d} ${WL.pl(d, ["день", "дня", "дней"], ["day", "days"])} ${WL.t("назад", "ago")}`;
 };
+// Дата по местному времени в виде 2026-09-16 — для WL.fmt.date.
+const localDay = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const safeLink = u => /^https?:\/\//i.test(u || "") ? u : "#";
+// Названия русских изданий в английском интерфейсе; для сопоставления и группировки берётся исходное имя.
+const SOURCE_EN = {"Ведомости": "Vedomosti", "Коммерсантъ": "Kommersant"};
+const srcName = s => WL.t(s, SOURCE_EN[s] || s);
 
 /* Релевантность новостей по бумаге. Заголовок засчитывается, только если в нём есть
    биржевое обозначение — (CAT), NYSE:CAT, $CAT — или название компании. Одинокий тикер
@@ -95,20 +102,20 @@ const noisy = it => NOISE.some(r => r.test(it.title || ""));
    которые истекают в ближайшие 45 дней. */
 function holdingTickers(P){
   const set = new Map();
-  P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").forEach(p => set.set(p.symbol, {why: "в портфеле", name: p.name}));
+  P.positions.filter(p => WL.eq(p) && p.symbol && p.ccy === "USD").forEach(p => set.set(p.symbol, {why: WL.t("в портфеле", "in the portfolio"), name: p.name}));
   P.positions.filter(p => p.type === "option" && p.occ && p.expiry >= P.today && WL.days(P.today, p.expiry) <= 45)
-    .forEach(p => { if(!set.has(p.underlying)) set.set(p.underlying, {why: "опцион истекает скоро", name: p.underlyingName}); });
+    .forEach(p => { if(!set.has(p.underlying)) set.set(p.underlying, {why: WL.t("опцион истекает скоро", "option expiring soon"), name: p.underlyingName}); });
   return [...set].map(([sym, v]) => ({sym, why: v.why, name: v.name, kws: keywords(sym, v.name)}));
 }
 
 function quoteTile(q){
   const x = M.quotes && M.quotes[q.sym];
-  if(!x || x.price == null) return `<div class="q"><div class="q-l">${esc(q.label)}</div><div class="q-v unk">—</div><div class="q-c unk">нет данных</div></div>`;
+  if(!x || x.price == null) return `<div class="q"><div class="q-l">${esc(q.label)}</div><div class="q-v unk">—</div><div class="q-c unk">${WL.t("нет данных", "no data")}</div></div>`;
   let value, change, dir = x.price - (x.prev_close ?? x.price);
   if(q.yld){
     value = `${fmt.px(x.price / 10)}%`;
     const bp = (x.price - x.prev_close) * 10;
-    change = x.prev_close != null ? `${bp > 0 ? "+" : bp < 0 ? "−" : ""}${Math.abs(bp).toFixed(1).replace(".", ",")} б.п.` : "";
+    change = x.prev_close != null ? `${bp > 0 ? "+" : bp < 0 ? "−" : ""}${WL.t(`${Math.abs(bp).toFixed(1).replace(".", ",")} б.п.`, `${fmt.dec(Math.abs(bp), 1)} bp`)}` : "";
   } else {
     value = fmt.px(x.price);
     change = x.change_pct != null ? fmt.pct(x.change_pct, 2) : "";
@@ -121,20 +128,21 @@ function quoteTile(q){
 
 function fxTile(f){
   const r = M.fx && M.fx[f.ccy];
-  if(!r) return `<div class="q"><div class="q-l">${esc(f.label)}</div><div class="q-v unk">—</div><div class="q-c unk">нет данных</div></div>`;
+  if(!r) return `<div class="q"><div class="q-l">${esc(f.label)}</div><div class="q-v unk">—</div><div class="q-c unk">${WL.t("нет данных", "no data")}</div></div>`;
   const v = f.inv ? 1 / r : r;
-  return `<div class="q"><div class="q-l">${esc(f.label)}</div><div class="q-v">${v.toFixed(4).replace(".", ",")}</div><div class="q-c muted">ЕЦБ, ${fmt.date(M.fxDate)}</div></div>`;
+  return `<div class="q"><div class="q-l">${esc(f.label)}</div><div class="q-v">${WL.t(v.toFixed(4).replace(".", ","), fmt.dec(v, 4))}</div><div class="q-c muted">${WL.t("ЕЦБ", "ECB")}, ${fmt.date(M.fxDate)}</div></div>`;
 }
 
 function tapeSrc(){
   const cfg = {symbols: TAPE, showSymbolLogo: true, colorTheme: dark() ? "dark" : "light", isTransparent: true,
     displayMode: "adaptive", width: "100%", height: 46, utm_source: location.hostname, utm_medium: "widget", utm_campaign: "ticker-tape"};
-  return "https://www.tradingview-widget.com/embed-widget/ticker-tape/?locale=ru#" + encodeURIComponent(JSON.stringify(cfg));
+  return `https://www.tradingview-widget.com/embed-widget/ticker-tape/?locale=${WL.t("ru", "en")}#` + encodeURIComponent(JSON.stringify(cfg));
 }
 
 function newsItem(it, tick){
-  return `<li><div class="nmeta">${tick ? `<span class="tick">${esc(tick)}</span>` : ""}<span>${esc(it.source || "")}</span>` +
-    `${it.time ? `<span>· ${ago(it.time)}</span>` : ""}${it.lang === "en" && !tick ? `<span class="pill">EN</span>` : ""}</div>` +
+  const other = WL.t("en", "ru");   // плашкой помечаем материалы не на языке интерфейса
+  return `<li><div class="nmeta">${tick ? `<span class="tick">${esc(tick)}</span>` : ""}<span>${esc(srcName(it.source || ""))}</span>` +
+    `${it.time ? `<span>· ${ago(it.time)}</span>` : ""}${it.lang === other && !tick ? `<span class="pill">${other.toUpperCase()}</span>` : ""}</div>` +
     `<a href="${esc(safeLink(it.link))}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a></li>`;
 }
 
@@ -142,8 +150,9 @@ function renderQuotes(){
   const el = document.querySelector("#mktQuotes"); if(!el) return;
   el.innerHTML = QUOTES.map(quoteTile).join("") + FXQ.map(fxTile).join("");
   const t = document.querySelector("#mktQuotesAt");
-  if(t) t.textContent = M.quotesAt ? `котировки на ${M.quotesAt.toLocaleDateString("ru-RU")}, ${M.quotesAt.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}`
-    : M.quotesFailed ? "котировки не загрузились" : "загружаю…";
+  if(t) t.textContent = M.quotesAt ? WL.t(`котировки на ${M.quotesAt.toLocaleDateString("ru-RU")}, ${M.quotesAt.toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}`,
+      `quotes as of ${fmt.date(localDay(M.quotesAt))}, ${M.quotesAt.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"})}`)
+    : M.quotesFailed ? WL.t("котировки не загрузились", "quotes failed to load") : WL.t("загружаю…", "loading…");
 }
 /* Первые десять новостей рынка — самые свежие, но не больше трёх из одного источника:
    иначе самая частая лента занимает весь список. */
@@ -159,35 +168,41 @@ function balanced(items, n, perSource){
 }
 function renderMarketNews(){
   const el = document.querySelector("#mktNews"); if(!el) return;
-  if(!M.market){ el.innerHTML = `<li class="muted">Загружаю новости…</li>`; return; }
+  if(!M.market){ el.innerHTML = `<li class="muted">${WL.t("Загружаю новости…", "Loading news…")}</li>`; return; }
   const items = (M.market.items || []).filter(it => M.lang === "all" || it.lang === M.lang);
   const shown = M.showAllMarket ? items : balanced(items, 10, 3);
-  el.innerHTML = (shown.length ? shown.map(it => newsItem(it)).join("") : `<li class="muted">Новостей нет.</li>`) +
-    (items.length > shown.length ? `<li class="no-print"><button class="btn small" type="button" data-more="market">Ещё ${items.length - shown.length}</button></li>` : "") +
-    ((M.market.errors || []).length ? `<li class="muted" style="font-size:12px">Не ответили: ${esc(M.market.errors.join(", "))}</li>` : "");
+  el.innerHTML = (shown.length ? shown.map(it => newsItem(it)).join("") : `<li class="muted">${WL.t("Новостей нет.", "No news.")}</li>`) +
+    (items.length > shown.length ? `<li class="no-print"><button class="btn small" type="button" data-more="market">${WL.t(`Ещё ${items.length - shown.length}`, `Show ${items.length - shown.length} more`)}</button></li>` : "") +
+    ((M.market.errors || []).length ? `<li class="muted" style="font-size:12px">${WL.t("Не ответили", "Unavailable")}: ${esc(M.market.errors.map(srcName).join(", "))}</li>` : "");
   document.querySelectorAll("#mktLang button").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === M.lang));
 }
 function renderHoldingNews(P){
   const el = document.querySelector("#holdNews"); if(!el) return;
   const ticks = holdingTickers(P);
   const chips = document.querySelector("#holdChips");
+  // Искать не по чему (нет бумаг в долларах и близких опционов) — запроса не будет, ждать нечего.
+  if(!ticks.length){
+    if(chips) chips.innerHTML = "";
+    el.innerHTML = `<li class="muted">${WL.t("В портфеле нет бумаг с американскими котировками — новости по ним не ищем.", "No US-listed holdings in the portfolio, so there is no holdings news to look up.")}</li>`;
+    return;
+  }
   if(M.holdings && M.holdings.failed){
     if(chips) chips.innerHTML = "";
-    el.innerHTML = `<li class="muted">Новости по бумагам не загрузились: сервер новостей не ответил.</li>`;
+    el.innerHTML = `<li class="muted">${WL.t("Новости по бумагам не загрузились: сервер новостей не ответил.", "News on holdings failed to load: the news server did not respond.")}</li>`;
     return;
   }
   const raw = M.holdings && M.holdings.symbols;
   const data = raw && Object.fromEntries(ticks.map(t => [t.sym, Array.isArray(raw[t.sym])
     ? raw[t.sym].filter(it => relevant(it.title, t.sym, t.kws) && !noisy(it)).slice(0, 6) : raw[t.sym]]));
-  if(chips) chips.innerHTML = [`<button class="chip" type="button" data-tick="all" aria-pressed="${M.tick === "all"}">Все</button>`]
+  if(chips) chips.innerHTML = [`<button class="chip" type="button" data-tick="all" aria-pressed="${M.tick === "all"}">${WL.t("Все", "All")}</button>`]
     .concat(ticks.map(t => { const n = data && Array.isArray(data[t.sym]) ? data[t.sym].length : 0;
       return `<button class="chip" type="button" data-tick="${esc(t.sym)}" title="${esc(t.why)}" aria-pressed="${M.tick === t.sym}">${esc(t.sym)}${data ? ` · ${n}` : ""}</button>`; })).join("");
-  if(!data){ el.innerHTML = `<li class="muted">Загружаю новости по ${ticks.length} ${WL.plural(ticks.length, "бумаге", "бумагам", "бумагам")}…</li>`; return; }
+  if(!data){ el.innerHTML = `<li class="muted">${WL.t("Загружаю новости по", "Loading news for")} ${ticks.length} ${WL.pl(ticks.length, ["бумаге", "бумагам", "бумагам"], ["holding", "holdings"])}…</li>`; return; }
   let items = [];
   ticks.forEach(t => { if(Array.isArray(data[t.sym]) && (M.tick === "all" || M.tick === t.sym)) data[t.sym].forEach(it => items.push({it, sym: t.sym})); });
   items.sort((a, b) => (b.it.time || "").localeCompare(a.it.time || ""));
   if(M.tick === "all") items = items.slice(0, 12);
-  el.innerHTML = items.length ? items.map(x => newsItem(x.it, x.sym)).join("") : `<li class="muted">За неделю новостей не нашлось.</li>`;
+  el.innerHTML = items.length ? items.map(x => newsItem(x.it, x.sym)).join("") : `<li class="muted">${WL.t("За неделю новостей не нашлось.", "No news in the past week.")}</li>`;
 }
 
 async function loadAll(P, {quotesOnly = false} = {}){
@@ -196,7 +211,7 @@ async function loadAll(P, {quotesOnly = false} = {}){
     renderQuotes(); }),
     getJSON("/fx?base=USD").then(r => { if(r && r.rates){ M.fx = r.rates; M.fxDate = r.date; } renderQuotes(); })];
   if(!quotesOnly){
-    jobs.push(getJSON("/market/news").then(r => { M.market = r || {items: [], errors: ["все источники"]}; renderMarketNews(); }));
+    jobs.push(getJSON("/market/news").then(r => { M.market = r || {items: [], errors: [WL.t("все источники", "all sources")]}; renderMarketNews(); }));
     const ticks = holdingTickers(P);
     if(ticks.length) jobs.push(getJSON("/market/news?symbols=" + ticks.map(t => t.sym).join(",") +
         "&q=" + ticks.map(t => encodeURIComponent(queryWord(t.sym, t.name).replace(/,/g, " "))).join(","))
@@ -208,26 +223,28 @@ async function loadAll(P, {quotesOnly = false} = {}){
 WL.renderMarket = function(el, P){
   if(!el) return;
   el.innerHTML = `
-    <div class="sec-h"><h2>Рынок и новости</h2><span class="aside">для информации · в выводах по клиенту не участвует</span>
+    <div class="sec-h"><h2>${WL.t("Рынок и новости", "Market and news")}</h2><span class="aside">${WL.t("для информации · в выводах по клиенту не участвует", "for reference only · not part of the portfolio findings")}</span>
       <span class="spacer"></span><span class="muted" id="mktQuotesAt" style="font-size:12.5px"></span>
-      <button class="btn small no-print" type="button" id="mktRefresh">Обновить</button></div>
+      <button class="btn small no-print" type="button" id="mktRefresh">${WL.t("Обновить", "Refresh")}</button></div>
     <div class="card mkt">
       <div class="qgrid" id="mktQuotes"></div>
-      <div class="tape no-print"><iframe title="Котировки TradingView" loading="lazy" scrolling="no" src="${esc(tapeSrc())}"></iframe></div>
-      <div class="basis">Индексы, ставки, VIX и фонды — CBOE с задержкой 15 минут; курсы валют — ЕЦБ.<span class="no-print"> Лента — <a href="https://ru.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a>.</span></div>
+      <div class="tape no-print"><iframe title="${WL.t("Котировки TradingView", "TradingView quotes")}" loading="lazy" scrolling="no" src="${esc(tapeSrc())}"></iframe></div>
+      <div class="basis">${WL.t("Индексы, ставки, VIX и фонды — CBOE с задержкой 15 минут; курсы валют — ЕЦБ.", "Indices, yields, VIX and ETFs — CBOE quotes delayed by 15 minutes; exchange rates — ECB.")}<span class="no-print"> ${WL.t("Лента", "Ticker tape")} — <a href="${WL.t("https://ru.tradingview.com/", "https://www.tradingview.com/")}" target="_blank" rel="noopener noreferrer">TradingView</a>.</span></div>
     </div>
     <div class="news">
       <div class="card newscol">
-        <div class="newsh"><b>Рынки</b><span class="spacer"></span>
-          <div class="chips no-print" id="mktLang"><button class="chip" type="button" data-lang="all">Все</button><button class="chip" type="button" data-lang="ru">RU</button><button class="chip" type="button" data-lang="en">EN</button></div></div>
+        <div class="newsh"><b>${WL.t("Рынки", "Markets")}</b><span class="spacer"></span>
+          <div class="chips no-print" id="mktLang"><button class="chip" type="button" data-lang="all">${WL.t("Все", "All")}</button><button class="chip" type="button" data-lang="ru">RU</button><button class="chip" type="button" data-lang="en">EN</button></div></div>
         <ul class="nlist" id="mktNews"></ul>
-        <div class="basis">Investing.com, «Ведомости», «Коммерсантъ», CNBC, MarketWatch — не больше трёх материалов из одного источника.</div>
+        <div class="basis">${WL.t("Investing.com, «Ведомости», «Коммерсантъ», CNBC, MarketWatch — не больше трёх материалов из одного источника.",
+          "Investing.com, Vedomosti and Kommersant in Russian; CNBC and MarketWatch in English. At most three stories from any one source.")}</div>
       </div>
       <div class="card newscol">
-        <div class="newsh"><b>По бумагам клиента</b><span class="spacer"></span></div>
+        <div class="newsh"><b>${WL.t("По бумагам клиента", "Portfolio holdings")}</b><span class="spacer"></span></div>
         <div class="chips no-print" id="holdChips" style="margin-bottom:6px"></div>
         <ul class="nlist" id="holdNews"></ul>
-        <div class="basis">Google News за неделю, без автоматических заметок о сделках фондов. Для поиска наружу уходят только тикеры и названия компаний.</div>
+        <div class="basis">${WL.t("Google News за неделю, без автоматических заметок о сделках фондов. Для поиска наружу уходят только тикеры и названия компаний.",
+          "Google News for the past week, excluding automated stories about funds buying or selling shares. Only tickers and company names are sent out for the search.")}</div>
       </div>
     </div>`;
   renderQuotes(); renderMarketNews(); renderHoldingNews(P);

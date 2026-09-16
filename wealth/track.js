@@ -47,7 +47,7 @@ function banner(){
   b.className = "consent";
   b.setAttribute("role", "dialog"); b.setAttribute("aria-label", en() ? "Cookies" : "Cookies");
   b.innerHTML = en()
-    ? `<p>We use cookies to measure our ads. Your statements never leave your browser either way. <a href="/legal/privacy/?lang=en">Privacy</a></p>
+    ? `<p>We use cookies to measure our ads. Your statements never leave your browser either way. <a href="/en/legal/privacy/">Privacy</a></p>
        <div><button type="button" data-c="necessary">Necessary only</button><button type="button" data-c="all" class="primary">Allow</button></div>`
     : `<p>Мы используем cookies, чтобы оценивать рекламу. Выписки при этом в любом случае не покидают ваш браузер. <a href="/legal/privacy/">Подробнее</a></p>
        <div><button type="button" data-c="necessary">Только необходимые</button><button type="button" data-c="all" class="primary">Разрешить</button></div>`;

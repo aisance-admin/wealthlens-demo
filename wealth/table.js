@@ -4,6 +4,7 @@
 (function(){
 const WL = window.WL = window.WL || {};
 const {fmt} = WL;
+// Строки интерфейса — WL.t("русский", "English"); имя t здесь занято параметрами и переменными цикла.
 const esc = WL.esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const unk = t => `<span class="unk">${esc(t)}</span>`;
 // Прочерк вместо повторяющегося «нет в выписке»: причина — во всплывающей подсказке и в легенде под таблицей.
@@ -12,68 +13,73 @@ const sub = t => `<span class="sub2">${t}</span>`;
 const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
 const TYPE_ORDER = ["stock", "fund", "bond", "note", "other", "option", "future", "cash"];
 const staleDoc = (P, d) => d && WL.days(d.asOf, P.today) > 45;
+const NOT_IN = () => WL.t("нет в выписке", "not in statement");
+const NO_DATA = () => WL.t("нет данных за этот период", "no data for this period");
+const IN_CASH = () => WL.t("в деньгах счёта", "in account cash");
 
 function row(P, p, per){
   const k = WL.usd(P, p.ccy), cur = WL.current(P, p), doc = P.docs.find(d => d.fileName === p.source);
   const stale = staleDoc(P, doc);
   const code = p.type === "cash" ? p.ccy : (p.occ || p.symbol || p.code || p.isin);
   let note = "";
-  if(p.type === "option") note = `${p.qty < 0 ? "продан" : "куплен"} · истекает ${fmt.date(p.expiry)}`;
-  if(p.type === "future") note = `последний торговый день ${fmt.date(p.expiry)}`;
-  if(p.expiry && p.expiry < P.today) note += " · истёк после даты выписки";
+  if(p.type === "option") note = WL.t(`${p.qty < 0 ? "продан" : "куплен"} · истекает ${fmt.date(p.expiry)}`, `${p.qty < 0 ? "short" : "long"} · expires ${fmt.date(p.expiry)}`);
+  if(p.type === "future") note = WL.t(`последний торговый день ${fmt.date(p.expiry)}`, `last trading day ${fmt.date(p.expiry)}`);
+  if(p.expiry && p.expiry < P.today) note += WL.t(" · истёк после даты выписки", " · expired after the statement date");
   const td = [];
   td.push(`<td class="l nm">${esc(p.name)}${sub(`<span class="code">${esc(code)}</span>${note ? " · " + esc(note) : ""}`)}</td>`);
   // Брокер — колонка, а не отдельная таблица. Дата выписки стоит здесь же: в общем списке
   // соседние строки могут быть на разные даты, и это должно быть видно в самой строке.
-  td.push(`<td class="l brk" data-l="Брокер">${esc(p.brokerShort)}${stale ? sub(`на ${fmt.date(doc.asOf)}`) : ""}</td>`);
+  td.push(`<td class="l brk" data-l="${WL.t("Брокер", "Broker")}">${esc(p.brokerShort)}${stale ? sub(WL.t(`на ${fmt.date(doc.asOf)}`, `as of ${fmt.date(doc.asOf)}`)) : ""}</td>`);
   const contracts = p.type === "option" || p.type === "future";
-  td.push(`<td class="qty" data-l="Кол-во">${p.type === "cash" || p.qty == null ? "" : fmt.qty(p.qty) + (contracts ? sub("контр.") : "")}</td>`);
+  td.push(`<td class="qty" data-l="${WL.t("Кол-во", "Qty")}">${p.type === "cash" || p.qty == null ? "" : fmt.qty(p.qty) + (contracts ? sub(WL.t("контр.", Math.abs(p.qty) === 1 ? "contract" : "contracts")) : "")}</td>`);
 
   // Цена и дата покупки — один пункт у велса, одна колонка здесь.
   let buyMain = "", buyNote = "";
   if(!contracts && p.type !== "cash"){
-    if(p.cost != null && p.qty){ buyMain = fmt.px(p.cost / p.qty); buyNote = "средняя"; }
-    else buyMain = unk(p.costNote || "нет в выписке");
+    if(p.cost != null && p.qty){ buyMain = fmt.px(p.cost / p.qty); buyNote = WL.t("средняя", "average"); }
+    else buyMain = unk(p.costNote || NOT_IN());
   } else if(p.type === "option"){
     const prem = p.cost != null ? p.cost : p.premium;
-    if(prem != null && p.multiplier && p.qty){ buyMain = fmt.px(Math.abs(prem / (p.qty * p.multiplier))); buyNote = "премия"; }
-    else if(prem != null){ buyMain = fmt.money(prem, p.ccy, 0); buyNote = "премия всего"; }
-    else buyMain = dash("нет в выписке");
-  } else if(p.type === "future") buyMain = unk("по сделкам");
+    if(prem != null && p.multiplier && p.qty){ buyMain = fmt.px(Math.abs(prem / (p.qty * p.multiplier))); buyNote = WL.t("премия", "premium"); }
+    else if(prem != null){ buyMain = fmt.money(prem, p.ccy, 0); buyNote = WL.t("премия всего", "total premium"); }
+    else buyMain = dash(NOT_IN());
+  } else if(p.type === "future") buyMain = unk(WL.t("по сделкам", "by trade"));
   if(p.type !== "cash") buyNote = [buyNote, p.purchaseDate
     ? `${fmt.date(p.purchaseDate)}${p.purchaseNote ? " (" + esc(p.purchaseNote) + ")" : ""}` : ""].filter(Boolean).join(" · ");
-  td.push(`<td class="buy" data-l="Покупка">${buyMain}${buyNote ? sub(buyNote) : ""}</td>`);
-  td.push(`<td class="fee" data-l="Комиссия">${p.type === "cash" ? "" : p.commission != null ? fmt.money(p.commission, p.ccy) : dash("нет в выписке")}</td>`);
+  td.push(`<td class="buy" data-l="${WL.t("Покупка", "Cost")}">${buyMain}${buyNote ? sub(buyNote) : ""}</td>`);
+  td.push(`<td class="fee" data-l="${WL.t("Комиссия", "Fees")}">${p.type === "cash" ? "" : p.commission != null ? fmt.money(p.commission, p.ccy) : dash(NOT_IN())}</td>`);
 
   let px = "";
   if(p.type !== "cash"){
-    if(cur.live) px = fmt.px(cur.price) + sub(`сейчас${p.live.delta != null ? " · дельта " + fmt.px(Math.abs(p.live.delta)) : ""}`);
-    else if(p.price != null) px = fmt.px(p.price) + sub(`на ${fmt.date(p.priceDate)}`);
-    else px = dash("нет в выписке");
+    if(cur.live) px = fmt.px(cur.price) + sub(WL.t(`сейчас${p.live.delta != null ? " · дельта " + fmt.px(Math.abs(p.live.delta)) : ""}`,
+                                                   `now${p.live.delta != null ? " · delta " + fmt.px(Math.abs(p.live.delta)) : ""}`));
+    else if(p.price != null) px = fmt.px(p.price) + sub(WL.t(`на ${fmt.date(p.priceDate)}`, `as of ${fmt.date(p.priceDate)}`));
+    else px = dash(NOT_IN());
   }
-  td.push(`<td class="px" data-l="Цена">${px}</td>`);
+  td.push(`<td class="px" data-l="${WL.t("Цена", "Price")}">${px}</td>`);
 
   const ch = p.type === "cash" ? null : WL.change(P, p, per);
-  td.push(`<td class="chg" data-l="Изменение">${p.type === "cash" ? "" : ch ? `<span class="${cls(ch.abs)}">${fmt.signed(ch.abs, p.ccy)}</span>` +
-    (ch.pct != null ? sub(`<span class="${cls(ch.abs)}">${fmt.pct(ch.pct)}</span>`) : "") : dash("нет данных за этот период")}</td>`);
+  td.push(`<td class="chg" data-l="${WL.t("Изменение", "Change")}">${p.type === "cash" ? "" : ch ? `<span class="${cls(ch.abs)}">${fmt.signed(ch.abs, p.ccy)}</span>` +
+    (ch.pct != null ? sub(`<span class="${cls(ch.abs)}">${fmt.pct(ch.pct)}</span>`) : "") : dash(NO_DATA())}</td>`);
 
   let val, usd;
   if(cur.value != null){
     val = fmt.money(cur.value, p.ccy, 0);
-    usd = k != null ? fmt.money(cur.value * k, "USD", 0) : unk("нет курса");
+    usd = k != null ? fmt.money(cur.value * k, "USD", 0) : unk(WL.t("нет курса", "no FX rate"));
   } else {
-    val = p.type === "future" ? unk("в деньгах счёта") : dash(p.valueNote || "нет в выписке");
-    usd = dash("стоимости нет в выписке");
+    val = p.type === "future" ? unk(IN_CASH()) : dash(p.valueNote || NOT_IN());
+    usd = dash(WL.t("стоимости нет в выписке", "value not in statement"));
   }
-  if(p.notional != null) { val += sub(`номинал ${fmt.short(p.notional, p.ccy)}`); }
+  if(p.notional != null) { val += sub(WL.t(`номинал ${fmt.short(p.notional, p.ccy)}`, `notional ${fmt.short(p.notional, p.ccy)}`)); }
   if(p.type === "option" && p.qty < 0 && p.multiplier){
     // Проданный колл, полностью покрытый акциями на том же счёте, — не обязательство купить что-то на рынке.
     const n = Math.abs(p.qty) * p.multiplier;
     const held = p.right === "C" && P.positions.find(s => WL.eq(s) && s.symbol === p.underlying && s.source === p.source);
-    val += sub(held && held.qty >= n ? `покрыт ${fmt.int(n)} акций`
-      : `${p.right === "P" ? "обязательство купить" : "обязательство продать"} на ${fmt.short(n * p.strike, p.ccy)}`);
+    val += sub(held && held.qty >= n ? WL.t(`покрыт ${fmt.int(n)} акций`, `covered by ${fmt.int(n)} ${n === 1 ? "share" : "shares"}`)
+      : WL.t(`${p.right === "P" ? "обязательство купить" : "обязательство продать"} на ${fmt.short(n * p.strike, p.ccy)}`,
+             `${p.right === "P" ? "obligation to buy" : "obligation to sell"} ${fmt.short(n * p.strike, p.ccy)}`));
   }
-  td.push(`<td class="loc" data-l="В валюте">${val}</td>`, `<td class="usd" data-l="В USD">${usd}</td>`);
+  td.push(`<td class="loc" data-l="${WL.t("В валюте", "Local")}">${val}</td>`, `<td class="usd" data-l="${WL.t("В USD", "USD")}">${usd}</td>`);
   return {html: `<tr class="row" data-id="${esc(p.id)}" tabindex="0">${td.join("")}</tr>`, usd: cur.value != null && k != null ? cur.value * k : null,
           change: ch && k != null ? ch.abs * k : null, counts: p.type !== "cash"};
 }
@@ -81,8 +87,8 @@ function row(P, p, per){
 /* Единый список по всему портфелю: по умолчанию всё вместе, брокер — колонка. Внутри типа
    акции, фьючерсы и деньги идут по размеру позиции, опционы — по сроку, истёкшие в конце.
    Отдельная площадка смотрится переключателем «Брокер» и карточками вверху страницы. */
-const TYPE_LABEL = {stock: "Акции", fund: "Фонды", bond: "Облигации", note: "Структурные ноты",
-  other: "Прочее", option: "Опционы", future: "Фьючерсы", cash: "Деньги"};
+const TYPE_LABEL = {stock: WL.t("Акции", "Stocks"), fund: WL.t("Фонды", "Funds"), bond: WL.t("Облигации", "Bonds"), note: WL.t("Структурные ноты", "Structured notes"),
+  other: WL.t("Прочее", "Other"), option: WL.t("Опционы", "Options"), future: WL.t("Фьючерсы", "Futures"), cash: WL.t("Деньги", "Cash")};
 function sortKey(P, p){
   if(p.type === "option") return (p.expiry && p.expiry < P.today ? "Z" : "A") + (p.expiry || "");
   const k = WL.usd(P, p.ccy), v = WL.current(P, p).value;
@@ -111,35 +117,37 @@ WL.renderPositions = function(el, P, S){
       if(r.counts){ countable++; if(r.change != null){ covered++; change += r.change; } }
     }
     grand += sum;
-    const label = t === "option" && ps.every(p => p.qty < 0) ? "Опционы проданные" : TYPE_LABEL[t];
-    if(rows) body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.plural(ps.length, "позиция", "позиции", "позиций")}</span></td>` +
-      `<td>${anyUsd ? fmt.money(sum, "USD", 0) : t === "future" ? unk("в деньгах счёта") : dash("нет текущих цен")}</td></tr>` + rows;
+    const label = t === "option" && ps.every(p => p.qty < 0) ? WL.t("Опционы проданные", "Short options") : TYPE_LABEL[t];
+    if(rows) body += `<tr class="grp"><td class="l" colspan="8">${label} <span class="muted">· ${ps.length} ${WL.pl(ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</span></td>` +
+      `<td>${anyUsd ? fmt.money(sum, "USD", 0) : t === "future" ? unk(IN_CASH()) : dash(WL.t("нет текущих цен", "no current prices"))}</td></tr>` + rows;
   }
-  if(hiddenRows) body += `<tr class="lockrow"><td class="l" colspan="9">Ещё ${hiddenRows} ${WL.plural(hiddenRows, "позиция", "позиции", "позиций")}
-    с ценой и датой покупки, комиссиями и изменением за восемь периодов — в полном отчёте
-    <button class="btn small" type="button" data-buy="positions">Открыть</button></td></tr>`;
+  if(hiddenRows) body += `<tr class="lockrow"><td class="l" colspan="9">${WL.t(`Ещё ${hiddenRows} ${WL.pl(hiddenRows, ["позиция", "позиции", "позиций"], ["position", "positions"])}
+    с ценой и датой покупки, комиссиями и изменением за восемь периодов — в полном отчёте`, `${hiddenRows} more ${WL.pl(hiddenRows, ["позиция", "позиции", "позиций"], ["position", "positions"])}
+    in the full report, with purchase price and date, fees, and change over eight periods`)}
+    <button class="btn small" type="button" data-buy="positions">${WL.t("Открыть", "Unlock")}</button></td></tr>`;
   const docs = P.docs.filter(d => only === "all" || d.brokerShort === only);
   const mixed = docs.some(d => staleDoc(P, d));
   el.innerHTML = `<table class="pos"><thead><tr>
-      <th class="l">Бумага</th><th class="l">Брокер</th><th>Кол-во</th><th>Покупка${sub("цена · дата")}</th>
-      <th>Комиссия</th><th>Текущая цена</th><th>Изменение${sub(`${esc(per.label.toLowerCase())} · ${covered} из ${countable}`)}</th>
-      <th>В валюте</th><th>В USD</th></tr></thead><tbody>${body ||
-      `<tr><td class="l" colspan="9"><span class="muted">По выбранному фильтру позиций нет.</span></td></tr>`}
-    <tr class="foot"><td class="l" colspan="6">Всего${only === "all" ? " по портфелю" : " · " + esc(only)}${!mixed ? ""
-        : only === "all" ? sub(docs.map(d => `${esc(d.brokerShort)} — ${staleDoc(P, d) ? "на " + fmt.date(d.asOf) : "сейчас"}`).join(", "))
-        : sub(`на ${fmt.date(docs[0].asOf)}`)}</td>
-      <td>${covered ? `<span class="${cls(change)}">${fmt.signed(change)}</span>${sub(`по ${covered} из ${countable} позиций`)}` : dash("нет данных за этот период")}</td>
+      <th class="l">${WL.t("Бумага", "Security")}</th><th class="l">${WL.t("Брокер", "Broker")}</th><th>${WL.t("Кол-во", "Qty")}</th><th>${WL.t("Покупка", "Cost")}${sub(WL.t("цена · дата", "price · date"))}</th>
+      <th>${WL.t("Комиссия", "Fees")}</th><th>${WL.t("Текущая цена", "Price")}</th><th>${WL.t("Изменение", "Change")}${sub(`${esc(per.label.toLowerCase())} · ${covered} ${WL.t("из", "of")} ${countable}`)}</th>
+      <th>${WL.t("В валюте", "Local")}</th><th>${WL.t("В USD", "USD")}</th></tr></thead><tbody>${body ||
+      `<tr><td class="l" colspan="9"><span class="muted">${WL.t("По выбранному фильтру позиций нет.", "No positions match the selected filter.")}</span></td></tr>`}
+    <tr class="foot"><td class="l" colspan="6">${WL.t(`Всего${only === "all" ? " по портфелю" : " · " + esc(only)}`, only === "all" ? "Portfolio total" : "Total · " + esc(only))}${!mixed ? ""
+        : only === "all" ? sub(docs.map(d => `${esc(d.brokerShort)} — ${staleDoc(P, d) ? WL.t("на ", "as of ") + fmt.date(d.asOf) : WL.t("сейчас", "now")}`).join(", "))
+        : sub(WL.t(`на ${fmt.date(docs[0].asOf)}`, `as of ${fmt.date(docs[0].asOf)}`))}</td>
+      <td>${covered ? `<span class="${cls(change)}">${fmt.signed(change)}</span>${sub(WL.t(`по ${covered} из ${countable} позиций`, `for ${covered} of ${countable} ${countable === 1 ? "position" : "positions"}`))}` : dash(NO_DATA())}</td>
       <td></td><td>${fmt.money(grand, "USD", 0)}</td></tr></tbody></table>
-    <p class="basis" style="margin:0; padding:10px 12px">Прочерк — таких данных нет в выписке брокера или нет котировок за период<span class="no-print">; наведите курсор, чтобы увидеть причину</span>.
-      Что запросить у клиента, собрано ниже в разделе «Документы и чего не хватает».</p>`;
+    <p class="basis" style="margin:0; padding:10px 12px">${WL.t("Прочерк — таких данных нет в выписке брокера или нет котировок за период", "A dash means the data is not in the broker statement or there are no quotes for the period")}<span class="no-print">${WL.t("; наведите курсор, чтобы увидеть причину", "; hover over it to see the reason")}</span>.
+      ${WL.t("Что запросить у клиента, собрано ниже в разделе «Документы и чего не хватает».", "What to request from the client is listed below under “Documents and gaps”.")}</p>`;
   return {grand, covered, countable, change, only};
 };
 
 /* ── График: акции в текущем составе против бенчмарка ─────────────────── */
-WL.BENCH = [["SPY", "S&P 500 · SPY"], ["QQQ", "Nasdaq 100 · QQQ"], ["IWM", "Russell 2000 · IWM"], ["VT", "Весь мир · VT"],
-  ["EFA", "Развитые рынки без США · EFA"], ["AGG", "Облигации США · AGG"], ["IEF", "Казначейские 7–10 лет · IEF"],
-  ["TLT", "Казначейские 20+ лет · TLT"], ["GLD", "Золото · GLD"], ["IBIT", "Биткоин · IBIT"]];
+WL.BENCH = [["SPY", "S&P 500 · SPY"], ["QQQ", "Nasdaq 100 · QQQ"], ["IWM", "Russell 2000 · IWM"], ["VT", WL.t("Весь мир · VT", "All world · VT")],
+  ["EFA", WL.t("Развитые рынки без США · EFA", "Developed markets ex-US · EFA")], ["AGG", WL.t("Облигации США · AGG", "US bonds · AGG")], ["IEF", WL.t("Казначейские 7–10 лет · IEF", "Treasuries 7–10y · IEF")],
+  ["TLT", WL.t("Казначейские 20+ лет · TLT", "Treasuries 20+y · TLT")], ["GLD", WL.t("Золото · GLD", "Gold · GLD")], ["IBIT", WL.t("Биткоин · IBIT", "Bitcoin · IBIT")]];
 const WINDOW = {"1d": 30, "1m": 30, "3m": 91, "1y": 365, "5y": 1826, "all": null, "stmt": "stmt", "cost": 365};
+const MON_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const niceStep = raw => { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw) || 10 * p; };
 
 WL.renderChart = function(el, P, S){
@@ -147,8 +155,9 @@ WL.renderChart = function(el, P, S){
   const bh = P.history[S.bench] || [];
   if(!stocks.length || bh.length < 2){
     const limited = Object.values(P.historyStatus || {}).includes("limited");
-    el.innerHTML = `<p class="muted">${limited ? "CBOE временно ограничил частоту запросов. История цен подгрузится автоматически, повтор через полторы минуты."
-                                              : "История цен ещё загружается…"}</p>`;
+    el.innerHTML = `<p class="muted">${limited ? WL.t("CBOE временно ограничил частоту запросов. История цен подгрузится автоматически, повтор через полторы минуты.",
+                                                      "CBOE is temporarily rate-limiting requests. Price history will load automatically; retrying in 90 seconds.")
+                                              : WL.t("История цен ещё загружается…", "Price history is still loading…")}</p>`;
     return;
   }
   const spec = WINDOW[S.period];
@@ -156,7 +165,7 @@ WL.renderChart = function(el, P, S){
     : spec == null ? stocks.map(p => P.history[p.symbol][0][0]).sort()[0]
     : new Date(+new Date(P.today + "T00:00:00Z") - spec * 864e5).toISOString().slice(0, 10);
   const dates = bh.map(x => x[0]).filter(d => d >= start);
-  if(dates.length < 2){ el.innerHTML = `<p class="muted">За этот период мало данных для графика.</p>`; return; }
+  if(dates.length < 2){ el.innerHTML = `<p class="muted">${WL.t("За этот период мало данных для графика.", "Not enough data to chart this period.")}</p>`; return; }
   const weight = new Map(stocks.map(p => [p.symbol, Math.max(WL.current(P, p).value, 0)]));
   const maps = new Map(stocks.map(p => [p.symbol, new Map(P.history[p.symbol])]));
   const bmap = new Map(bh), b0 = bmap.get(dates[0]);
@@ -187,25 +196,28 @@ WL.renderChart = function(el, P, S){
   let xl = "";
   for(let j = 0; j < 5; j++){
     const i = Math.round((dates.length - 1) * j / 4), [y, m, d] = dates[i].split("-");
-    xl += `<text x="${X(i)}" y="${H - 8}" text-anchor="${j === 0 ? "start" : j === 4 ? "end" : "middle"}" font-size="11" fill="var(--muted)">${spec && spec <= 91 ? `${d}.${m}` : `${m}.${y}`}</text>`;
+    xl += `<text x="${X(i)}" y="${H - 8}" text-anchor="${j === 0 ? "start" : j === 4 ? "end" : "middle"}" font-size="11" fill="var(--muted)">${spec && spec <= 91
+      ? WL.t(`${d}.${m}`, `${+d} ${MON_EN[m - 1]}`) : WL.t(`${m}.${y}`, `${MON_EN[m - 1]} ${y}`)}</text>`;
   }
   const benchName = (WL.BENCH.find(b => b[0] === S.bench) || [S.bench, S.bench])[1];
   const pLast = port[port.length - 1] - 100, bLast = bench[bench.length - 1] - 100;
   el.innerHTML = `
     <div class="legend">
-      <span><span class="sw" style="background:var(--series-1)"></span>Акции в текущем составе <b class="num" data-r="p">${fmt.pct(pLast)}</b></span>
+      <span><span class="sw" style="background:var(--series-1)"></span>${WL.t("Акции в текущем составе", "Current stock holdings")} <b class="num" data-r="p">${fmt.pct(pLast)}</b></span>
       <span><span class="sw" style="background:var(--series-2)"></span>${esc(benchName)} <b class="num" data-r="b">${fmt.pct(bLast)}</b></span>
       <span class="muted" data-r="d">${fmt.date(dates[0])} — ${fmt.date(dates[dates.length - 1])}</span>
     </div>
-    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="График акций против бенчмарка">
+    <svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${WL.t("График акций против бенчмарка", "Chart of stocks vs benchmark")}">
       ${grid}${xl}
       <path d="${path(bench)}" fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"/>
       <path d="${path(port)}" fill="none" stroke="var(--series-1)" stroke-width="2.25" stroke-linejoin="round"/>
       <line data-r="x" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>
       <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" data-r="hit"/>
     </svg>
-    <p class="basis">Разница за период: ${fmt.pct(pLast - bLast)} п.п. Веса — текущая стоимость позиций; в начале периода есть цены по ${startCover} из ${stocks.length} бумаг.
-      Это не фактическая история счёта: сделки и ввод-вывод денег не учитываются. Цены CBOE без учёта дивидендов.</p>`;
+    <p class="basis">${WL.t(`Разница за период: ${fmt.pct(pLast - bLast)} п.п. Веса — текущая стоимость позиций; в начале периода есть цены по ${startCover} из ${stocks.length} бумаг.
+      Это не фактическая история счёта: сделки и ввод-вывод денег не учитываются. Цены CBOE без учёта дивидендов.`,
+      `Difference over the period: ${fmt.pct(pLast - bLast).replace("%", "")} pp. Weighted by current position value; start-of-period prices are available for ${startCover} of ${stocks.length} ${stocks.length === 1 ? "security" : "securities"}.
+      This is not the account’s actual history: trades, deposits and withdrawals are not included. CBOE prices, excluding dividends.`)}</p>`;
   const svg = el.querySelector("svg"), hit = el.querySelector('[data-r="hit"]'), cross = el.querySelector('[data-r="x"]');
   const show = i => {
     cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");

@@ -84,7 +84,7 @@ function parseSchwab(pages, fileName){
   const eq = section(/^Positions - Equities/, /^Total Equities/);
   let sumEq = 0;
   eq.forEach((l, i) => {
-    if(/^Total Equities/.test(l.text)){ doc.checks.push(check("Акции Schwab", round2(sumEq), nums(l)[0])); return; }
+    if(/^Total Equities/.test(l.text)){ doc.checks.push(check(WL.t("Акции Schwab", "Schwab equities"), round2(sumEq), nums(l)[0])); return; }
     if(!isSym(l.items[0])) return;
     const v = numbersRight(l); if(v.length < 5) return;
     const prev = i > 0 && Math.abs(eq[i - 1].y - l.y) < 8 ? eq[i - 1] : null;
@@ -96,7 +96,7 @@ function parseSchwab(pages, fileName){
     doc.positions.push({id: "SCHW:" + sym, broker: doc.broker, brokerShort: "Schwab", type: "stock",
       symbol: sym, name: titleCase(name), qty, price, priceDate: doc.asOf, value, ccy: "USD",
       cost: costFlag ? null : cost, costReported: cost,
-      costNote: cost == null ? "нет в выписке" : (costFlag ? "неполная в выписке" : null),
+      costNote: cost == null ? WL.t("нет в выписке", "not in the statement") : (costFlag ? WL.t("неполная в выписке", "incomplete in the statement") : null),
       unrealized: costFlag ? null : unreal, purchaseDate: null, commission: null});
   });
 
@@ -104,7 +104,7 @@ function parseSchwab(pages, fileName){
   const op = section(/^Positions - Options/, /^Total Options/);
   let sumOp = 0;
   op.forEach((l, i) => {
-    if(/^Total Options/.test(l.text)){ doc.checks.push(check("Опционы Schwab", round2(sumOp), nums(l)[0])); return; }
+    if(/^Total Options/.test(l.text)){ doc.checks.push(check(WL.t("Опционы Schwab", "Schwab options"), round2(sumOp), nums(l)[0])); return; }
     const d = l.items[1];
     if(!isSym(l.items[0]) || !d || !/^(CALL|PUT) /.test(d.s)) return;
     const [qty, price, value, cost, unreal] = numbersRight(l);
@@ -123,13 +123,13 @@ function parseSchwab(pages, fileName){
       right, underlying: root, underlyingName: titleCase(d.s.replace(/^(CALL|PUT) /, "")), strike, expiry, occ,
       multiplier: 100, qty, price, priceDate: doc.asOf, value, ccy: "USD", cost, unrealized: unreal,
       purchaseDate: null, commission: null,
-      name: `${root} ${right === "C" ? "колл" : "пут"} ${strike}`});
+      name: WL.t(`${root} ${right === "C" ? "колл" : "пут"} ${strike}`, `${root} ${strike} ${right === "C" ? "call" : "put"}`)});
   });
 
   if(cash != null) doc.positions.push({id: "SCHW:CASH:USD", broker: doc.broker, brokerShort: "Schwab", type: "cash",
-    name: "Денежные средства", symbol: "USD", value: cash, ccy: "USD", priceDate: doc.asOf});
+    name: WL.t("Денежные средства", "Cash"), symbol: "USD", value: cash, ccy: "USD", priceDate: doc.asOf});
   const total = round2(doc.positions.reduce((a, p) => a + (p.value || 0), 0));
-  doc.checks.push(check("Итог счёта Schwab", total, S.ending));
+  doc.checks.push(check(WL.t("Итог счёта Schwab", "Schwab account total"), total, S.ending));
 
   // Операции месяца: дата, описание, сумма.
   section(/^Transaction Details/, /^Total Transactions/).forEach(l => {
@@ -176,7 +176,7 @@ function parseSwissquote(pages, fileName){
       const type = (l.items[1] || {}).s || "";
       const last = num(l.items[l.items.length - 1].s);
       if(/^Opening balance/.test(type)){ prev = last ?? 0; continue; }
-      if(/^Closing balance/.test(type)){ doc.balances[ccy] = last; doc.checks.push(check(`Остаток ${ccy} на конец`, round2(prev), last)); continue; }
+      if(/^Closing balance/.test(type)){ doc.balances[ccy] = last; doc.checks.push(check(WL.t(`Остаток ${ccy} на конец`, `${ccy} closing balance`), round2(prev), last)); continue; }
       const rest = l.items.slice(2);
       const vd = rest.find(i => /^\d{2}\.\d{2}\.\d{4}$/.test(i.s));
       const ref = rest.find(i => /^\d{6,}$/.test(i.s) && i.x < cols.debit - 5);
@@ -194,7 +194,7 @@ function parseSwissquote(pages, fileName){
   }
   flush();
   const okN = doc.records.filter(r => r.ok).length;
-  doc.checks.unshift({label: "Строк журнала сверено с остатком", parsed: okN, stated: doc.records.length,
+  doc.checks.unshift({label: WL.t("Строк журнала сверено с остатком", "Ledger lines reconciled to balance"), parsed: okN, stated: doc.records.length,
                       ok: okN === doc.records.length && okN > 0, count: true});
 
   // Одна сделка = одна ссылка: премия, комиссия и сбор идут под общим номером.

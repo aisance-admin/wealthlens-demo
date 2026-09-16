@@ -15,15 +15,21 @@ const HEAD = {
          "security", "instrument", "description", "name", "position", "holding"],
   ticker: ["тикер", "символ", "код", "symbol", "ticker", "bbg", "bloomberg"],
   isin: ["isin", "изин"],
-  type: ["тип", "класс", "класс актива", "вид", "asset class", "asset category", "assetclass", "type", "class", "category"],
+  type: ["тип", "класс", "класс актива", "вид", "asset class", "asset category", "assetclass", "type", "class", "category",
+         "asset type", "security type", "instrument type", "product type"],
   qty: ["количество", "кол-во", "колво", "штук", "шт", "quantity", "qty", "shares", "units", "контракты"],
-  costTotal: ["себестоимость", "сумма покупки", "затраты", "cost basis", "total cost", "book value", "стоимость покупки"],
+  costTotal: ["себестоимость", "сумма покупки", "затраты", "cost basis", "total cost", "book value", "стоимость покупки",
+              "cost value"],
   costPrice: ["цена покупки", "средняя цена", "цена входа", "цена приобретения", "avg price", "average price",
-              "average cost", "purchase price", "book price"],
-  price: ["текущая цена", "цена", "last price", "market price", "price", "last", "курс", "котировка"],
-  value: ["рыночная стоимость", "стоимость", "оценка", "сумма", "market value", "value", "amount", "mv"],
+              "average cost", "purchase price", "book price",
+              "average cost price", "cost price", "unit cost", "cost per share", "cost/share"],
+  price: ["текущая цена", "цена", "last price", "market price", "price", "last", "курс", "котировка",
+          "current price", "close price", "closing price"],
+  value: ["рыночная стоимость", "стоимость", "оценка", "сумма", "market value", "value", "amount", "mv",
+          "current value", "position value"],
   ccy: ["валюта", "currency", "ccy", "cur"],
-  date: ["дата покупки", "дата сделки", "дата приобретения", "purchase date", "trade date", "open date", "дата"],
+  date: ["дата покупки", "дата сделки", "дата приобретения", "purchase date", "trade date", "open date", "дата",
+         "acquisition date", "date acquired", "buy date"],
   commission: ["комиссия", "комиссии", "сбор", "commission", "fee", "fees"],
   expiry: ["экспирация", "погашение", "expiry", "expiration", "maturity"],
 };
@@ -114,18 +120,23 @@ function numOrNull(v){
   if(!/\d/.test(t)) return null;
   const hasC = t.includes(","), hasD = t.includes(".");
   if(hasC && hasD) t = t.lastIndexOf(",") > t.lastIndexOf(".") ? t.replace(/\./g, "").replace(/,/g, ".") : t.replace(/,/g, "");
-  else if(hasC) t = /^\d+,\d{1,2}$/.test(t) ? t.replace(",", ".") : t.replace(/,/g, "");
+  else if(hasC){
+    // Запятая — разделитель разрядов, только если за ней группы ровно по три цифры, а число не
+    // начинается с нуля: 1,234 · 12,345,678. Иначе это дробь: 172,30 · 0,9860 · 0,015.
+    const groups = /^[1-9]\d{0,2}(,\d{3})+$/.test(t);
+    t = groups ? t.replace(/,/g, "") : t.split(",").length === 2 ? t.replace(",", ".") : t.replace(/,/g, "");
+  }
   else if(hasD && (t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
   const n = parseFloat(t);
   return isFinite(n) ? (neg ? -Math.abs(n) : n) : null;
 }
-function toISO(v){
+function toISO(v, dayFirst = true){
   if(v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
   const s = String(v == null ? "" : v).trim();
   let m = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/.exec(s);
   if(m) return `${m[1]}-${pad(m[2])}-${pad(m[3])}`;
-  m = /^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})/.exec(s);          // день.месяц.год
-  if(m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(m[2])}-${pad(m[1])}`;
+  m = /^(\d{1,2})[-./](\d{1,2})[-./](\d{2,4})/.exec(s);          // день.месяц.год или месяц/день/год
+  if(m){ const [d, mo] = dayFirst ? [m[1], m[2]] : [m[2], m[1]]; return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${pad(mo)}-${pad(d)}`; }
   return null;
 }
 const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/) || [null])[0];
@@ -141,7 +152,8 @@ function mapHeaders(rowCells){
   if(/^(header|data|total|subtotal)$/i.test(low[1] || "")){ taken.add(0); taken.add(1); }
   // Колонка с процентом — ставка, а не деньги: «Fee product %» это TER фонда, и принимать
   // её за комиссию сделки нельзя.
-  const fits = (f, h, ix) => !taken.has(ix) && h && !(MONEY.has(f) && h.includes("%"));
+  // «% Of Account» у Schwab — доля позиции, а не брокер: процентная колонка не подходит никакому полю.
+  const fits = (f, h, ix) => !taken.has(ix) && h && !h.includes("%");
   for(const [f, syn] of Object.entries(HEAD)){
     const i = low.findIndex((h, ix) => fits(f, h, ix) && syn.some(x => h === x));
     if(i >= 0){ map[f] = i; taken.add(i); }
@@ -173,7 +185,7 @@ function loadXLSX(){
   return new Promise((res, rej) => {
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-    s.onload = res; s.onerror = () => rej(new Error("не удалось загрузить чтение Excel"));
+    s.onload = res; s.onerror = () => rej(new Error(WL.t("не удалось загрузить чтение Excel", "could not load the Excel reader")));
     document.head.appendChild(s);
   });
 }
@@ -202,6 +214,14 @@ function buildDoc(rows, head, file){
 
   const sect = sectionBody(rows, row);
   const body = sect ? sect.data : rows.slice(row + 1);
+  // Порядок дня и месяца — по всей колонке дат: 14/03/2024 бывает только «день первым»,
+  // 03/14/2024 — только «месяц первым». Если по файлу не понять, как и раньше, день первым.
+  const dayFirst = (() => {
+    const ms = body.flatMap(r => [g(r || [], "date"), g(r || [], "expiry")])
+      .map(v => /^(\d{1,2})[-./](\d{1,2})[-./]\d{2,4}/.exec(String(v == null || v instanceof Date ? "" : v).trim())).filter(Boolean);
+    if(ms.some(m => +m[1] > 12)) return true;
+    return !ms.some(m => +m[2] > 12);
+  })();
   if(sect) sect.totals.forEach(r => {
     const v = numOrNull(g(r, "value"));
     if(v != null) totals.push({ccy: ccy3(g(r, "ccy")), value: v});
@@ -238,9 +258,9 @@ function buildDoc(rows, head, file){
     const isOption = type === "option", isFuture = type === "future";
     const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
     const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
-                  name: label || "Позиция " + i, ccy, value: value != null ? round2(value) : null};
+                  name: label || WL.t("Позиция ", "Position ") + i, ccy, value: value != null ? round2(value) : null};
 
-    if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || "Денежные средства"}); continue; }
+    if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || WL.t("Денежные средства", "Cash")}); continue; }
 
     // Цена опциона указана за одну бумагу, а контракт — это 100 бумаг: без множителя стоимость
     // и себестоимость расходятся с живой ценой в сто раз.
@@ -251,17 +271,17 @@ function buildDoc(rows, head, file){
     const cost = costTotal != null ? costTotal : (costPrice != null && qty != null ? round2(costPrice * qty * mult) : null);
     const p = {...base, type,
                symbol: sym || null, code: symRaw !== sym ? symRaw : null, qty, price, priceDate: null, cost,
-               costNote: cost == null ? "нет в выгрузке" : null,
-               purchaseDate: toISO(g(r, "date")), commission: numOrNull(g(r, "commission")),
+               costNote: cost == null ? WL.t("нет в выгрузке", "not in the export") : null,
+               purchaseDate: toISO(g(r, "date"), dayFirst), commission: numOrNull(g(r, "commission")),
                isin: clean(g(r, "isin")) || null};
     if(occ){
       p.occ = sym; p.underlying = occ[1]; p.underlyingName = occ[1]; p.right = occ[5]; p.multiplier = 100;
       p.strike = +occ[6] / 1000;
       p.expiry = `20${occ[2]}-${occ[3]}-${occ[4]}`;
       // Запись брокера «MCD 18SEP26 230 P» заменяем на нашу: «MCD пут 230».
-      p.name = (ib ? "" : label) || `${occ[1]} ${occ[5] === "C" ? "колл" : "пут"} ${p.strike}`;
+      p.name = (ib ? "" : label) || WL.t(`${occ[1]} ${occ[5] === "C" ? "колл" : "пут"} ${p.strike}`, `${occ[1]} ${p.strike} ${occ[5] === "C" ? "call" : "put"}`);
     } else if(isOption || isFuture){
-      p.expiry = toISO(g(r, "expiry"));
+      p.expiry = toISO(g(r, "expiry"), dayFirst);
     }
     if(!p.symbol && !occ){                           // тикер в скобках внутри названия: Apple Inc (AAPL)
       const m = /\(([A-Z][A-Z0-9.]{0,9})\)/.exec(label || "");
@@ -287,30 +307,34 @@ function buildDoc(rows, head, file){
       if(y) asOf = `${y[1]}-${y[2]}-${y[3]}`;
     }
   }
-  if(!asOf){ asOf = new Date().toISOString().slice(0, 10); notes.push("даты оценки в файле нет — взята сегодняшняя"); }
+  if(!asOf){ asOf = new Date().toISOString().slice(0, 10);
+    notes.push(WL.t("даты оценки в файле нет — взята сегодняшняя", "no valuation date in the file — today's date used")); }
   positions.forEach(p => { if(p.priceDate == null) p.priceDate = asOf; });
 
-  if(sect) notes.push(`прочитан раздел «${sect.key}»`);
-  if(map.price == null) notes.push("колонки текущей цены нет — цены подтянутся с рынка по тикеру");
-  if(map.costPrice == null && map.costTotal == null) notes.push("цены покупки в файле нет");
-  if(map.commission == null) notes.push("комиссий в файле нет");
+  if(sect) notes.push(WL.t(`прочитан раздел «${sect.key}»`, `read section “${sect.key}”`));
+  if(map.price == null) notes.push(WL.t("колонки текущей цены нет — цены подтянутся с рынка по тикеру",
+    "no current price column — prices will be fetched from the market by ticker"));
+  if(map.costPrice == null && map.costTotal == null) notes.push(WL.t("цены покупки в файле нет", "no purchase price or cost basis in the file"));
+  if(map.commission == null) notes.push(WL.t("комиссий в файле нет", "no fees in the file"));
   const noSym = positions.filter(p => (p.type === "stock" || p.type === "fund") && !p.symbol).length;
-  if(noSym) notes.push(`без тикера: ${noSym} ${WL.plural(noSym, "бумага", "бумаги", "бумаг")} — живых котировок по ним не будет`);
+  if(noSym) notes.push(WL.t(`без тикера: ${noSym} ${WL.plural(noSym, "бумага", "бумаги", "бумаг")} — живых котировок по ним не будет`,
+    `no ticker for ${noSym} ${noSym === 1 ? "security" : "securities"} — no live quotes for ${noSym === 1 ? "it" : "them"}`));
   const other = positions.filter(p => p.type === "other").length;
-  if(other) notes.push(`класс актива не распознан: ${other}`);
+  if(other) notes.push(WL.t(`класс актива не распознан: ${other}`, `asset class not recognised: ${other}`));
 
   const brokers = [...new Set(positions.map(p => p.broker))];
   const one = brokers.length === 1 ? brokers[0] : null;
-  const checks = [{label: "Строк с позициями прочитано", parsed: positions.length, stated: dataRows,
+  const checks = [{label: WL.t("Строк с позициями прочитано", "Position rows read"), parsed: positions.length, stated: dataRows,
                    ok: positions.length === dataRows, count: true}];
   totals.forEach(t => {
     const sum = round2(positions.filter(p => !t.ccy || p.ccy === t.ccy).reduce((a, p) => a + (p.value || 0), 0));
-    checks.push({label: `Итог в файле${t.ccy ? " " + t.ccy : ""}`, parsed: sum, stated: round2(t.value),
+    checks.push({label: `${WL.t("Итог в файле", "File total")}${t.ccy ? " " + t.ccy : ""}`, parsed: sum, stated: round2(t.value),
                  ok: Math.abs(sum - t.value) < Math.max(1, Math.abs(t.value) * 1e-6), ccy: t.ccy || undefined});
   });
-  if(!totals.length) notes.push("итоговой строки в файле нет — сверять сумму не с чем");
+  if(!totals.length) notes.push(WL.t("итоговой строки в файле нет — сверять сумму не с чем",
+    "no total row in the file — nothing to reconcile the sum against"));
 
-  return {broker: one || `Выгрузка · ${tag}`, brokerShort: one ? positions[0].brokerShort : "Выгрузка",
+  return {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
           kind: "positions", asOf, fileName: file.name, from: "sheet", note: notes.join(" · "),
           positions, checks, transactions: []};
 }
@@ -338,10 +362,12 @@ WL.sheetDoc = buildDoc;          // (строки, {row, map}, файл) → д�
 WL.sheetMap = mapHeaders;        // ячейки строки → карта колонок
 WL.sheetFind = findHeader;       // строки листа → {row, map} или null
 // Поля для панели сопоставления: порядок и подписи. Первые два — обязательный минимум.
-WL.sheetFields = [["name", "Наименование"], ["ticker", "Тикер"], ["qty", "Количество"], ["value", "Стоимость"],
-  ["price", "Текущая цена"], ["ccy", "Валюта"], ["broker", "Брокер"], ["type", "Тип актива"],
-  ["costPrice", "Цена покупки"], ["costTotal", "Себестоимость"], ["date", "Дата покупки"],
-  ["commission", "Комиссия"], ["expiry", "Экспирация"], ["isin", "ISIN"]];
+WL.sheetFields = [["name", WL.t("Наименование", "Name")], ["ticker", WL.t("Тикер", "Ticker")],
+  ["qty", WL.t("Количество", "Quantity")], ["value", WL.t("Стоимость", "Market value")],
+  ["price", WL.t("Текущая цена", "Current price")], ["ccy", WL.t("Валюта", "Currency")], ["broker", WL.t("Брокер", "Broker")],
+  ["type", WL.t("Тип актива", "Asset type")], ["costPrice", WL.t("Цена покупки", "Average cost price")],
+  ["costTotal", WL.t("Себестоимость", "Cost basis")], ["date", WL.t("Дата покупки", "Purchase date")],
+  ["commission", WL.t("Комиссия", "Fees")], ["expiry", WL.t("Экспирация", "Expiry")], ["isin", "ISIN"]];
 
 WL.parseSheet = async function(file){
   const {sheets, best} = await WL.readSheet(file);
@@ -350,7 +376,8 @@ WL.parseSheet = async function(file){
     return {unknown: true, fileName: file.name, sheets, headers: first.map(clean).filter(Boolean).slice(0, 12)};
   }
   const doc = buildDoc(sheets[best.sheetIndex].rows, best.head, file);
-  if(sheets.length > 1) doc.note = [`лист «${sheets[best.sheetIndex].name}»`, doc.note].filter(Boolean).join(" · ");
+  if(sheets.length > 1) doc.note = [WL.t(`лист «${sheets[best.sheetIndex].name}»`, `sheet “${sheets[best.sheetIndex].name}”`),
+                                    doc.note].filter(Boolean).join(" · ");
   doc.sheetIndex = best.sheetIndex; doc.head = best.head;   // чтобы сопоставление можно было поправить руками
   Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
   return doc;
@@ -359,11 +386,24 @@ WL.parseSheet = async function(file){
 /* Шаблон для тех, у кого выгрузки нет: понятные заголовки, точка с запятой и
    десятичная запятая — так Excel на русской раскладке открывает файл без вопросов. */
 WL.sheetTemplate = function(){
+  /* Английский шаблон — для Excel с английскими настройками: запятая между колонками, точка
+     в числах, даты в виде 2024-03-14 (американское 03/14/2024 читалось бы как день.месяц).
+     Итог по каждой валюте отдельно — тогда сверка с файлом сходится. Заголовки — точные
+     синонимы из HEAD. */
+  if(WL.lang === "en")
+    return ["Broker,Name,Ticker,ISIN,Type,Quantity,Average cost price,Purchase date,Fees,Current price,Market value,Currency",
+            "Charles Schwab,Apple Inc,AAPL,US0378331005,Stock,1000,150.25,2024-03-14,1.50,332.58,332580.00,USD",
+            "Charles Schwab,MCD put 230,MCD260918P00230000,,Option,-100,2.99,2026-05-12,7.80,0.015,-150.00,USD",
+            "UBS,Nestle,NESN,CH0038863350,Stock,500,92.40,2025-02-03,12.00,88.10,44050.00,CHF",
+            "UBS,Cash,CHF,,Cash,,,,,,125000.00,CHF",
+            "Total USD,,,,,,,,,,332430.00,USD",
+            "Total CHF,,,,,,,,,,169050.00,CHF"].join("\n");
   return ["Брокер;Наименование;Тикер;Тип;Количество;Цена покупки;Дата покупки;Комиссия;Текущая цена;Стоимость;Валюта",
           "Charles Schwab;Apple Inc;AAPL;акция;1000;150,25;14.03.2024;1,50;332,58;332580,00;USD",
           "Charles Schwab;MCD пут 230;MCD260918P00230000;опцион;-100;2,99;12.05.2026;7,80;0,015;-150,00;USD",
           "UBS;Nestle;NESN;акция;500;92,40;03.02.2025;12,00;88,10;44050,00;CHF",
           "UBS;Денежные средства;CHF;деньги;;;;;;125000,00;CHF",
-          "Итого;;;;;;;;;501480,00;USD"].join("\n");
+          "Итого USD;;;;;;;;;332430,00;USD",
+          "Итого CHF;;;;;;;;;169050,00;CHF"].join("\n");
 };
 })();

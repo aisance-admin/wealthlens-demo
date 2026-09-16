@@ -66,6 +66,7 @@ button{cursor:pointer}
 .drop h1{font-size:26px; line-height:1.25; margin:0 0 10px; font-weight:600; text-wrap:balance}
 .drop p{color:var(--ink-2); margin:0 auto 24px; max-width:46ch}
 .drop .hint{font-size:12.5px; color:var(--muted); margin:18px auto 0}
+.drop .lang-link{margin-top:8px} .drop .lang-link a{color:inherit}
 .progress{margin-top:20px; font-size:13.5px; color:var(--ink-2); text-align:left; display:grid; gap:6px}
 
 /* Сводка */
@@ -376,6 +377,7 @@ ul.notes li{margin:5px 0; color:var(--ink-2)}
     <input class="client" id="client" value="Клиент" aria-label="Имя клиента" spellcheck="false">
     <span id="docChips"></span>
     <span class="spacer"></span>
+    <button class="btn small" id="langBtn" type="button" lang="en" title="English" aria-label="English">EN</button>
     <button class="btn small" id="addBtn" type="button">Добавить выписку</button>
     <button class="btn small" id="resetBtn" type="button">Новый отчёт</button>
     <button class="btn small primary" id="printBtn" type="button">Отчёт PDF</button>
@@ -386,6 +388,19 @@ ul.notes li{margin:5px 0; color:var(--ink-2)}
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Детали позиции"></aside>
 <input type="file" id="file" accept=".pdf,.csv,.tsv,.txt,.xlsx,.xls,application/pdf" multiple hidden>
+<script>
+/* Язык интерфейса: ?lang=en|ru со ссылки лендинга запоминается в браузере; по умолчанию русский.
+   WL.t("русский", "English") выбирает строку; числа и даты форматирует WL.fmt (model.js). */
+window.WL = window.WL || {};
+WL.lang = (() => {
+  const q = new URLSearchParams(location.search).get("lang");
+  let l = q === "en" || q === "ru" ? q : null;
+  try{ if(l) localStorage.setItem("wl_lang", l); else l = localStorage.getItem("wl_lang"); }catch(e){}
+  return l === "en" ? "en" : "ru";
+})();
+WL.t = (ru, en) => WL.lang === "en" ? en : ru;
+document.documentElement.lang = WL.lang;
+</script>
 <script>
 /* Адрес сервера котировок и новостей. Страница, открытая с нашего сервера, ходит на тот же
    адрес. Опубликованная копия (GitHub Pages) берёт его из wealth/api.json: файл пишет
