@@ -243,18 +243,48 @@ const getJSON = WL.getJSON;
    стороны); underlying — опцион на бумагу, уже подтверждённую в отчёте; user — сопоставление подтвердил человек.
    Иначе остаются цена и стоимость из выписки: вымышленная «Beta Corp» с тикером BETA не станет BETA Technologies. */
 const ID = {};                       // "t:BETA" / "i:US…" → ответ справочника (или ошибка с временем); в памяти страницы
-const GENERIC_WORD = /^(inc|incorporated|corp|corporation|co|company|companies|ltd|limited|plc|ag|sa|nv|se|llc|lp|the|of|and|class|cl|shares?|shs|common|stock|ord|ordinary|adr|ads|sponsored|spon|registered|reg|new|del|holding|holdings|hldgs|group|grp|trust|tr|fund|etf|etp|ucits|acc|dist|us|usa|ss|a|b|c|n|v)$/;
-const ABBR = {intl: "international", tot: "total", stk: "stock", mkt: "market", idx: "index", govt: "government", tech: "technologies", technology: "technologies",
-  mfg: "manufacturing", svcs: "services", svc: "services", sys: "systems", fin: "financial", finl: "financial", natl: "national", amer: "american",
-  pharma: "pharmaceuticals", pharm: "pharmaceuticals", inds: "industries", ind: "industries", mgmt: "management", comm: "communications",
-  commun: "communications", ent: "entertainment", res: "resources", props: "properties", engy: "energy", hlth: "health", ins: "insurance", elec: "electric", chem: "chemical"};
-const nameWords = x => [...new Set(String(x || "").toLowerCase().replace(/s\s*&\s*p/g, "sp").replace(/&/g, " ")
-  .split(/[^a-z0-9]+/).filter(Boolean).map(w => ABBR[w] || w).filter(w => !GENERIC_WORD.test(w)))];
-// Названия совпадают, если каждое значимое слово одного есть в другом (или одно — начало другого: TOT → TOTAL) и наоборот.
+// Служебные слова названий: форма компании, «акции», «обычные», «фонд». Класс акций, UCITS, ADR, валюта класса,
+// accumulating/distributing, страна и номер серии — не служебные: они отличают один инструмент от другого и должны совпасть.
+const GENERIC_WORD = /^(inc|incorporated|corp|corporation|co|cos|company|companies|ltd|limited|plc|ag|sa|nv|se|as|asa|ab|oyj|spa|gmbh|kgaa|bv|llc|lp|the|of|and|shares?|shs|common|stock|ord|ordinary|sponsored|spon|spons|registered|reg|new|del|holding|holdings|hldg|hldgs|group|grp|trust|tr|fund|etf|etp)$/;
+// Сокращения справочников (у Bloomberg и OpenFIGI название не длиннее 28 знаков). Только явный словарь: совпадение по началу
+// слова не годится — Apple ≠ Appleton, Meta ≠ Metaverse. Обрезанное справочником слово («MARKE») тоже не совпадёт: спросим человека.
+const ABBR = {intl: "international", tot: "total", stk: "stock", mkt: "market", mkts: "markets", idx: "index", govt: "government",
+  tech: "technologies", technology: "technologies", mfg: "manufacturing", svcs: "services", svc: "services", sys: "systems",
+  fin: "financial", finl: "financial", natl: "national", amer: "american", pharma: "pharmaceuticals", pharm: "pharmaceuticals",
+  pharmaceutical: "pharmaceuticals", inds: "industries", mgmt: "management", comm: "communications", commun: "communications",
+  communication: "communications", ent: "entertainment", res: "resources", props: "properties", engy: "energy", hlth: "health",
+  ins: "insurance", elec: "electric", chem: "chemical", chemicals: "chemical", dvd: "dividend", eqty: "equity", bd: "bond",
+  trsy: "treasury", tsy: "treasury", agg: "aggregate", vg: "vanguard", registry: "registered", pfd: "preferred", pref: "preferred",
+  wts: "warrants", wt: "warrants", rts: "rights", hdg: "hedged", accumulating: "acc", accumulation: "acc", accum: "acc",
+  distributing: "dist", distribution: "dist", ads: "adr"};
+const nameParts = x => {
+  let raw = String(x || "").toLowerCase().replace(/s\s*&\s*p/g, "sp")
+    .replace(/(^|[^a-z0-9])((?:[a-z][.\/]){1,3}[a-z])(?![a-z0-9])/g, (m, pre, ab) => pre + ab.replace(/[.\/]/g, ""))   // U.S., S.A., A/S, J.M.
+    .split(/[^a-z0-9]+/).filter(Boolean);
+  // Инициалы через пробел — одно слово: «J M Smucker» = «JM SMUCKER».
+  raw = raw.reduce((out, w) => { const last = out[out.length - 1];
+    if(/^[a-z]$/.test(w) && last && last.initials){ last.w += w; return out; }
+    out.push({w, initials: /^[a-z]$/.test(w)}); return out; }, []).map(o => o.w);
+  const words = new Set();
+  let cls = null;
+  for(let i = 0; i < raw.length; i++){
+    const w = ABBR[raw[i]] || raw[i], next = raw[i + 1] || "";
+    // Класс акций: «Class A», «CL B», «Series C» или буква в конце («LIBERTY GLOBAL LTD-A») — сравнивается отдельно.
+    if(/^(class|cl|cls|series)$/.test(w) && /^[a-z]$/.test(next)){ cls = next; i++; continue; }
+    if(/^[a-z]$/.test(w)){ if(i === raw.length - 1) cls = cls || w; continue; }
+    if(w === "ss" && next === "spdr") continue;                      // SS SPDR — State Street
+    if(w === "sp" && /^(adr|ads|gdr)$/.test(next)) continue;         // SP ADR — sponsored ADR
+    if(w === "us" && i === raw.length - 1) continue;                 // ETF-US — пометка американского листинга
+    if(GENERIC_WORD.test(w)) continue;
+    words.add(w);
+  }
+  return {words: [...words], cls};
+};
+// Названия совпадают, только если наборы значимых слов равны (после развёртывания сокращений) и класс акций не противоречит.
 WL.sameName = (a, b) => {
-  const A = nameWords(a), B = nameWords(b);
-  const eq = (x, y) => x === y || (x.length >= 3 && y.startsWith(x)) || (y.length >= 3 && x.startsWith(y));
-  return A.length > 0 && B.length > 0 && A.every(x => B.some(y => eq(x, y))) && B.every(y => A.some(x => eq(x, y)));
+  const A = nameParts(a), B = nameParts(b);
+  if(!A.words.length || A.words.length !== B.words.length || !A.words.every(w => B.words.includes(w))) return false;
+  return !(A.cls && B.cls && A.cls !== B.cls);
 };
 const tick = x => String(x || "").toUpperCase().replace(/[\/\s]+/g, ".");
 const ISIN = /^[A-Z]{2}[A-Z0-9]{9}\d$/;

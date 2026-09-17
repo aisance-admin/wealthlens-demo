@@ -116,11 +116,14 @@ const TOKEN = /^[a-f0-9]{40}$/;
 const unlockOf = rid => { const v = rid && unlocks()[rid];
   if(typeof v === "string") return TOKEN.test(v) ? {t: v} : null;
   return v && typeof v === "object" && typeof v.t === "string" && TOKEN.test(v.t) ? v : null; };
-/* Доступ открывает разрешение, подписанное сервером (ECDSA P-256), со сроком действия (g: {exp, sig}): подпись браузер
-   проверяет открытым ключом сам, поэтому доступ работает и без связи, а подделать его правкой хранилища нельзя. Ключ вшит
-   в страницу при выкладке (WL_ACCESS_KEY); если его нет, берётся с сервера и держится только в памяти. В течение сеанса,
-   в котором сервер подтвердил оплату, доступ открыт и без разрешения — на случай, если сервер его не выдал. */
+/* Доступ открывает одно из двух, и ни то ни другое нельзя получить правкой хранилища браузера:
+   — разрешение, подписанное сервером (ECDSA P-256), со сроком действия (g: {exp, sig}). Подпись браузер проверяет открытым
+     ключом сам, поэтому доступ работает и без связи. Ключ вшит в страницу при выкладке (WL_ACCESS_KEY); если его нет, берётся
+     с сервера и держится только в памяти;
+   — ответ сервера «оплата подтверждена», полученный этой страницей. Он живёт только в памяти до перезагрузки, после неё
+     доступ снова проверяется подписью и сервером. Отметки в localStorage и sessionStorage доказательством оплаты не считаются. */
 const GRANTS = new Map();                 // «номер отчёта|сессия|срок|подпись» → подпись верна
+const SERVER_OK = new Set();              // «номер отчёта|подпись сервера», подтверждённые сервером в этой загрузке страницы
 let accessKeyP = null;
 const grantId = (rid, u) => `${rid}|${u.s || ""}|${u.g.exp}|${u.g.sig}`;
 const b64u = x => Uint8Array.from(atob(String(x).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(x).length / 4) * 4, "=")), c => c.charCodeAt(0));
@@ -141,8 +144,7 @@ async function primeGrant(rid = S.rid){
   GRANTS.set(id, ok);
   return ok;
 }
-const sessionConfirmed = (rid, u) => { try{ return sessionStorage.getItem("wl_unlock_ok") === `${rid}|${u.t}`; }catch(e){ return false; } };
-const confirmedAccess = (u, rid = S.rid) => !!(u && ((u.g && u.g.exp * 1000 > Date.now() && GRANTS.get(grantId(rid, u)) === true) || sessionConfirmed(rid, u)));
+const confirmedAccess = (u, rid = S.rid) => !!(u && ((u.g && u.g.exp * 1000 > Date.now() && GRANTS.get(grantId(rid, u)) === true) || SERVER_OK.has(`${rid}|${u.t}`)));
 /* Оплата — за портфель, а не за номер отчёта: если в отчёте не осталось ни одной выписки оплаченных счетов, а новые
    выписки — других счетов, это отчёт по другому клиенту. Выписки без номера счёта правило не трогают: лучше пропустить
    переиспользование, чем закрыть отчёт тому, кто заплатил. */
@@ -275,7 +277,8 @@ async function openCheckout(source){
 async function unlockWith(sid, r, restored){
   const m = unlocks(); m[S.rid] = {t: r.token, s: r.sid || sid || null, a: [...new Set(S.docs.flatMap(d => d.accts || []))], g: r.grant || null};
   setUnlocks(m);
-  try{ localStorage.removeItem(PENDING); sessionStorage.setItem("wl_unlock_ok", `${S.rid}|${r.token}`); }catch(e){}
+  SERVER_OK.add(`${S.rid}|${r.token}`);               // сюда попадают только ответы сервера об оплате
+  try{ localStorage.removeItem(PENDING); }catch(e){}
   await primeGrant();
   if(restored) return;
   const seen = "wl_purchase_" + sid.slice(-16);     // событие покупки — один раз на платёж
@@ -284,41 +287,54 @@ async function unlockWith(sid, r, restored){
     track("Purchase", {value: typeof r.amount === "number" ? r.amount : PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); } }catch(e){}
 }
 
-/* Доступ сверяется с сервером раз за сеанс: подпись должна быть настоящей, а оплата — не возвращённой. Пока сервер не подтвердил
-   доступ в этом браузере хоть раз, отчёт закрыт; нет связи — подтверждённый раньше доступ остаётся, неподтверждённый ждёт связи.
-   Запись не той формы удаляется. */
+/* Доступ сверяется с сервером при каждом открытии отчёта: подпись сервера должна быть настоящей, а оплата — не возвращённой.
+   Ответ держится только в памяти страницы. Нет связи — отчёт открывает лишь действующее подписанное разрешение; без него отчёт
+   закрыт, и пейволл предлагает проверить оплату снова. Запись не той формы удаляется. */
+let accessCheck = null;                     // null — не проверяли, "checking" — ждём сервер, "failed" — сервер не ответил
 async function checkUnlock(){
   if(!PAYWALL || S.demo || !S.rid) return;
   const u = unlockOf(S.rid);
   if(!u){ const m = unlocks(); if(S.rid in m){ delete m[S.rid]; setUnlocks(m); } return; }
   const key = `${S.rid}|${u.t}`;
   await primeGrant();
-  if(sessionConfirmed(S.rid, u)) return;                  // в этом сеансе сервер уже подтвердил
+  if(SERVER_OK.has(key)) return;                          // эта страница уже получила подтверждение сервера
+  accessCheck = "checking";
+  if(S.P && !confirmedAccess(u)) renderPaywall();
   let r = null;
-  try{ r = await fetch(`${PAY_API}/unlock/check?rid=${encodeURIComponent(S.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }
-  catch(e){
-    if(!confirmedAccess(u)) toast(t("Не удалось проверить оплату: нет связи с сервером. Обновите страницу, когда связь появится.", "Could not verify the payment: no connection to the server. Reload the page once you are back online."));
-    return;
-  }
+  try{ r = await fetch(`${PAY_API}/unlock/check?rid=${encodeURIComponent(S.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }catch(e){}
   const now = unlockOf(S.rid);
-  if(!r || !now || u.t !== now.t) return;
-  if(r.ok){
+  accessCheck = r && typeof r.ok === "boolean" ? null : "failed";
+  if(!now || u.t !== now.t){ if(S.P) renderApp(); return; }
+  if(r && r.ok === true){
     const was = confirmedAccess(u);
-    // Новое разрешение (срок продлевается при каждом подтверждении); если сервер его не выдал — прежнее остаётся.
+    // Новое разрешение: срок продлевается при каждом подтверждении. Stripe не ответил (unverified) — сервер проверил только
+    // свою подпись и нового разрешения не выдаёт; до перезагрузки этого достаточно.
     if(r.grant){ const m = unlocks(); m[S.rid] = {...now, g: r.grant}; setUnlocks(m); }
-    if(!r.unverified) try{ sessionStorage.setItem("wl_unlock_ok", key); }catch(e){}
+    SERVER_OK.add(key);
     await primeGrant();
     if(!was && S.P) renderApp();
     return;
   }
-  if(r.ok === false){
+  if(r && r.ok === false){
     const m = unlocks(); delete m[S.rid]; setUnlocks(m);
-    try{ sessionStorage.removeItem("wl_unlock_ok"); }catch(e){}
+    SERVER_OK.delete(key);
     toast(r.reason === "refunded" ? t("Оплата этого отчёта возвращена — полный отчёт закрыт.", "Payment for this report was refunded, so the full report is locked.")
       : t("Доступ к полному отчёту не подтвердился. Если вы оплачивали, нажмите «Восстановить доступ».", "Access to the full report could not be confirmed. If you paid, use “Restore access”."));
     if(S.P) renderApp();
+    return;
+  }
+  // Сервер не ответил: действующее подписанное разрешение открывает отчёт и без связи, запись без него ждёт проверки.
+  if(!confirmedAccess(u)){
+    toast(t("Не удалось проверить оплату: нет связи с сервером. Отчёт откроется, когда проверка пройдёт.", "Could not verify the payment: no connection to the server. The report unlocks once the check succeeds."));
+    if(S.P) renderPaywall();
   }
 }
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-recheck]"); if(!b) return;
+  e.preventDefault(); b.disabled = true;
+  await checkUnlock();
+  if(S.P) renderPaywall();
+});
 // Оплатили, а доступ в этом браузере пропал: ищем оплату этого отчёта в Stripe по его номеру.
 async function restoreAccess(btn){
   if(!S.rid) return;
@@ -388,6 +404,20 @@ function renderPaywall(){
         "The report needs a portfolio statement — Portfolio, Holdings, Positions or Valuation. Transaction and cash-movement statements contain no positions.")}
       ${SUPPORT ? t(`Не получается — напишите на ${supportLink()}.`, `Stuck? Email ${supportLink()}.`) : ""}</p></div>
       <div class="pw-buy"><button class="btn primary" type="button" data-add-file>${t("Добавить выписку", "Add a statement")}</button></div></div>`;
+    return;
+  }
+  // В браузере есть запись об оплате, но ни подписи, ни ответа сервера пока нет: не продаём второй раз, а проверяем оплату.
+  const paidHere = unlockOf(S.rid);
+  if(paidHere && !confirmedAccess(paidHere) && !otherPortfolio()){
+    const failed = accessCheck === "failed";
+    el.hidden = false;
+    el.innerHTML = `<div class="card paywall empty"><div><div class="eyebrow">${t("Оплаченный отчёт", "Paid report")}</div>
+      <h2>${failed ? t("Не удалось проверить оплату", "Could not verify the payment") : t("Проверяем оплату этого отчёта…", "Checking the payment for this report…")}</h2>
+      <p class="muted">${failed ? t("В этом браузере есть запись об оплате, но сервер не ответил, а действующего подписанного разрешения у неё нет. Проверьте связь и нажмите «Проверить снова».",
+          "This browser has a payment record, but the server did not respond and the record has no valid signed grant. Check your connection and use “Check again”.")
+        : t("В этом браузере есть запись об оплате. Отчёт откроется, как только сервер её подтвердит.", "This browser has a payment record. The report unlocks as soon as the server confirms it.")}
+      ${SUPPORT ? t(`Не получается — напишите на ${supportLink()} и укажите номер отчёта <code class="rid">${esc(S.rid)}</code>.`, `Stuck? Email ${supportLink()} with report number <code class="rid">${esc(S.rid)}</code>.`) : ""}</p></div>
+      <div class="pw-buy"><button class="btn primary" type="button" data-recheck ${failed ? "" : "disabled"}>${failed ? t("Проверить снова", "Check again") : t("Проверяем…", "Checking…")}</button></div></div>`;
     return;
   }
   if(otherPortfolio()){
@@ -2100,7 +2130,11 @@ window.addEventListener("pageshow", e => { if(!e.persisted) return; leaving = fa
 // Тот же отчёт открыт в другой вкладке и там его поменяли: показываем актуальное, а не перезаписываем чужие изменения.
 window.addEventListener("storage", e => {
   if(S.demo) return;
-  if(e.key === UNLOCKS){ primeGrant().then(() => { if(S.P) renderApp(); }); return; }
+  if(e.key === UNLOCKS){
+    // Оплатили в другой вкладке: подпись проверяем здесь сами, а запись без действующей подписи — через сервер.
+    primeGrant().then(() => { const u = unlockOf(S.rid); return u && !confirmedAccess(u) ? checkUnlock() : null; }).then(() => { if(S.P) renderApp(); });
+    return;
+  }
   if(e.key !== STORE) return;
   if(Q.running || MODALS.length){ toast(t("Отчёт изменили в другой вкладке. Обновите страницу, когда закончите здесь.", "The report was changed in another tab. Reload the page when you are done here.")); return; }
   S.docs = []; S.rid = null; S.client = DEFAULT_CLIENT; Q.aiOk = false;
@@ -2125,8 +2159,10 @@ WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
   // Разрешение на доступ проверяется до первой отрисовки: оплаченный отчёт не мигает пейволлом.
   await primeGrant();
   await recoverPendingPayment();
+  // Сервер проверяется при каждом открытии. Записи без действующей подписи нужен его ответ — ждём его недолго перед отрисовкой.
+  const check = checkUnlock(), rec = unlockOf(S.rid);
+  if(rec && !confirmedAccess(rec)) await Promise.race([check, new Promise(ok => setTimeout(ok, 2500))]);
   if(locked()) track("ViewContent", {content_name: "report_preview", value: PRICE.amount, currency: PRICE.currency});
-  checkUnlock();
   return refresh();
 })();
 })();
