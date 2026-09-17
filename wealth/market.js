@@ -1,6 +1,6 @@
 /* Флоу велса · рынок и новости — пятый пункт Саши.
    Блок информационный: в расчётах и выводах по клиенту не участвует.
-   Индексы, ставки и VIX — CBOE с задержкой; валюты, золото, нефть и биткоин — лента
+   Индексы, ставки и VIX — Cboe с задержкой; валюты, золото, нефть и биткоин — лента
    TradingView в отдельном окне с чужого домена, поэтому её код не выполняется на
    странице с данными клиента. Новости — RSS деловых изданий и Google News по бумагам
    клиента: наружу уходят только тикеры и названия компаний подтверждённых бумаг. */
@@ -12,7 +12,7 @@ const QUOTES = [
   {sym: "_VIX", label: "VIX", vol: true},
   {sym: "_IRX", label: WL.t("UST 3 мес.", "US 3-month yield"), yld: true}, {sym: "_FVX", label: WL.t("UST 5 лет", "US 5-year yield"), yld: true},
   {sym: "_TNX", label: WL.t("UST 10 лет", "US 10-year yield"), yld: true}, {sym: "_TYX", label: WL.t("UST 30 лет", "US 30-year yield"), yld: true},
-  // Сырьё и крипто — через биржевые фонды: у них есть котировки CBOE, и в отличие от ленты
+  // Сырьё и крипто — через биржевые фонды: у них есть котировки Cboe, и в отличие от ленты
   // TradingView они попадают в печатный отчёт.
   {sym: "GLD", label: WL.t("Золото · фонд GLD", "Gold · GLD ETF")}, {sym: "BNO", label: WL.t("Brent · фонд BNO", "Brent crude · BNO ETF")},
   {sym: "IBIT", label: WL.t("Биткоин · фонд IBIT", "Bitcoin · IBIT ETF")}];
@@ -256,7 +256,7 @@ WL.renderMarket = function(el, P){
     <div class="card mkt">
       <div class="qgrid" id="mktQuotes"></div>
       <div class="tape no-print"><iframe title="${WL.t("Котировки TradingView", "TradingView quotes")}" loading="lazy" scrolling="no" src="${esc(tapeSrc())}"></iframe></div>
-      <div class="basis">${WL.t("Индексы, ставки, VIX и фонды — CBOE с задержкой 15 минут; курсы валют — ЕЦБ.", "Indices, yields, VIX and ETFs — CBOE quotes delayed by 15 minutes; exchange rates — ECB.")}<span class="no-print"> ${WL.t("Лента", "Ticker tape")} — <a href="${WL.t("https://ru.tradingview.com/", "https://www.tradingview.com/")}" target="_blank" rel="noopener noreferrer">TradingView</a>.</span></div>
+      <div class="basis">${WL.t("Индексы, ставки, VIX и фонды — Cboe с задержкой 15 минут; курсы валют — ЕЦБ.", "Indices, yields, VIX and ETFs — Cboe quotes delayed by 15 minutes; exchange rates — ECB.")}<span class="no-print"> ${WL.t("Лента", "Ticker tape")} — <a href="${WL.t("https://ru.tradingview.com/", "https://www.tradingview.com/")}" target="_blank" rel="noopener noreferrer">TradingView</a>.</span></div>
     </div>
     <div class="news">
       <div class="card newscol">

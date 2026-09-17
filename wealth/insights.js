@@ -45,7 +45,7 @@ WL.insights = function(P){
     });
     out.push({level: itmAny ? "high" : "watch", kind: "expiry", lines,
       title: `${soon.length} ${pl(soon.length, ["опцион истекает", "опциона истекают", "опционов истекают"], ["option expires", "options expire"])} ${t("в ближайшие 45 дней", "in the next 45 days")}`,
-      basis: t(`выписка · текущие цены CBOE с задержкой`, "statement · delayed CBOE prices")});
+      basis: t(`выписка · текущие цены Cboe с задержкой`, "statement · delayed Cboe prices")});
   }
 
   // 2. Обязательства по проданным путам против денег у того же брокера.
@@ -114,7 +114,7 @@ WL.insights = function(P){
                `Since ${fmt.date(from)}, positions are ${delta < 0 ? "down" : "up"} ${fmt.short(Math.abs(delta))}`),
       text: t(`Сильнее всего изменились ${moved}. В выписке цены на ${fmt.date(from)}, здесь — текущие.`,
               `Largest moves: ${moved}. The statement has prices as of ${fmt.date(from)}; the figures here use current prices.`),
-      basis: t("выписка · текущие цены CBOE с задержкой", "statement · delayed CBOE prices")});
+      basis: t("выписка · текущие цены Cboe с задержкой", "statement · delayed Cboe prices")});
   }
 
   // 5. Результат к себестоимости: лучшая и худшая бумага. Считается так же, как колонка
@@ -137,7 +137,7 @@ WL.insights = function(P){
       text: t(`${best.p.name} ${fmt.pct(best.c.pct, 0)}, ${worst.p.name} ${fmt.pct(worst.c.pct, 0)} к средней цене покупки${isLive ? ", по текущим ценам" : ""}.`,
               `${best.p.name} ${fmt.pct(best.c.pct, 0)}, ${worst.p.name} ${fmt.pct(worst.c.pct, 0)} vs average cost${isLive ? ", at current prices" : ""}.`) +
             (noCost.length ? t(` Без себестоимости в выписке: ${noCost.join(", ")}.`, ` No cost basis in the statement: ${noCost.join(", ")}.`) : ""),
-      basis: isLive ? t(`выписка ${best.p.brokerShort} · текущие цены CBOE с задержкой`, `${best.p.brokerShort} statement · delayed CBOE prices`)
+      basis: isLive ? t(`выписка ${best.p.brokerShort} · текущие цены Cboe с задержкой`, `${best.p.brokerShort} statement · delayed Cboe prices`)
                     : t(`выписка ${best.p.brokerShort} на ${fmt.date(best.p.priceDate)}`, `${best.p.brokerShort} statement as of ${fmt.date(best.p.priceDate)}`)});
   }
 

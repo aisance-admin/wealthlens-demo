@@ -96,6 +96,7 @@ button{cursor:pointer}
 .hero{display:grid; grid-template-columns:minmax(260px,1fr) 2fr; gap:20px; margin:26px 0 6px; align-items:stretch}
 .eyebrow{font:600 10.5px/1.3 var(--mono); letter-spacing:.11em; text-transform:uppercase; color:var(--muted)}
 .total .value{font-size:44px; font-weight:650; letter-spacing:-.04em; line-height:1.05; margin:10px 0 6px}
+.total .value.pending{opacity:.45}
 .total .sub{color:var(--ink-2); font-size:13.5px}
 .brokers{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px}
 .brokers.n4{grid-template-columns:repeat(auto-fit,minmax(max(230px,40%),1fr))}
@@ -456,7 +457,7 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
 /* Структура портфеля */
 .struct{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px}
 .sblock{padding:14px 16px}
-.srow{display:grid; grid-template-columns:minmax(84px,1.6fr) minmax(32px,1.4fr) auto 36px; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:13px}
+.srow{display:grid; grid-template-columns:minmax(84px,1.6fr) minmax(32px,1.4fr) 5.9em 36px; gap:10px; align-items:center; padding:6px 0; border-top:1px solid var(--line); font-size:13px}
 .sblock .eyebrow + .srow{border-top:0; margin-top:6px}
 .sbar{height:6px; background:rgba(226,236,255,.07); border-radius:3px; overflow:hidden}
 .sbar i{display:block; height:100%; background:var(--c, var(--accent)); border-radius:3px}
@@ -487,6 +488,7 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
 .chips{display:flex; gap:6px; flex-wrap:wrap}
 .chip{border:1px solid var(--line-2); background:var(--surface); border-radius:99px; padding:2px 9px; font-size:12px; color:var(--ink-2)}
 .chip[aria-pressed="true"]{background:rgba(243,189,88,.16); color:var(--accent); border-color:rgba(243,189,88,.45)}
+@media screen and (max-width:760px){ .chip{padding:8px 13px; font-size:13px} }
 
 /* Телефон и портретный планшет: таблицу позиций читать в девять колонок невозможно,
    поэтому каждая строка становится карточкой. Главное видно сразу — бумага, площадка, стоимость и изменение;
@@ -517,6 +519,10 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
   .pos tr.grp td,.pos tr.foot td{display:block; border:0; padding:0; text-align:right; white-space:normal}
   .pos tr.grp td:first-child,.pos tr.foot td:first-child{text-align:left; position:static}
   .pos tr.grp td:empty,.pos tr.foot td:empty{display:none}
+  /* Заголовок группы — одна полоса, а не тёмные прямоугольники под словами */
+  .pos tr.grp{background:var(--ground)} .pos tr.grp td,.pos tr.grp td:first-child{background:transparent}
+  /* У денег нет количества и цены — пустые подписи не показываем */
+  .pos tr.row td.qty:empty,.pos tr.row td.px:empty{display:none}
   .pos tr.foot{background:var(--surface-2); flex-wrap:wrap}
   .pos td.usd,.pos td.chg,.pos td.qty,.pos td.px{font-variant-numeric:tabular-nums}
 }
@@ -651,10 +657,10 @@ WL.apiReady = (async () => {
 <script src="wealth/parse.js?v=eb1c06e45a2f"></script>
 <script src="wealth/sheet.js?v=25a113615ad2"></script>
 <script src="wealth/demo.js?v=504239201eca"></script>
-<script src="wealth/model.js?v=b4f7bac7ad3e"></script>
-<script src="wealth/insights.js?v=5cd354b2c07c"></script>
-<script src="wealth/table.js?v=54f351961758"></script>
-<script src="wealth/market.js?v=7f7ffe15d474"></script>
-<script src="wealth/ui.js?v=20183cf39952"></script>
+<script src="wealth/model.js?v=7aac330be94a"></script>
+<script src="wealth/insights.js?v=87b2b22d745d"></script>
+<script src="wealth/table.js?v=4bbff06af412"></script>
+<script src="wealth/market.js?v=646aeacaee24"></script>
+<script src="wealth/ui.js?v=d9d67fcf2bfd"></script>
 </body>
 </html>

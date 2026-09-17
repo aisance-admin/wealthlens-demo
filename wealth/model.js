@@ -26,20 +26,21 @@ const pl = (n, ru, en) => EN ? (Math.abs(n) === 1 ? en[0] : en[1]) : plural(n, r
 const nf = (a, b) => new Intl.NumberFormat(EN ? "en-US" : "ru-RU", {minimumFractionDigits: a, maximumFractionDigits: b});
 const SYM = {USD: "$", EUR: "€", CHF: "CHF ", GBP: "£"};
 const fmt = WL.fmt = {
-  money: (v, ccy = "USD", dec = 2) => v == null ? "—" : `${v < 0 ? "−" : ""}${SYM[ccy] || ccy + " "}${nf(dec, dec).format(Math.abs(v))}`,
+  // Знак и валюта не отрываются от числа при переносе строки (U+2060), единицы — неразрывным пробелом.
+  money: (v, ccy = "USD", dec = 2) => v == null ? "—" : `${v < 0 ? "−\u2060" : ""}${SYM[ccy] || ccy + "\u00a0"}${nf(dec, dec).format(Math.abs(v))}`,
   short: (v, ccy = "USD") => {
     if(v == null) return "—";
-    const a = Math.abs(v), s = v < 0 ? "−" : "", c = SYM[ccy] || ccy + " ";
-    if(a >= 1e6) return `${s}${c}${nf(1, 2).format(a / 1e6)}${EN ? "M" : " млн"}`;
-    if(a >= 1e3) return `${s}${c}${nf(0, 1).format(a / 1e3)}${EN ? "K" : " тыс."}`;
+    const a = Math.abs(v), s = v < 0 ? "−\u2060" : "", c = SYM[ccy] || ccy + "\u00a0";
+    if(a >= 1e6) return `${s}${c}${nf(1, 2).format(a / 1e6)}${EN ? "M" : "\u00a0млн"}`;
+    if(a >= 1e3) return `${s}${c}${nf(0, 1).format(a / 1e3)}${EN ? "K" : "\u00a0тыс."}`;
     return `${s}${c}${nf(0, 2).format(a)}`;
   },
   px: v => v == null ? "—" : nf(2, v < 1 ? 4 : 2).format(v),
   int: v => v == null ? "—" : nf(0, 0).format(v),
   qty: v => v == null ? "—" : (v < 0 ? "−" : "") + nf(0, 4).format(Math.abs(v)),
   pct: (v, dec = 1) => v == null || !isFinite(v) ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${nf(dec, dec).format(Math.abs(v))}%`,
-  signed: (v, ccy = "USD") => v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${fmt.short(Math.abs(v), ccy)}`,
-  date: s => !s ? "—" : EN ? `${+s.slice(8, 10)} ${MON_EN[+s.slice(5, 7) - 1]} ${s.slice(0, 4)}` : s.split("-").reverse().join("."),
+  signed: (v, ccy = "USD") => v == null ? "—" : `${v > 0 ? "+\u2060" : v < 0 ? "−\u2060" : ""}${fmt.short(Math.abs(v), ccy)}`,
+  date: s => !s ? "—" : EN ? `${+s.slice(8, 10)}\u00a0${MON_EN[+s.slice(5, 7) - 1]}\u00a0${s.slice(0, 4)}` : s.split("-").reverse().join("."),
   // десятичная дробь без знака: «3,8» / «3.8»
   dec: (v, d = 1) => v == null || !isFinite(v) ? "—" : nf(d, d).format(v),
 };
@@ -348,7 +349,7 @@ WL.identify = async function(P){
 };
 
 /* ── Основание оценки ─────────────────────────────────────────────────────
-   «now» — оценка сейчас: подтверждённые бумаги по текущим ценам CBOE, остальное по выпискам, валюты по текущему курсу ЕЦБ.
+   «now» — оценка сейчас: подтверждённые бумаги по текущим ценам Cboe, остальное по выпискам, валюты по текущему курсу ЕЦБ.
    «stmt» — снимок выписок: цены и стоимости из выписок, валюты по курсу ЕЦБ на дату выписки. Итог, карточки счетов,
    структура, строки таблицы и PDF берут стоимость и курс из одних функций (WL.current, WL.usd), поэтому основание одно. */
 const FX_AT = {};                    // дата выписки → {rates, date}; исторический курс не меняется
@@ -391,7 +392,7 @@ WL.applyLiveCache = P => { if(LIVE) applyLive(P, LIVE); P.fxAt = FX_AT; };
 
 WL.fetchLive = async function(P){
   const started = Date.now();
-  // CBOE — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем (у Roche в франках тикер ROG,
+  // Cboe — американский рынок в долларах. Бумагу в другой валюте его котировкой не оцениваем (у Roche в франках тикер ROG,
   // а в США ROG — это Rogers Corp), а бумагу в долларах — только если подтверждено, что под тикером она же (WL.idOf).
   await WL.identify(P);
   const opts = P.positions.filter(p => p.type === "option" && p.occ && WL.idOf(P, p).ok);
@@ -401,7 +402,7 @@ WL.fetchLive = async function(P){
     opts.length ? getJSON("/market/options?contracts=" + opts.map(p => p.occ).join(",")) : null,
     getJSON("/fx?base=USD")]);
   const quotes = (q && q.quotes) || {}, options = (o && o.options) || {};
-  // CBOE иногда не отдаёт отдельный тикер с первого раза: один повтор для пропущенных.
+  // Cboe иногда не отдаёт отдельный тикер с первого раза: один повтор для пропущенных.
   const missed = syms.filter(s => !(quotes[s] && quotes[s].price));
   if(missed.length){
     await new Promise(r => setTimeout(r, 1500));
@@ -421,7 +422,7 @@ WL.fetchLive = async function(P){
   applyLive(P, LIVE);        // курсы из прошлого удачного запроса лучше, чем выпавшие из итога позиции в других валютах
   await WL.fetchFxAt(P);
 };
-/* История грузится по одной бумаге: CBOE ограничивает частоту. Неудачу не
+/* История грузится по одной бумаге: Cboe ограничивает частоту. Неудачу не
    запоминаем как «истории нет» — при ограничении останавливаемся и повторим позже. */
 WL.fetchHistory = async function(P, symbols){
   P.historyStatus = P.historyStatus || {};

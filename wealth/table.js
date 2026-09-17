@@ -139,7 +139,7 @@ WL.renderPositions = function(el, P, S){
         : sub(WL.t(`на ${fmt.date(docs[0].asOf)}`, `as of ${fmt.date(docs[0].asOf)}`))}</td>
       <td>${covered ? `<span class="${cls(change)}">${fmt.signed(change)}</span>${sub(WL.t(`по ${covered} из ${countable} позиций`, `for ${covered} of ${countable} ${countable === 1 ? "position" : "positions"}`))}` : dash(NO_DATA())}</td>
       <td></td><td>${fmt.money(grand, "USD", 0)}</td></tr></tbody></table>
-    <p class="basis" style="margin:0; padding:10px 12px">${WL.t("Прочерк — таких данных нет в выписке брокера или нет котировок за период", "A dash means the data is not in the broker statement or there are no quotes for the period")}<span class="no-print">${WL.t("; наведите курсор, чтобы увидеть причину", "; hover over it to see the reason")}</span>.
+    <p class="basis" style="margin:0; padding:10px 12px">${WL.t("Прочерк — таких данных нет в выписке брокера или нет котировок за период", "A dash means the data is not in the broker statement or there are no quotes for the period")}<span class="no-print">${WL.t("; нажмите на прочерк или наведите на него курсор, чтобы увидеть причину", "; tap or hover over a dash to see the reason")}</span>.
       ${WL.t("Что запросить у клиента, собрано ниже в разделе «Документы и чего не хватает».", "What to request from the client is listed below under “Documents and gaps”.")}</p>`;
   return {grand, covered, countable, change, only};
 };
@@ -169,8 +169,8 @@ WL.renderChart = function(el, P, S){
   }
   if(!stocks.length || bh.length < 2){
     const limited = Object.values(P.historyStatus || {}).includes("limited");
-    el.innerHTML = `<p class="muted">${limited ? WL.t("CBOE временно ограничил частоту запросов. История цен подгрузится автоматически, повтор через полторы минуты.",
-                                                      "CBOE is temporarily rate-limiting requests. Price history will load automatically; retrying in 90 seconds.")
+    el.innerHTML = `<p class="muted">${limited ? WL.t("Cboe временно ограничил частоту запросов. История цен подгрузится автоматически, повтор через полторы минуты.",
+                                                      "Cboe is temporarily rate-limiting requests. Price history will load automatically; retrying in 90 seconds.")
                                               : WL.t("История цен ещё загружается…", "Price history is still loading…")}</p>`;
     return;
   }
@@ -244,10 +244,10 @@ WL.renderChart = function(el, P, S){
       ${dot("hb", "var(--series-2)", 0, 0, true)}${dot("hp", "var(--series-1)", 0, 0, true)}
       <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" data-r="hit"/>
     </svg>
-    <p class="basis">${WL.t(`Разница за период: ${fmt.pct(pLast - bLast)} п.п. Веса — текущая стоимость позиций; в начале периода есть цены по ${startCover} из ${stocks.length} бумаг.
-      Это не фактическая история счёта: сделки и ввод-вывод денег не учитываются. Цены CBOE без учёта дивидендов.`,
+    <p class="basis">${WL.t(`Разница за период: ${fmt.pct(pLast - bLast).replace("%", "")} п.п. Веса — текущая стоимость позиций; в начале периода есть цены по ${startCover} из ${stocks.length} бумаг.
+      Это не фактическая история счёта: сделки и ввод-вывод денег не учитываются. Цены Cboe без учёта дивидендов.`,
       `Difference over the period: ${fmt.pct(pLast - bLast).replace("%", "")} pp. Weighted by current position value; start-of-period prices are available for ${startCover} of ${stocks.length} ${stocks.length === 1 ? "security" : "securities"}.
-      This is not the account’s actual history: trades, deposits and withdrawals are not included. CBOE prices, excluding dividends.`)}</p>`;
+      This is not the account’s actual history: trades, deposits and withdrawals are not included. Cboe prices, excluding dividends.`)}</p>`;
   const svg = el.querySelector("svg"), hit = el.querySelector('[data-r="hit"]'), q = r => el.querySelector(`[data-r="${r}"]`);
   const move = (c, x, y) => { c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1)); c.setAttribute("visibility", "visible"); };
   let cur = last;

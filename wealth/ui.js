@@ -386,6 +386,9 @@ async function restoreAccess(btn){
     : t(`Оплату этого отчёта не нашли. Номер отчёта: ${S.rid}.`, `No payment was found for this report. Report number: ${S.rid}.`));
 }
 document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-restore]"); if(b){ e.preventDefault(); restoreAccess(b); } });
+// Причина прочерка — в подсказке, а на телефоне подсказок при наведении нет: по нажатию показываем её сообщением.
+// В фазе перехвата — чтобы нажатие на прочерк не раскрывало заодно карточку позиции.
+document.addEventListener("click", e => { const u = e.target.closest && e.target.closest(".unk[title]"); if(u && u.title){ e.stopPropagation(); toast(u.title); } }, true);
 
 /* Оплатили, но закрыли вкладку раньше, чем Stripe вернул на сайт: при следующем открытии
    проверяем последнюю начатую оплату этого отчёта, если ей не больше двух суток. */
@@ -1691,11 +1694,11 @@ function valuation(P){
     line = t(`По ценам выписок на ${dates}: текущих цен для этих бумаг нет`, `At statement prices as of ${dates}: no current prices for these holdings`);
   } else if(live.length && !fromStmt && !foreign.length){
     mode = "live";
-    line = t(`По текущим ценам CBOE${hhmm ? `, получены в ${hhmm}` : ""}`, `At current CBOE prices${hhmm ? `, retrieved at ${hhmm}` : ""}`);
+    line = t(`По текущим ценам Cboe${hhmm ? `, получены в ${hhmm}` : ""}`, `At current Cboe prices${hhmm ? `, retrieved at ${hhmm}` : ""}`);
   } else {
     mode = "mixed";
-    line = t(`Смешанная оценка: ${live.length ? `текущие цены CBOE для ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `цены выписок на ${dates} для ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}валюты по текущему курсу ЕЦБ${fxNowDate ? ` на ${fxNowDate}` : ""}` : ""}`,
-             `Mixed valuation: ${live.length ? `current CBOE prices for ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `statement prices as of ${dates} for ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}currencies at the current ECB rate${fxNowDate ? ` as of ${fxNowDate}` : ""}` : ""}`);
+    line = t(`Смешанная оценка: ${live.length ? `текущие цены Cboe для ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `цены выписок на ${dates} для ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}валюты по текущему курсу ЕЦБ${fxNowDate ? ` на ${fxNowDate}` : ""}` : ""}`,
+             `Mixed valuation: ${live.length ? `current Cboe prices for ${n(live.length)}${hhmm ? ` (${hhmm})` : ""}, ` : ""}${fromStmt ? `statement prices as of ${dates} for ${n(fromStmt)}` : ""}${foreign.length ? `${live.length || fromStmt ? "; " : ""}currencies at the current ECB rate${fxNowDate ? ` as of ${fxNowDate}` : ""}` : ""}`);
   }
   // Контрольный итог выписок: стоимости из выписок, валюты по курсу ЕЦБ на дату выписки.
   let control = 0, controlGap = [], controlMissing = 0;
@@ -1735,15 +1738,20 @@ function renderHero(){
     V.missingFx.length && (stmt ? t(`курс ЕЦБ на дату выписки для ${V.missingFx.join(", ")} не загрузился: эти позиции в итог не вошли`, `the ECB rate on the statement date for ${V.missingFx.join(", ")} did not load: those positions are left out of the total`)
       : P.live ? t(`курсы валют не загрузились: позиции в ${V.missingFx.join(", ")} в итог не вошли`, `exchange rates did not load: positions in ${V.missingFx.join(", ")} are left out of the total`) : "")].filter(Boolean);
   const showControl = !S.demo && !stmt && V.mode !== "stmt-only" && Math.abs(V.control - total) >= 1;
+  // Пока текущие цены и курсы только загружаются, позиции без суммы или без курса в итог ещё не вошли: число не окончательное.
+  const pendingN = !stmt && !P.live ? P.positions.filter(p => WL.current(P, p).value == null || WL.usd(P, p.ccy, p) == null).length : 0;
   $("#total").innerHTML = `<div class="total-top"><div class="eyebrow">${t("Всего в долларах", "Total in USD")}</div>
       <div class="seg basis no-print" role="group" aria-label="${t("Основание оценки", "Valuation basis")}"${S.demo ? " hidden" : ""}>
         <button type="button" data-basis="now" aria-pressed="${!stmt}">${t("Оценка сейчас", "Value now")}</button>
         <button type="button" data-basis="stmt" aria-pressed="${stmt}">${t("Снимок выписок", "Statement snapshot")}</button></div></div>
-    <div class="value">${fmt.money(total, "USD", 0)}</div>
+    <div class="value${pendingN ? " pending" : ""}">${fmt.money(total, "USD", 0)}</div>
     <div class="sub basis-line ${V.mode}">${esc(V.line)}</div>
     ${showControl ? `<div class="sub muted control">${t("Итог самих выписок", "Statements' own total")}: <b>${fmt.money(V.control, "USD", 0)}</b>${V.controlGap.length ? t(` без позиций в ${V.controlGap.join(", ")}`, ` excluding ${V.controlGap.join(", ")} positions`) : ""}${V.controlMissing ? t(`; у ${V.controlMissing} ${WL.pl(V.controlMissing, ["позиции", "позиций", "позиций"], ["position", "positions"])} стоимости в выписке нет`, `; ${V.controlMissing} ${WL.pl(V.controlMissing, ["", "", ""], ["position has", "positions have"])} no value in the statement`) : ""}</div>` : ""}
-    ${!stmt && P.live && day ? `<div class="sub" style="margin-top:6px">${t("За день:", "Day change:")} <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">${t("по акциям, котировки CBOE", "on stocks, CBOE quotes")}</span></div>` : ""}
-    ${!stmt && !P.live ? `<div class="sub muted" style="margin-top:6px">${t("Загружаю текущие цены…", "Loading current prices…")}</div>` : ""}
+    ${!stmt && P.live && day ? `<div class="sub" style="margin-top:6px">${t("За день:", "Day change:")} <b class="${day > 0 ? "up" : "down"}">${fmt.signed(day)}</b> <span class="muted">${t("по акциям, котировки Cboe", "on stocks, Cboe quotes")}</span></div>` : ""}
+    ${!stmt && !P.live ? `<div class="sub muted" style="margin-top:6px">${pendingN
+      ? t(`Итог уточняется: загружаю цены и курсы для ${pendingN} ${WL.pl(pendingN, ["позиции", "позиций", "позиций"], ["position", "positions"])}…`,
+          `Total not final yet: loading prices and exchange rates for ${pendingN} ${pendingN === 1 ? "position" : "positions"}…`)
+      : t("Загружаю текущие цены…", "Loading current prices…")}</div>` : ""}
     ${warn.length ? `<div class="sub down" style="margin-top:6px">${esc(warn.join("; "))}.</div>` : ""}
     ${mixHtml}`;
   $("#total").querySelectorAll("[data-basis]").forEach(b => { b.onclick = () => setValuation(b.dataset.basis); });
@@ -1867,8 +1875,8 @@ function renderPositions(){
   // Подпись таблицы — то же основание, что у итога: снимок, текущие цены или смешанная оценка.
   $("#posAside").textContent = S.P.basis === "stmt" ? t("снимок выписок: цены выписок, курсы ЕЦБ на дату выписки", "statement snapshot: statement prices, ECB rates on the statement date")
     : !L ? t("цены из выписок", "statement prices") : !L.ok ? t("цены из выписок: сервер котировок не ответил", "statement prices: quote server did not respond")
-    : `${V.mode === "mixed" ? t("смешанная оценка: текущие цены CBOE с задержкой там, где бумага сопоставлена с биржей, остальное — из выписок", "mixed valuation: delayed CBOE prices where the holding is matched to a listing, statement prices elsewhere")
-        : V.mode === "live" ? t("текущие цены CBOE с задержкой", "delayed CBOE prices") : t("цены из выписок", "statement prices")} · ${L.fxDate ? t(`курсы ЕЦБ на ${fmt.date(L.fxDate)}`, `ECB rates as of ${fmt.date(L.fxDate)}`) : t("курсы валют не загрузились", "exchange rates did not load")}`;
+    : `${V.mode === "mixed" ? t("смешанная оценка: текущие цены Cboe с задержкой там, где бумага сопоставлена с биржей, остальное — из выписок", "mixed valuation: delayed Cboe prices where the holding is matched to a listing, statement prices elsewhere")
+        : V.mode === "live" ? t("текущие цены Cboe с задержкой", "delayed Cboe prices") : t("цены из выписок", "statement prices")} · ${L.fxDate ? t(`курсы ЕЦБ на ${fmt.date(L.fxDate)}`, `ECB rates as of ${fmt.date(L.fxDate)}`) : t("курсы валют не загрузились", "exchange rates did not load")}`;
   renderPrintExtras();
 }
 
@@ -1876,7 +1884,7 @@ function renderPositions(){
    поэтому отчёт показывает изменение сразу за все периоды и называет источники. */
 const PERIOD_NOTE = {"1d": t("акции: к закрытию прошлого дня", "stocks: vs previous close"), "1m": t("акции: к цене месяц назад", "stocks: vs price a month ago"),
   "3m": t("акции: к цене три месяца назад", "stocks: vs price three months ago"), "1y": t("акции: к цене год назад", "stocks: vs price a year ago"), "5y": t("акции: к цене пять лет назад", "stocks: vs price five years ago"),
-  "all": t("акции: к первой цене в истории CBOE", "stocks: vs first price in CBOE history"), "stmt": t("позиции с текущей ценой: к цене в выписке", "positions with a current price: vs statement price"),
+  "all": t("акции: к первой цене в истории Cboe", "stocks: vs first price in Cboe history"), "stmt": t("позиции с текущей ценой: к цене в выписке", "positions with a current price: vs statement price"),
   "cost": t("акции и опционы: к себестоимости из выписки", "stocks and options: vs cost basis from the statement")};
 function renderPrintExtras(){
   const P = S.P, pe = $("#printPeriods"), pn = $("#printNotes");
@@ -1910,8 +1918,8 @@ function renderPrintExtras(){
     ? t(`Суммы — по ценам и стоимостям выписок${foreign ? "; валюты — по курсу ЕЦБ на дату выписки" : ""}. Текущие цены, изменения за периоды и сравнение с бенчмарком в снимок не входят.`,
         `Amounts use the statements' prices and values${foreign ? "; currencies are converted at ECB rates as of each statement date" : ""}. Current prices, period changes and the benchmark comparison are not part of the snapshot.`)
     // Котировки, применённые к позициям, — отдельно от котировок обзора рынка: без сопоставленных бумаг текущие цены к позициям не применяются.
-    : at ? (V.live ? t(`Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}, применены к ${V.live} ${WL.pl(V.live, ["позиции", "позициям", "позициям"], ["position", "positions"])}.`,
-                       `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}, applied to ${V.live} ${V.live === 1 ? "position" : "positions"}.`)
+    : at ? (V.live ? t(`Текущие цены — Cboe с задержкой около 15 минут, получены ${esc(at)}, применены к ${V.live} ${WL.pl(V.live, ["позиции", "позициям", "позициям"], ["position", "positions"])}.`,
+                       `Current prices: Cboe, delayed by about 15 minutes, retrieved ${esc(at)}, applied to ${V.live} ${V.live === 1 ? "position" : "positions"}.`)
                 : t("Текущие цены к позициям не применялись: все позиции оценены по ценам выписок.", "No current prices were applied to positions: all positions use statement prices."))
       + " " + (P.live.fxDate ? t(`Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.`, `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.`) : t("Курсы валют не загрузились.", "Exchange rates did not load."))
     : t("Текущие цены не загружались: все суммы — по данным выписок.", "Current prices were not loaded: all amounts are based on the statements.");
@@ -1926,15 +1934,15 @@ function renderPrintExtras(){
     li(t("Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».",
          "Positions, quantities, cost basis and fees come from the broker statements. Parsed data is reconciled with each statement's own totals; the results are in the “Documents and gaps” section.")) +
     li(pricesNote) +
-    li(histOk && t("История цен — дневные цены закрытия CBOE без учёта дивидендов.", "Price history: CBOE daily closing prices, excluding dividends.") + (chartOk ? " " +
+    li(histOk && t("История цен — дневные цены закрытия Cboe без учёта дивидендов.", "Price history: Cboe daily closing prices, excluding dividends.") + (chartOk ? " " +
          t("График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
            "The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.") : "")) +
     li(derivatives && t("Даты экспираций опционов и первого дня уведомления по фьючерсам CME рассчитаны по правилам биржи без учёта праздников.",
          "Option expiry dates and first notice days for CME futures are calculated from exchange rules, without adjusting for holidays.")) +
     li(ledgers.length && t(`Данные ${esc(ledgers.join(", "))} — на дату журнала операций. Что открыто на этом счёте сейчас, из журнала не видно.`,
          `${esc(ledgers.join(", "))} data is as of the transaction log date. The log does not show what is currently open on that account.`)) +
-    li(t("Рынок: индексы, VIX, доходности казначейских облигаций США и фонды GLD, BNO, IBIT — CBOE с задержкой; курсы валют — ЕЦБ.",
-         "Market: indices, VIX, US Treasury yields and the GLD, BNO and IBIT funds are delayed CBOE quotes; exchange rates are from the ECB.")) +
+    li(t("Рынок: индексы, VIX, доходности казначейских облигаций США и фонды GLD, BNO, IBIT — Cboe с задержкой; курсы валют — ЕЦБ.",
+         "Market: indices, VIX, US Treasury yields and the GLD, BNO and IBIT funds are delayed Cboe quotes; exchange rates are from the ECB.")) +
     li(t("Новости рынка — RSS Investing.com, «Ведомости», «Коммерсантъ», CNBC и MarketWatch. Новости по бумагам клиента — Google News за неделю, отобраны по названию компании и биржевому обозначению.",
          "Market news: RSS feeds from Investing.com, Vedomosti, Kommersant, CNBC and MarketWatch. News on the client's holdings: Google News for the past week, matched by company name and ticker.")) +
     li(t("Отчёт носит информационный характер и не является инвестиционной рекомендацией.", "This report is for information only and does not constitute investment advice.")) +
@@ -2211,7 +2219,7 @@ function openDrawer(id, quiet){
     <div class="eyebrow">${esc(TYPE_RU[p.type])} · ${esc(p.brokerShort)}</div><h3>${esc(p.name)}</h3>
     <div class="code">${esc(p.occ || p.code || p.symbol || "")}</div>
     <dl class="kv">${kv.join("")}</dl>${changes}${trades}
-    <p class="basis">${t("Источник:", "Source:")} ${esc(p.source)}${p.page ? t(` · стр. ${p.page}`, ` · p. ${p.page}`) : ""}${cur.live ? t(" · текущие цены CBOE с задержкой", " · delayed CBOE prices") : ""}</p>`;
+    <p class="basis">${t("Источник:", "Source:")} ${esc(p.source)}${p.page ? t(` · стр. ${p.page}`, ` · p. ${p.page}`) : ""}${cur.live ? t(" · текущие цены Cboe с задержкой", " · delayed Cboe prices") : ""}</p>`;
   $("#drawer").classList.add("open"); $("#scrim").classList.add("open"); $("#drawer").setAttribute("aria-hidden", "false");
   $("#closeDrawer").onclick = closeDrawer; if(!quiet || hadFocus) $("#closeDrawer").focus();
 }
