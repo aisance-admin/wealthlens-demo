@@ -230,6 +230,12 @@ async function openCheckout(source){
       ${unverifiedDocs().length ? `<div class="muted pw-reasons">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
         <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
         ${t(`Позиции из ${unverifiedDocs().length === 1 ? "неё" : "них"} войдут в отчёт как прочитаны.`, "Their positions are included as read.")}</div>` : ""}
+      <p class="muted pw-where">${t("Отчёт и доступ хранятся в этом браузере. Открываете на другом устройстве или очистили данные браузера — ",
+        "The report and its access are kept in this browser. Opening it on another device, or cleared your browser data? ")}${SUPPORT
+        ? t(`напишите на ${supportLink()} с почты, указанной при оплате: проверим оплату и пришлём код, чтобы открыть отчёт заново без оплаты.`,
+            `Email ${supportLink()} from the address used at checkout: we will check the payment and send a code to unlock the report again at no cost.`)
+        : t("напишите нам с почты, указанной при оплате: проверим оплату и пришлём код, чтобы открыть отчёт заново без оплаты.",
+            "contact us from the address used at checkout: we will check the payment and send a code to unlock the report again at no cost.")}</p>
       <label class="ai-remember waiver"><input type="checkbox" data-waiver> ${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</label>
       ${ON_SITE ? `<p class="ai-more">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
@@ -1619,10 +1625,7 @@ function renderApp(){
       <section><div class="sec-h"><h2>${t("Документы и чего не хватает", "Documents and gaps")}</h2><span class="spacer"></span>
         <button class="btn small no-print" type="button" data-add-file>${t("Добавить выписку", "Add statement")}</button></div><div class="docs"><div class="card doc" id="docs"></div><div class="card miss" id="missing"></div></div></section>
       <section class="print-only" id="printNotes"></section>
-      <footer class="app-foot no-print">${[`WealthLens`, SUPPORT && `${t("Поддержка", "Support")}: ${supportLink()}`,
-        ON_SITE && `<a href="${t("/legal/terms/", "/en/legal/terms/")}">${t("Условия", "Terms")}</a>`,
-        ON_SITE && `<a href="${t("/legal/privacy/", "/en/legal/privacy/")}">${t("Конфиденциальность", "Privacy")}</a>`,
-        window.WL_PIXEL_ID && `<a href="#" data-cookies>${t("Настройки cookies", "Cookie settings")}</a>`].filter(Boolean).join(" · ")}</footer>`;
+      <footer class="app-foot no-print" id="appFoot"></footer>`;
     $("#bench").onchange = async e => { S.bench = e.target.value; $("#chart").innerHTML = `<p class="muted">${t("Загружаю историю…", "Loading price history…")}</p>`; await WL.fetchHistory(S.P, [S.bench]); renderChart(); };
     WL.renderMarket($("#market"), S.P);   // один раз: лента и новости не должны перезагружаться при каждом обновлении цен
   }
@@ -1630,7 +1633,7 @@ function renderApp(){
   // Сбой одного блока не оставляет страницу без отчёта: остальные блоки показываются, над отчётом — плашка со сбоем.
   // Пейволл при сбое закрывает отчёт, а не открывает его.
   const broken = [renderHero, renderInsights, renderStructure, renderTimeline, renderControls, renderPositions, renderChart, renderDocs,
-    renderPaywall, renderDemoBar, renderQuality, renderIdentity].filter(fn => {
+    renderPaywall, renderDemoBar, renderQuality, renderIdentity, renderFoot].filter(fn => {
     try{ fn(); return false; }
     catch(e){ console.error(e); if(fn === renderPaywall) document.body.classList.toggle("is-locked", PAYWALL && !S.demo); return true; }
   });
@@ -1642,6 +1645,17 @@ function renderApp(){
   }
 }
 
+// Подвал отчёта. Оплаченный отчёт живёт в этом браузере: номер отчёта и путь восстановления — рядом с поддержкой.
+function renderFoot(){
+  const el = $("#appFoot"); if(!el) return;
+  const paid = PAYWALL && !S.demo && !!S.rid && !locked();
+  el.innerHTML = [`WealthLens`, SUPPORT && `${t("Поддержка", "Support")}: ${supportLink()}`,
+    ON_SITE && `<a href="${t("/legal/terms/", "/en/legal/terms/")}">${t("Условия", "Terms")}</a>`,
+    ON_SITE && `<a href="${t("/legal/privacy/", "/en/legal/privacy/")}">${t("Конфиденциальность", "Privacy")}</a>`,
+    window.WL_PIXEL_ID && `<a href="#" data-cookies>${t("Настройки cookies", "Cookie settings")}</a>`].filter(Boolean).join(" · ") +
+    (paid ? `<div class="foot-rid">${t(`Номер отчёта <code class="rid">${esc(S.rid)}</code>. Отчёт открыт в этом браузере; на другом устройстве или после очистки данных браузера ${SUPPORT ? `напишите на ${supportLink()}` : "напишите нам"} с почты, указанной при оплате, — пришлём код, чтобы открыть отчёт заново без оплаты.`,
+      `Report number <code class="rid">${esc(S.rid)}</code>. The report is unlocked in this browser; for another device or after clearing browser data, ${SUPPORT ? `email ${supportLink()}` : "contact us"} from the address used at checkout and we will send a code to unlock it again at no cost.`)}</div>` : "");
+}
 /* Основание суммы — одна строка для заголовка, карточек, структуры и PDF. Оценка сейчас честно называет себя смешанной,
    если хоть одна цена или курс уже не из выписки, а часть сумм — ещё из выписок, независимо от доли и знака позиций.
    Рядом — контрольный итог самих выписок (цены выписок, курс ЕЦБ на дату выписки): с ним сверяется банк. */
@@ -1878,14 +1892,14 @@ function renderPrintExtras(){
     : liveAt.toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"});
   const V = valuation(P), stmt = P.basis === "stmt";
   const basisNote = `<li><b>${t("Основание оценки:", "Valuation basis:")}</b> ${esc(V.line)}.${!S.demo && !stmt && Math.abs(V.control - P.positions.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? a + v * k : a; }, 0)) >= 1
-    ? t(` Итог самих выписок: ${fmt.money(V.control, "USD", 0)}.`, ` The statements' own total: ${fmt.money(V.control, "USD", 0)}.`) : ""} ${t("Текущая цена подставляется только бумагам, сопоставленным с биржей США по ISIN, полному совпадению названия, выписке американского брокера или вашему подтверждению; остальные — по выпискам.",
+    ? t(` Итог самих выписок: ${fmt.money(V.control, "USD", 0)}.`, ` The statements' own total: ${fmt.money(V.control, "USD", 0)}.`) : ""}${stmt ? "" : " " + t("Текущая цена подставляется только бумагам, сопоставленным с биржей США по ISIN, полному совпадению названия, выписке американского брокера или вашему подтверждению; остальные — по выпискам.",
       "A current price is used only for holdings matched to a US listing by ISIN, an exact name match, a US broker's statement or your confirmation; the rest use statement values.")}</li>`;
   // Оговорки — только о том, что есть в этом отчёте: в снимке нет текущих цен, без деривативов нет правил экспирации,
   // без журнала операций нет оговорки о журнале.
   const foreign = P.positions.some(p => p.ccy && p.ccy !== "USD");
   const pricesNote = stmt
-    ? t(`Суммы — по ценам и стоимостям выписок${foreign ? "; валюты — по курсу ЕЦБ на дату выписки" : ""}. Текущие цены в снимок не входят, изменения за периоды не показываются.`,
-        `Amounts use the statements' prices and values${foreign ? "; currencies are converted at ECB rates as of each statement date" : ""}. Current prices are not part of the snapshot, and period changes are not shown.`)
+    ? t(`Суммы — по ценам и стоимостям выписок${foreign ? "; валюты — по курсу ЕЦБ на дату выписки" : ""}. Текущие цены, изменения за периоды и сравнение с бенчмарком в снимок не входят.`,
+        `Amounts use the statements' prices and values${foreign ? "; currencies are converted at ECB rates as of each statement date" : ""}. Current prices, period changes and the benchmark comparison are not part of the snapshot.`)
     : at ? t(`Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}. ${P.live.fxDate ? `Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.` : "Курсы валют не загрузились."}`,
              `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}. ${P.live.fxDate ? `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.` : "Exchange rates did not load."}`)
     : t("Текущие цены не загружались: все суммы — по данным выписок.", "Current prices were not loaded: all amounts are based on the statements.");
@@ -1896,7 +1910,7 @@ function renderPrintExtras(){
     li(t("Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».",
          "Positions, quantities, cost basis and fees come from the broker statements. Parsed data is reconciled with each statement's own totals; the results are in the “Documents and gaps” section.")) +
     li(pricesNote) +
-    li(P.positions.some(p => WL.eq(p)) && t("История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
+    li(!stmt && P.positions.some(p => WL.eq(p)) && t("История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
          "Price history: CBOE daily closing prices, excluding dividends. The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.")) +
     li(derivatives && t("Даты экспираций опционов и первого дня уведомления по фьючерсам CME рассчитаны по правилам биржи без учёта праздников.",
          "Option expiry dates and first notice days for CME futures are calculated from exchange rules, without adjusting for holidays.")) +
@@ -1910,6 +1924,14 @@ function renderPrintExtras(){
     `</ul></div>`;
 }
 const renderChart = () => {
+  // Сравнение с бенчмарком строится по текущим ценам и истории — к снимку выписок оно не относится: в снимке блок не печатается.
+  const sec = $("#chart").closest("section"), stmt = S.P && S.P.basis === "stmt" && !S.demo;
+  if(sec) sec.classList.toggle("stmt-off", !!stmt);
+  if(stmt){
+    $("#chart").innerHTML = `<p class="muted" style="margin:0">${t("Сравнение с бенчмарком считается по текущим ценам и в снимок выписок не входит. Переключитесь на «Оценку сейчас», чтобы его увидеть.",
+      "The benchmark comparison uses current prices and is not part of the statement snapshot. Switch to “Current valuation” to see it.")}</p>`;
+    return;
+  }
   if(locked()){
     $("#chart").innerHTML = `<div class="lockblock"><div class="skel-chart"></div>
       <p>${t("Как акции портфеля шли против S&P 500, Nasdaq, золота и других бенчмарков — в полном отчёте.", "See how the portfolio's stocks performed against the S&P 500, Nasdaq, gold and other benchmarks in the full report.")}</p>

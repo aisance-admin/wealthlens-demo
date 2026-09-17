@@ -253,6 +253,7 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .where ul{margin:10px 0 0; padding-left:18px; display:grid; gap:6px}
 .drop-foot{text-align:center; font-size:12.5px; margin:14px auto 0; max-width:620px}
 #glitchBar .btn{margin-top:12px}
+.stmt-off .sec-h label{display:none}              /* в снимке выписок выбор бенчмарка не нужен */
 .gift-pill{width:fit-content; max-width:100%; margin:20px auto 2px; padding:7px 15px; border:1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius:999px; background:color-mix(in srgb, var(--accent) 9%, transparent); color:var(--ink); font-size:13px; line-height:1.45; text-wrap:balance}
 .gift-pill b,.pw-gift b{color:var(--accent); font-weight:600; letter-spacing:.02em; white-space:nowrap}
 .pw-price s{font-size:.5em; font-weight:500; color:var(--muted); letter-spacing:0; vertical-align:.35em; margin-right:.12em}
@@ -273,6 +274,9 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .app-foot{margin:34px 0 8px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px; text-align:center}
 .app-foot a{color:var(--ink-2)}
 .app-foot a:hover{color:var(--accent)}
+.app-foot .foot-rid{max-width:72ch; margin:8px auto 0; line-height:1.5; text-wrap:balance}
+.app-foot .foot-rid code{font-family:var(--mono); font-size:.92em; color:var(--ink-2)}
+.pw-where{font-size:13px; line-height:1.45; margin-top:10px}
 @media (max-width:760px){
   .paywall{grid-template-columns:1fr}
   .pw-buy{border-left:0; padding-left:0; border-top:1px solid var(--line); padding-top:14px}
@@ -573,6 +577,7 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
   .tl-row .pill{justify-self:end}
   section:has(#positions){break-before:page}
   #market{break-before:page}
+  section.stmt-off{display:none !important}
   .news{grid-template-columns:1fr 1fr}
   .struct{grid-template-columns:repeat(3,minmax(0,1fr))}
   section:has(#structure){break-inside:avoid}
@@ -648,8 +653,8 @@ WL.apiReady = (async () => {
 <script src="wealth/demo.js?v=504239201eca"></script>
 <script src="wealth/model.js?v=b4f7bac7ad3e"></script>
 <script src="wealth/insights.js?v=5cd354b2c07c"></script>
-<script src="wealth/table.js?v=38e5362f50ec"></script>
-<script src="wealth/market.js?v=631c57b2da4e"></script>
-<script src="wealth/ui.js?v=80477e6d5bec"></script>
+<script src="wealth/table.js?v=54f351961758"></script>
+<script src="wealth/market.js?v=7f7ffe15d474"></script>
+<script src="wealth/ui.js?v=9e022921acd3"></script>
 </body>
 </html>

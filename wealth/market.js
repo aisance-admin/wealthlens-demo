@@ -180,10 +180,16 @@ function renderHoldingNews(P){
   const el = document.querySelector("#holdNews"); if(!el) return;
   const ticks = holdingTickers(P);
   const chips = document.querySelector("#holdChips");
-  // Искать не по чему (нет бумаг в долларах и близких опционов) — запроса не будет, ждать нечего.
+  // Тикеров для поиска нет — объясняем почему, по модели портфеля, а не по пустому ответу новостей: бумаги ещё сопоставляются
+  // с биржей, справочник не ответил, ни одна не подтверждена или бумаг в долларах нет вовсе.
   if(!ticks.length){
     if(chips) chips.innerHTML = "";
-    el.innerHTML = `<li class="muted">${WL.t("В портфеле нет бумаг с американскими котировками — новости по ним не ищем.", "No US-listed holdings in the portfolio, so there is no holdings news to look up.")}</li>`;
+    const usd = P.positions.filter(p => (WL.eq(p) || p.type === "option") && p.ccy === "USD"), how = usd.map(p => WL.idOf(P, p).how);
+    const note = !usd.length ? WL.t("В портфеле нет бумаг в долларах — новости по бумагам не ищем.", "The portfolio has no US dollar securities, so there is no holdings news to look up.")
+      : how.includes("pending") ? WL.t("Сопоставляю бумаги с биржей США — новости появятся после этого…", "Matching holdings to US listings — news will follow…")
+      : how.includes("error") ? WL.t("Справочник бумаг не ответил — новости по бумагам пока не загружены.", "The securities reference did not respond — holdings news is not loaded yet.")
+      : WL.t("Новости ищем только по бумагам, сопоставленным с биржей США. Таких пока нет — подтвердить бумагу можно в плашке над отчётом.", "News is looked up only for holdings matched to a US listing. None are matched yet — you can confirm a holding in the note above the report.");
+    el.innerHTML = `<li class="muted">${note}</li>`;
     return;
   }
   if(M.holdings && M.holdings.failed){
@@ -207,7 +213,9 @@ function renderHoldingNews(P){
 
 /* Новости по бумагам клиента. Выписки добавляют по одной, поэтому набор тикеров меняется после первого
    показа: тогда новости загружаются заново. MP — портфель, по которому они показаны сейчас. */
-let MP = null;
+// MP_KEY — набор тикеров на момент показа. Его нельзя пересчитывать из MP: сопоставление с биржей общее для всех сборок
+// портфеля, и после него старый и новый ключи совпали бы, а новости так и не загрузились бы.
+let MP = null, MP_KEY = null;
 const holdKey = P => holdingTickers(P).map(x => x.sym).sort().join(",");
 function loadHoldings(P){
   const ticks = holdingTickers(P), key = holdKey(P);
@@ -215,14 +223,14 @@ function loadHoldings(P){
   // Пока шёл запрос, портфель могли пересобрать с теми же бумагами: ответ по-прежнему подходит.
   return getJSON("/market/news?symbols=" + ticks.map(x => x.sym).join(",") +
       "&q=" + ticks.map(x => encodeURIComponent(queryWord(x.sym, x.name).replace(/,/g, " "))).join(","))
-    .then(r => { if(!MP || holdKey(MP) !== key) return; M.holdings = r && r.symbols ? r : {symbols: {}, failed: true}; renderHoldingNews(MP); });
+    .then(r => { if(!MP || MP_KEY !== key) return; M.holdings = r && r.symbols ? r : {symbols: {}, failed: true}; renderHoldingNews(MP); });
 }
 WL.updateMarketHoldings = function(P){
   if(!document.querySelector("#holdNews")) return;
-  const changed = !MP || holdKey(MP) !== holdKey(P);
+  const key = holdKey(P), changed = key !== MP_KEY;
   MP = P;
-  if(!changed) return;
-  M.holdings = null; M.tick = "all";
+  if(!changed){ if(!key) renderHoldingNews(P); return; }     // тикеров по-прежнему нет — обновляем пояснение («сопоставляю…» → итог)
+  MP_KEY = key; M.holdings = null; M.tick = "all";
   renderHoldingNews(P);
   loadHoldings(P);
 };
@@ -266,7 +274,7 @@ WL.renderMarket = function(el, P){
           "Google News for the past week, excluding automated stories about funds buying or selling shares. Only tickers and company names are sent out for the search.")}</div>
       </div>
     </div>`;
-  MP = P; M.holdings = null; M.tick = "all";
+  MP = P; MP_KEY = holdKey(P); M.holdings = null; M.tick = "all";
   renderQuotes(); renderMarketNews(); renderHoldingNews(P);
   el.onclick = e => {
     const b = e.target.closest("button"); if(!b) return;

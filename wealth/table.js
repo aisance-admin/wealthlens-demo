@@ -131,7 +131,7 @@ WL.renderPositions = function(el, P, S){
   const mixed = docs.some(d => staleDoc(P, d));
   el.innerHTML = `<table class="pos"><thead><tr>
       <th class="l">${WL.t("Бумага", "Security")}</th><th class="l">${WL.t("Брокер", "Broker")}</th><th>${WL.t("Кол-во", "Qty")}</th><th>${WL.t("Покупка", "Cost")}${sub(WL.t("цена · дата", "price · date"))}</th>
-      <th>${WL.t("Комиссия", "Fees")}</th><th>${WL.t("Текущая цена", "Price")}</th><th>${WL.t("Изменение", "Change")}${sub(`${esc(per.label.toLowerCase())} · ${covered} ${WL.t("из", "of")} ${countable}`)}</th>
+      <th>${WL.t("Комиссия", "Fees")}</th><th>${P.basis === "stmt" ? WL.t("Цена выписки", "Statement price") : WL.t("Текущая цена", "Price")}</th><th>${WL.t("Изменение", "Change")}${sub(P.basis === "stmt" ? WL.t("в снимок не входит", "not in the snapshot") : `${esc(per.label.toLowerCase())} · ${covered} ${WL.t("из", "of")} ${countable}`)}</th>
       <th>${WL.t("В валюте", "Local")}</th><th>${WL.t("В USD", "USD")}</th></tr></thead><tbody>${body ||
       `<tr><td class="l" colspan="9"><span class="muted">${WL.t("По выбранному фильтру позиций нет.", "No positions match the selected filter.")}</span></td></tr>`}
     <tr class="foot"><td class="l" colspan="6">${WL.t(`Всего${only === "all" ? " по портфелю" : " · " + esc(only)}`, only === "all" ? "Portfolio total" : "Total · " + esc(only))}${!mixed ? ""
