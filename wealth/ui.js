@@ -846,7 +846,11 @@ function addFiles(files){
   const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
   if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
   if(S.demo) leaveDemo();
+  const first = !S.docs.length, since = Q.seq;
   list.forEach(f => Q.items.push({id: ++Q.seq, file: f, name: f.name, state: "queued", text: t("в очереди", "queued")}));
+  // Первый отчёт собирается на экране анализа: видно, что происходит с выписками. Модуль необязательный.
+  if(first && WL.analysis && !WL.analysis.active()) WL.analysis.begin({
+    since, items: () => Q.items, docs: () => S.docs, P: () => S.P, gen: () => Q.gen, running: () => Q.running});
   Q.hidden = false; Q.trayOpen = false;
   renderTray(true);
   if(Q.running) readQueued(Q.gen);
@@ -1596,6 +1600,7 @@ async function goLive(){
   if(!P) return;
   await WL.fetchLive(P);
   if(my !== refreshGen || P !== S.P) return;
+  if(WL.analysis) WL.analysis.live("done", P);
   renderApp();
   if(WL.updateMarketHoldings) WL.updateMarketHoldings(P);
   await loadHistory();
