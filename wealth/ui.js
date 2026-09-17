@@ -595,6 +595,36 @@ const lockedInsight = x => `<article class="card insight lockcard"><span class="
 
 
 /* ── Загрузка ─────────────────────────────────────────────────────────── */
+/* Страница без одного из модулей (сбой сети или смешанные версии файлов из кэша сразу после выкладки) не должна ломать загрузку
+   молча: модули проверяются до работы, а при сбое страница предлагает обновиться. */
+const NEEDS = {"parse.js": ["parseFile", "aiVerify"], "sheet.js": ["parseSheet", "sheetDoc"], "model.js": ["build", "quality", "idOf", "current", "usd", "fetchLive"],
+  "insights.js": ["insights", "missing"], "table.js": ["renderPositions", "renderChart"], "market.js": ["renderMarket"]};
+const missingModules = () => Object.entries(NEEDS).filter(([, fns]) => fns.some(f => typeof WL[f] !== "function")).map(([m]) => m);
+async function reloadFresh(){
+  // Обычная перезагрузка может снова взять файлы из кэша браузера: сначала обновляем в кэше скрипты страницы.
+  try{ await Promise.all([...document.scripts].filter(s => s.src).map(s => fetch(s.src, {cache: "reload"}))); }catch(e){}
+  location.reload();
+}
+function renderBroken(lost){
+  $("#bar").hidden = true;
+  document.body.classList.add("on-upload");
+  $("#app").innerHTML = `<div class="drop" role="alert"><div class="drop-mark" aria-hidden="true"></div>
+    <div class="eyebrow">WealthLens · ${t("страница загрузилась не полностью", "the page did not load completely")}</div>
+    <h1>${t("Обновите страницу", "Reload the page")}</h1>
+    <p>${t("Часть файлов приложения не загрузилась — так бывает при сбое сети или сразу после обновления сайта. Выписки, уже добавленные в этом браузере, сохранены.",
+      "Some of the app's files did not load — this happens after a network glitch or right after a site update. Statements already added in this browser are saved.")}</p>
+    <div class="drop-actions"><button class="btn primary" type="button" data-reload>${t("Обновить страницу", "Reload the page")}</button></div>
+    ${lost && lost.length ? `<p class="hint">${t("Не загрузилось", "Not loaded")}: ${esc(lost.join(", "))}</p>` : ""}</div>`;
+}
+function renderGlitch(on){
+  const el = $("#glitchBar"); if(!el) return;
+  el.innerHTML = on ? `<div class="card quality" role="alert"><div class="q-top"><span class="lvl high">${t("Сбой", "Error")}</span>
+      <h2>${t("Часть отчёта не показалась", "Part of the report did not render")}</h2></div>
+    <p>${t("Страница загрузилась не полностью или произошёл сбой. Выписки сохранены в этом браузере — обновите страницу.",
+      "The page did not load completely or hit an error. Your statements are saved in this browser — reload the page.")}</p>
+    <button class="btn small no-print" type="button" data-reload>${t("Обновить страницу", "Reload the page")}</button></div>` : "";
+}
+document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-reload]"); if(b){ e.preventDefault(); b.disabled = true; reloadFresh(); } });
 function renderUpload(){
   closeDrawer();
   $("#bar").hidden = true;
@@ -803,6 +833,7 @@ const dateGuessed = x => !!(x.asOfGuessed || /взята сегодняшняя|
 const inReport = it => !!(it.hash && S.docs.some(d => d.hash === it.hash));
 
 function addFiles(files){
+  if(missingModules().length) return renderBroken(missingModules());
   const list = [...files].filter(f => /\.(pdf|csv|tsv|txt|xlsx|xls)$/i.test(f.name) || f.type === "application/pdf");
   if(!list.length){ toast(t("Нужны PDF-выписки или выгрузки CSV и Excel", "Only PDF statements and CSV or Excel exports are supported")); return; }
   if(S.demo) leaveDemo();
@@ -816,12 +847,27 @@ function addFiles(files){
    без вопросов сразу попадает в отчёт. Окна (ИИ, разметка, «тот же счёт») — по одному и после того, как всё
    пришедшее прочитано. Запрос к ИИ идёт в фоне, его результат добавляется, когда придёт ответ. */
 let wakeQueue = null, reading = null;
+/* Непредвиденный сбой (не «файл повреждён» и не «формат не распознан», а ошибка самой страницы) не оставляет файл в «читаю…»:
+   файл получает понятный итог и кнопку «Повторить», остальные файлы пачки обрабатываются дальше. Причина — в консоли.
+   Сначала меняется состояние и только потом текст и лоток: если сломана и отрисовка, файл всё равно не зависнет. */
+function failItem(it){
+  it.state = "error"; it.retry = true; it.ready = null; it.later = null;
+  try{
+    it.text = t("не удалось обработать из-за сбоя страницы — нажмите «Повторить» или обновите страницу", "could not be processed because the page hit an error — use “Retry” or reload the page");
+    renderTray(true); announce(`${it.name}: ${it.text}`);
+  }catch(e){ console.error(e); }
+}
+const STUCK = /^(queued|reading|later|ask|ai|ready|mapping)$/;    // те же состояния, что ACTIVE: файл ещё в работе
 function readQueued(gen){
   if(reading && reading.gen === gen) return reading.p;
   const job = reading = {gen};
   job.p = (async () => {
-    try{ for(let it; gen === Q.gen && (it = Q.items.find(x => x.state === "queued"));) await processItem(it, gen); }
-    catch(e){ console.error(e); }
+    try{
+      for(let it; gen === Q.gen && (it = Q.items.find(x => x.state === "queued"));){
+        try{ await processItem(it, gen); }
+        catch(e){ console.error(e); if(gen === Q.gen && STUCK.test(it.state)) failItem(it); }
+      }
+    }
     finally{ if(reading === job) reading = null; if(wakeQueue) wakeQueue(); }
   })();
   return job.p;
@@ -835,10 +881,12 @@ async function runQueue(){
       if(Q.items.some(x => x.state === "queued")) readQueued(gen);
       const it = !reading && (Q.items.find(x => x.state === "ready") || Q.items.find(x => x.state === "later"));
       if(it){
-        if(it.state === "ready") await commit(it, it.ready, gen);
-        else if(it.later.kind === "hard") await resolveHard(it, it.later.manual, gen);
-        else if(it.later.kind === "password") await askPasswordAndRetry(it, gen);
-        else await mapAndCommit(it, it.later.manual, gen);
+        try{
+          if(it.state === "ready") await commit(it, it.ready, gen);
+          else if(it.later.kind === "hard") await resolveHard(it, it.later.manual, gen);
+          else if(it.later.kind === "password") await askPasswordAndRetry(it, gen);
+          else await mapAndCommit(it, it.later.manual, gen);
+        }catch(e){ console.error(e); if(gen === Q.gen && STUCK.test(it.state)) failItem(it); }
         continue;
       }
       const waits = [reading && reading.p, ...Q.items.filter(x => x.state === "ai" && x.job).map(x => x.job)].filter(Boolean);
@@ -1389,6 +1437,7 @@ function renderTray(show){
       if(x.dataset.tray === "close") closeTray();
       if(x.dataset.tray === "add") $("#file").click();
       if(x.dataset.tray === "toggle"){ Q.trayOpen = !Q.trayOpen; renderTray(); }
+      if(x.dataset.retry) retryItem(Q.items.find(i => i.id === +x.dataset.retry));
       if(x.dataset.cancel){ const it = Q.items.find(i => i.id === +x.dataset.cancel);
         if(it && it.abort && !it.abort.signal.aborted){ it.abort.abort(); it.text = t("отменяю…", "cancelling…"); renderTray(); } }
     });
@@ -1413,11 +1462,21 @@ function renderTray(show){
     <ul class="ut-list">${items.map(x => `<li class="ut-item ${x.state}">
       <span class="ut-ic" aria-hidden="true"></span>
       <div class="ut-main"><div class="ut-name" title="${esc(x.name)}">${esc(x.name)}</div><div class="ut-text">${esc(x.text)}</div></div>
-      ${(x.state === "ai" || (x.state === "reading" && x.ocr)) && x.abort && !x.abort.signal.aborted ? `<button class="btn small" type="button" data-cancel="${x.id}">${t("Отменить", "Cancel")}</button>` : ""}</li>`).join("")}</ul>`;
+      ${(x.state === "ai" || (x.state === "reading" && x.ocr)) && x.abort && !x.abort.signal.aborted ? `<button class="btn small" type="button" data-cancel="${x.id}">${t("Отменить", "Cancel")}</button>` : ""}
+      ${x.state === "error" && x.retry ? `<button class="btn small" type="button" data-retry="${x.id}">${t("Повторить", "Retry")}</button>` : ""}</li>`).join("")}</ul>`;
   el.classList.toggle("busy", !!active);
   if(show && !Q.hidden) el.hidden = false;
   clearTimeout(trayTimer);
   if(!active && !bad) trayTimer = setTimeout(closeTray, 8000);
+}
+// «Повторить» у файла, упавшего из-за сбоя страницы: файл читается заново с начала.
+function retryItem(it){
+  if(!it || it.state !== "error" || !it.retry) return;
+  Object.assign(it, {state: "queued", text: t("в очереди", "queued"), retry: false, ready: null, later: null});
+  Q.hidden = false; Q.trayOpen = false;
+  renderTray(true);
+  if(Q.running) readQueued(Q.gen);
+  runQueue();
 }
 function closeTray(){
   const el = $("#uptray"); if(el) el.hidden = true;
@@ -1539,6 +1598,7 @@ function renderApp(){
     : S.docs.map(d => `<span class="pill ${d.checks.every(c => c.ok) ? "ok" : "bad"}" title="${esc(d.fileName)}">${esc(d.brokerShort)} · ${fmt.date(d.asOf)}</span>`).join(" ");
   if(!$("#insights")){
     $("#app").innerHTML = `
+      <div id="glitchBar"></div>
       <div id="demoBar"></div>
       <div id="qualityBar"></div>
       <div id="idBar"></div>
@@ -1567,8 +1627,14 @@ function renderApp(){
     WL.renderMarket($("#market"), S.P);   // один раз: лента и новости не должны перезагружаться при каждом обновлении цен
   }
   $("#bench").value = S.bench;
-  renderHero(); renderInsights(); renderStructure(); renderTimeline(); renderControls(); renderPositions(); renderChart(); renderDocs();
-  renderPaywall(); renderDemoBar(); renderQuality(); renderIdentity();
+  // Сбой одного блока не оставляет страницу без отчёта: остальные блоки показываются, над отчётом — плашка со сбоем.
+  // Пейволл при сбое закрывает отчёт, а не открывает его.
+  const broken = [renderHero, renderInsights, renderStructure, renderTimeline, renderControls, renderPositions, renderChart, renderDocs,
+    renderPaywall, renderDemoBar, renderQuality, renderIdentity].filter(fn => {
+    try{ fn(); return false; }
+    catch(e){ console.error(e); if(fn === renderPaywall) document.body.classList.toggle("is-locked", PAYWALL && !S.demo); return true; }
+  });
+  renderGlitch(broken.length > 0);
   setBuyDisabled(checkoutBusy);
   // Открытая карточка позиции показывает свежие данные, а не цены до пересборки.
   if(S.drawerId && $("#drawer").classList.contains("open")){
@@ -1801,7 +1867,8 @@ function renderPrintExtras(){
     });
     return {per, abs, covered, countable};
   });
-  pe.innerHTML = `<div class="sec-h"><h2>${t("Изменение по периодам", "Change by period")}</h2><span class="aside">${t("текущее количество бумаг, сумма по позициям, где есть данные", "current holdings; total across positions with data")}</span></div>
+  // В снимке выписок изменений за периоды нет — таблица из одних прочерков в PDF не нужна, об этом сказано в оговорках.
+  pe.innerHTML = P.basis === "stmt" ? "" : `<div class="sec-h"><h2>${t("Изменение по периодам", "Change by period")}</h2><span class="aside">${t("текущее количество бумаг, сумма по позициям, где есть данные", "current holdings; total across positions with data")}</span></div>
     <div class="card"><table class="pos"><thead><tr><th class="l">${t("Период", "Period")}</th><th>${t("Изменение", "Change")}</th><th>${t("Есть данные", "Data available")}</th><th class="l">${t("Как считается", "Method")}</th></tr></thead><tbody>` +
     rows.map(r => `<tr><td class="l">${esc(r.per.label)}</td><td><span class="${r.abs > 0 ? "up" : r.abs < 0 ? "down" : ""}">${r.covered ? fmt.signed(r.abs) : "—"}</span></td>` +
       `<td>${t(`${r.covered} из ${r.countable}`, `${r.covered} of ${r.countable}`)}</td><td class="l">${esc(PERIOD_NOTE[r.per.id] || "")}</td></tr>`).join("") + `</tbody></table></div>`;
@@ -1809,27 +1876,38 @@ function renderPrintExtras(){
   const at = !liveAt ? null : EN
     ? `${fmt.date(`${liveAt.getFullYear()}-${pad(liveAt.getMonth() + 1)}-${pad(liveAt.getDate())}`)}, ${pad(liveAt.getHours())}:${pad(liveAt.getMinutes())}`
     : liveAt.toLocaleString("ru-RU", {day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"});
-  const V = valuation(P);
-  const basisNote = `<li><b>${t("Основание оценки:", "Valuation basis:")}</b> ${esc(V.line)}.${!S.demo && P.basis !== "stmt" && Math.abs(V.control - P.positions.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? a + v * k : a; }, 0)) >= 1
-    ? t(` Итог самих выписок: ${fmt.money(V.control, "USD", 0)}.`, ` The statements' own total: ${fmt.money(V.control, "USD", 0)}.`) : ""} ${t("Текущая цена подставляется только бумагам, сопоставленным с биржей США по ISIN, названию, выписке американского брокера или вашему подтверждению; остальные — по выпискам.",
-      "A current price is used only for holdings matched to a US listing by ISIN, name, a US broker's statement or your confirmation; the rest use statement values.")}</li>`;
-  pn.innerHTML = `<div class="sec-h"><h2>${t("Источники и оговорки", "Sources and caveats")}</h2></div><div class="card doc"><ul class="notes">${basisNote}${t(`
-    <li>Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».</li>
-    <li>${at ? `Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}. ${P.live.fxDate ? `Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.` : "Курсы валют не загрузились."}` : "Текущие цены не загружались: все суммы — по данным выписок."}</li>
-    <li>История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.</li>
-    <li>Даты экспираций опционов и первого дня уведомления по фьючерсам CME рассчитаны по правилам биржи без учёта праздников.</li>
-    <li>Данные Swissquote — на дату журнала операций. Что открыто на этом счёте сейчас, из журнала не видно.</li>
-    <li>Рынок: индексы, VIX, доходности казначейских облигаций США и фонды GLD, BNO, IBIT — CBOE с задержкой; курсы валют — ЕЦБ.</li>
-    <li>Новости рынка — RSS Investing.com, «Ведомости», «Коммерсантъ», CNBC и MarketWatch. Новости по бумагам клиента — Google News за неделю, отобраны по названию компании и биржевому обозначению.</li>
-    <li>Отчёт носит информационный характер и не является инвестиционной рекомендацией.</li>`, `
-    <li>Positions, quantities, cost basis and fees come from the broker statements. Parsed data is reconciled with each statement's own totals; the results are in the “Documents and gaps” section.</li>
-    <li>${at ? `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}. ${P.live.fxDate ? `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.` : "Exchange rates did not load."}` : "Current prices were not loaded: all amounts are based on the statements."}</li>
-    <li>Price history: CBOE daily closing prices, excluding dividends. The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.</li>
-    <li>Option expiry dates and first notice days for CME futures are calculated from exchange rules, without adjusting for holidays.</li>
-    <li>Swissquote data is as of the transaction log date. The log does not show what is currently open on that account.</li>
-    <li>Market: indices, VIX, US Treasury yields and the GLD, BNO and IBIT funds are delayed CBOE quotes; exchange rates are from the ECB.</li>
-    <li>Market news: RSS feeds from Investing.com, Vedomosti, Kommersant, CNBC and MarketWatch. News on the client's holdings: Google News for the past week, matched by company name and ticker.</li>
-    <li>This report is for information only and does not constitute investment advice.</li>`)}</ul></div>`;
+  const V = valuation(P), stmt = P.basis === "stmt";
+  const basisNote = `<li><b>${t("Основание оценки:", "Valuation basis:")}</b> ${esc(V.line)}.${!S.demo && !stmt && Math.abs(V.control - P.positions.reduce((a, p) => { const v = WL.current(P, p).value, k = WL.usd(P, p.ccy, p); return v != null && k != null ? a + v * k : a; }, 0)) >= 1
+    ? t(` Итог самих выписок: ${fmt.money(V.control, "USD", 0)}.`, ` The statements' own total: ${fmt.money(V.control, "USD", 0)}.`) : ""} ${t("Текущая цена подставляется только бумагам, сопоставленным с биржей США по ISIN, полному совпадению названия, выписке американского брокера или вашему подтверждению; остальные — по выпискам.",
+      "A current price is used only for holdings matched to a US listing by ISIN, an exact name match, a US broker's statement or your confirmation; the rest use statement values.")}</li>`;
+  // Оговорки — только о том, что есть в этом отчёте: в снимке нет текущих цен, без деривативов нет правил экспирации,
+  // без журнала операций нет оговорки о журнале.
+  const foreign = P.positions.some(p => p.ccy && p.ccy !== "USD");
+  const pricesNote = stmt
+    ? t(`Суммы — по ценам и стоимостям выписок${foreign ? "; валюты — по курсу ЕЦБ на дату выписки" : ""}. Текущие цены в снимок не входят, изменения за периоды не показываются.`,
+        `Amounts use the statements' prices and values${foreign ? "; currencies are converted at ECB rates as of each statement date" : ""}. Current prices are not part of the snapshot, and period changes are not shown.`)
+    : at ? t(`Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}. ${P.live.fxDate ? `Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.` : "Курсы валют не загрузились."}`,
+             `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}. ${P.live.fxDate ? `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.` : "Exchange rates did not load."}`)
+    : t("Текущие цены не загружались: все суммы — по данным выписок.", "Current prices were not loaded: all amounts are based on the statements.");
+  const derivatives = P.positions.some(p => p.type === "option" || p.type === "future");
+  const ledgers = [...new Set(S.docs.filter(d => d.kind === "ledger").map(d => d.brokerShort || d.broker).filter(Boolean))];
+  const li = x => x ? `<li>${x}</li>` : "";
+  pn.innerHTML = `<div class="sec-h"><h2>${t("Источники и оговорки", "Sources and caveats")}</h2></div><div class="card doc"><ul class="notes">${basisNote}` +
+    li(t("Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».",
+         "Positions, quantities, cost basis and fees come from the broker statements. Parsed data is reconciled with each statement's own totals; the results are in the “Documents and gaps” section.")) +
+    li(pricesNote) +
+    li(P.positions.some(p => WL.eq(p)) && t("История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
+         "Price history: CBOE daily closing prices, excluding dividends. The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.")) +
+    li(derivatives && t("Даты экспираций опционов и первого дня уведомления по фьючерсам CME рассчитаны по правилам биржи без учёта праздников.",
+         "Option expiry dates and first notice days for CME futures are calculated from exchange rules, without adjusting for holidays.")) +
+    li(ledgers.length && t(`Данные ${esc(ledgers.join(", "))} — на дату журнала операций. Что открыто на этом счёте сейчас, из журнала не видно.`,
+         `${esc(ledgers.join(", "))} data is as of the transaction log date. The log does not show what is currently open on that account.`)) +
+    li(t("Рынок: индексы, VIX, доходности казначейских облигаций США и фонды GLD, BNO, IBIT — CBOE с задержкой; курсы валют — ЕЦБ.",
+         "Market: indices, VIX, US Treasury yields and the GLD, BNO and IBIT funds are delayed CBOE quotes; exchange rates are from the ECB.")) +
+    li(t("Новости рынка — RSS Investing.com, «Ведомости», «Коммерсантъ», CNBC и MarketWatch. Новости по бумагам клиента — Google News за неделю, отобраны по названию компании и биржевому обозначению.",
+         "Market news: RSS feeds from Investing.com, Vedomosti, Kommersant, CNBC and MarketWatch. News on the client's holdings: Google News for the past week, matched by company name and ticker.")) +
+    li(t("Отчёт носит информационный характер и не является инвестиционной рекомендацией.", "This report is for information only and does not constitute investment advice.")) +
+    `</ul></div>`;
 }
 const renderChart = () => {
   if(locked()){
@@ -2189,6 +2267,7 @@ liveBox("toasts", "toasts no-print"); liveBox("srStatus", "sr-only");
 WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
 (async function boot(){
   capturePromo();
+  if(missingModules().length) return renderBroken(missingModules());
   if(new URLSearchParams(location.search).has("demo") && WL.demoDocs){
     S.demo = true; S.client = t("Демо-клиент", "Demo client"); S.docs = WL.demoDocs(WL.lang);
     track("ViewContent", {content_name: "demo_report"});

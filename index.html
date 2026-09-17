@@ -252,6 +252,7 @@ select{padding:6px 10px; border-radius:8px; border:1px solid var(--line-2); back
 .where[open] summary::after{content:" ▴"}
 .where ul{margin:10px 0 0; padding-left:18px; display:grid; gap:6px}
 .drop-foot{text-align:center; font-size:12.5px; margin:14px auto 0; max-width:620px}
+#glitchBar .btn{margin-top:12px}
 .gift-pill{width:fit-content; max-width:100%; margin:20px auto 2px; padding:7px 15px; border:1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius:999px; background:color-mix(in srgb, var(--accent) 9%, transparent); color:var(--ink); font-size:13px; line-height:1.45; text-wrap:balance}
 .gift-pill b,.pw-gift b{color:var(--accent); font-weight:600; letter-spacing:.02em; white-space:nowrap}
 .pw-price s{font-size:.5em; font-weight:500; color:var(--muted); letter-spacing:0; vertical-align:.35em; margin-right:.12em}
@@ -316,7 +317,7 @@ code.rid{font:12px var(--mono); color:var(--ink-2); background:var(--surface-2);
 .q-list li{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:10px; background:rgba(6,9,14,.35)}
 .q-list .q-why{font-size:12.5px; color:var(--ink-2); margin-top:3px; line-height:1.45}
 .q-actions{margin-top:10px}
-@media (max-width:760px){ .q-list li{flex-direction:column} }
+@media screen and (max-width:760px){ .q-list li{flex-direction:column} }
 /* Выписки без итога для сверки: спокойнее, чем «неполный отчёт», но видно до оплаты и в PDF */
 .quality.soft{border-color:rgba(130,181,255,.35); background:linear-gradient(0deg, var(--info-soft), var(--info-soft)), var(--surface)}
 .pw-note.pw-warn{color:var(--info)}
@@ -486,7 +487,8 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
 /* Телефон и портретный планшет: таблицу позиций читать в девять колонок невозможно,
    поэтому каждая строка становится карточкой. Главное видно сразу — бумага, площадка, стоимость и изменение;
    покупка, комиссия и сумма в валюте открываются нажатием на карточку. */
-@media (max-width:820px){
+/* Только экран: при печати по размеру страницы из CSS Chrome считает ширину макета меньше 820px, и позиции в PDF шли карточками. */
+@media screen and (max-width:820px){
   #positions{overflow-x:visible}        /* только позиции: панели сопоставления прокрутка нужна */
   .pos thead{display:none}
   .pos, .pos tbody{display:block}
@@ -640,14 +642,14 @@ WL.apiReady = (async () => {
 })();
 </script>
 <script>window.WL_PIXEL_ID = ""; window.WL_SUPPORT_EMAIL = ""; window.WL_ACCESS_KEY = null;   /* подставляет publish.sh: пиксель и почта — из site/config.json, открытый ключ разрешений на доступ — с api.euroaff.eu */</script>
-<script src="wealth/track.js"></script>
-<script src="wealth/parse.js"></script>
-<script src="wealth/sheet.js"></script>
-<script src="wealth/demo.js"></script>
-<script src="wealth/model.js"></script>
-<script src="wealth/insights.js"></script>
-<script src="wealth/table.js"></script>
-<script src="wealth/market.js"></script>
-<script src="wealth/ui.js"></script>
+<script src="wealth/track.js?v=28c9c9c48152"></script>
+<script src="wealth/parse.js?v=eb1c06e45a2f"></script>
+<script src="wealth/sheet.js?v=7066c63cc339"></script>
+<script src="wealth/demo.js?v=504239201eca"></script>
+<script src="wealth/model.js?v=b4f7bac7ad3e"></script>
+<script src="wealth/insights.js?v=5cd354b2c07c"></script>
+<script src="wealth/table.js?v=38e5362f50ec"></script>
+<script src="wealth/market.js?v=631c57b2da4e"></script>
+<script src="wealth/ui.js?v=80477e6d5bec"></script>
 </body>
 </html>
