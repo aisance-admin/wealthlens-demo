@@ -1161,20 +1161,29 @@ async function commit(it, doc, gen){
   flashDoc(doc.fileName);
 }
 function setCurrency(doc, ccy){
-  doc.positions.forEach(p => { if(!p.ccyGuessed) return; p.ccy = ccy; if(p.type === "cash") p.symbol = ccy; delete p.ccyGuessed; });
-  delete doc.ccyGuessed;
+  doc.positions.forEach(p => { if(!p.ccyGuessed) return; p.ccy = ccy; if(p.type === "cash") p.symbol = ccy; delete p.ccyGuessed; delete p.ccyRaw; delete p.ccySuggest; });
+  delete doc.ccyGuessed; delete doc.ccySuggest; delete doc.ccyRaw; delete doc.ccySuggestTotal;
   doc.note = [doc.note, t(`валюта сумм указана вручную: ${ccy}`, `currency set manually: ${ccy}`)].filter(Boolean).join(" · ");
 }
 function askCurrency(it, doc){
-  const n = doc.positions.filter(p => p.ccyGuessed).length;
+  const n = doc.positions.filter(p => p.ccyGuessed).length, sug = doc.ccySuggest, raw = doc.ccyRaw;
+  const pos = `${n} ${WL.pl(n, ["позиции", "позиций", "позиций"], ["position", "positions"])}`;
+  // Что именно не так с валютой: код распознан с сомнением, в колонке не код, колонки нет, но итог файла в одной валюте, или валюты нет вовсе.
+  const why = sug && raw ? t(`В колонке валюты распознано «${esc(raw)}» — похоже на ${sug}${doc.ccySuggestTotal ? `, и итог файла тоже в ${sug}` : ""}. Проверьте: если суммы в другой валюте, выберите её.`,
+        `The currency column reads “${esc(raw)}” — this looks like ${sug}${doc.ccySuggestTotal ? `, and the file total is in ${sug} too` : ""}. Please check: if the amounts are in another currency, choose it.`)
+    : sug ? t(`Колонки валюты в файле нет, но итог файла — в ${sug}. Проверьте: если суммы позиций в другой валюте, выберите её.`,
+        `The file has no currency column, but its total is in ${sug}. Please check: if the positions are in another currency, choose it.`)
+    : raw ? t(`У ${pos} в колонке валюты «${esc(raw)}» — это не код валюты. Если посчитать их в долларах, а суммы на самом деле в евро или франках, итог отчёта будет неверным.`,
+        `${pos} have “${esc(raw)}” in the currency column, which is not a currency code. Counting them in dollars when they are really in euros or francs would make the report total wrong.`)
+    : t(`У ${pos} в файле нет валюты: ни колонки, ни кода в самой сумме. Если посчитать их в долларах, а суммы на самом деле в евро или франках, итог отчёта будет неверным.`,
+        `${pos} in the file have no currency: no column and no code in the amount itself. Counting them in dollars when they are really in euros or francs would make the report total wrong.`);
+  const codes = [...new Set([sug, "USD", "EUR", "CHF", "GBP"].filter(Boolean))];
   return dialog({
     eyebrow: doc.brokerShort || doc.broker,
-    title: t("В какой валюте суммы в файле?", "What currency are the amounts in?"),
-    body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
-      <p>${t(`У ${n} ${WL.pl(n, ["позиции", "позиций", "позиций"], ["position", "positions"])} в файле нет валюты: ни колонки, ни кода в самой сумме. Если посчитать их в долларах, а суммы на самом деле в евро или франках, итог отчёта будет неверным.`,
-        `${n} ${WL.pl(n, ["позиции", "позиций", "позиций"], ["position", "positions"])} in the file have no currency: no column and no code in the amount itself. Counting them in dollars when they are really in euros or francs would make the report total wrong.`)}</p>`,
-    buttons: [{id: "USD", label: "USD", primary: true}, {id: "EUR", label: "EUR"}, {id: "CHF", label: "CHF"}, {id: "GBP", label: "GBP"},
-              {id: "skip", label: t("Другая — не добавлять", "Other — don't add")}],
+    title: sug ? t("Подтвердите валюту сумм", "Confirm the currency of the amounts") : t("В какой валюте суммы в файле?", "What currency are the amounts in?"),
+    body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul><p>${why}</p>`,
+    buttons: codes.map((c, i) => ({id: c, label: i === 0 && sug ? t(`Да, ${c}`, `Yes, ${c}`) : c, primary: i === 0}))
+      .concat({id: "skip", label: t("Другая — не добавлять", "Other — don't add")}),
     cancel: "skip",
   });
 }
@@ -1900,8 +1909,11 @@ function renderPrintExtras(){
   const pricesNote = stmt
     ? t(`Суммы — по ценам и стоимостям выписок${foreign ? "; валюты — по курсу ЕЦБ на дату выписки" : ""}. Текущие цены, изменения за периоды и сравнение с бенчмарком в снимок не входят.`,
         `Amounts use the statements' prices and values${foreign ? "; currencies are converted at ECB rates as of each statement date" : ""}. Current prices, period changes and the benchmark comparison are not part of the snapshot.`)
-    : at ? t(`Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}. ${P.live.fxDate ? `Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.` : "Курсы валют не загрузились."}`,
-             `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}. ${P.live.fxDate ? `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.` : "Exchange rates did not load."}`)
+    // Котировки, применённые к позициям, — отдельно от котировок обзора рынка: без сопоставленных бумаг текущие цены к позициям не применяются.
+    : at ? (V.live ? t(`Текущие цены — CBOE с задержкой около 15 минут, получены ${esc(at)}, применены к ${V.live} ${WL.pl(V.live, ["позиции", "позициям", "позициям"], ["position", "positions"])}.`,
+                       `Current prices: CBOE, delayed by about 15 minutes, retrieved ${esc(at)}, applied to ${V.live} ${V.live === 1 ? "position" : "positions"}.`)
+                : t("Текущие цены к позициям не применялись: все позиции оценены по ценам выписок.", "No current prices were applied to positions: all positions use statement prices."))
+      + " " + (P.live.fxDate ? t(`Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.`, `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.`) : t("Курсы валют не загрузились.", "Exchange rates did not load."))
     : t("Текущие цены не загружались: все суммы — по данным выписок.", "Current prices were not loaded: all amounts are based on the statements.");
   const derivatives = P.positions.some(p => p.type === "option" || p.type === "future");
   const ledgers = [...new Set(S.docs.filter(d => d.kind === "ledger").map(d => d.brokerShort || d.broker).filter(Boolean))];

@@ -135,6 +135,19 @@ const ISO_CCY = new Set(("AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BG
   "UYU UZS VES VND VUV WST XAF XAG XAU XCD XOF XPF YER ZAR ZMW ZWG").split(" "));
 const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/g) || []).find(c => ISO_CCY.has(c)) || null;
 const clean = v => String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+/* Распознанный скан путает похожие знаки: «USD» приходит как «ush», «U5D», «USO». Молча валюту не подставляем:
+   если код отличается от распространённой валюты одним похожим знаком, эта валюта предлагается человеку на подтверждение. */
+const OCR_LIKE = {D: "OQ0H", O: "DQ0", Q: "O0", "0": "ODQ", S: "5$", "5": "S", H: "DN", N: "H", B: "8", "8": "B", I: "1LJ", L: "1I", "1": "IL",
+  U: "VW", V: "UY", E: "F", F: "EP", C: "G(", G: "C6", "6": "G", K: "X", X: "K", Y: "V", P: "F", R: "K", J: "I", A: "4", "4": "A"};
+const COMMON_CCY = ["USD", "EUR", "CHF", "GBP", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "HKD", "SGD", "CNY", "RUB"];
+const ocrCcy = v => {
+  const tok = clean(v).toUpperCase();
+  if(!/^[A-Z0-9$(]{3}$/.test(tok) || ISO_CCY.has(tok)) return null;
+  const hits = COMMON_CCY.filter(c => { let diff = 0;
+    for(let i = 0; i < 3; i++) if(c[i] !== tok[i]){ if(!(OCR_LIKE[c[i]] || "").includes(tok[i])) return false; diff++; }
+    return diff === 1; });
+  return hits.length === 1 ? hits[0] : null;
+};
 
 /* Колонка достаётся ровно одному полю: сначала точные совпадения заголовка, потом
    вхождение подстроки. Иначе «Цена» и «Цена покупки» дерутся за одно поле. */
@@ -288,7 +301,11 @@ function buildDoc(rows, head, file, ctx){
     const broker = clean(g(r, "broker")) || headBroker || brokerFromFile(file.name) || tag;
     const base = {id: `SHEET:${tag}:${i}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…",
                   name: label || WL.t("Позиция ", "Position ") + i, ccy, value: value != null ? round2(value) : null};
-    if(!ccyFound) base.ccyGuessed = true;
+    if(!ccyFound){
+      base.ccyGuessed = true;
+      const raw = clean(g(r, "ccy")).slice(0, 12);
+      if(raw){ base.ccyRaw = raw; const s = ocrCcy(raw); if(s) base.ccySuggest = s; }
+    }
 
     if(isCash){ positions.push({...base, type: "cash", symbol: ccy, name: label || WL.t("Денежные средства", "Cash")}); continue; }
 
@@ -383,9 +400,16 @@ function buildDoc(rows, head, file, ctx){
     "no total row in the file — nothing to reconcile the sum against"));
 
   const ccyGuessed = positions.filter(p => p.ccyGuessed).length;
+  // Предложение валюты для окна подтверждения: одна и та же у всех позиций без валюты, либо — если колонки валюты нет —
+  // единственная валюта итоговых строк файла.
+  const guessedRows = positions.filter(p => p.ccyGuessed), sugs = [...new Set(guessedRows.map(p => p.ccySuggest || ""))];
+  const totalCcys = [...new Set(totals.map(t => t.ccy).filter(Boolean))];
+  const ccyRaw = [...new Set(guessedRows.map(p => p.ccyRaw).filter(Boolean))].slice(0, 3).join(", ");
+  const ccySuggest = guessedRows.length && sugs.length === 1 && sugs[0] ? sugs[0] : guessedRows.length && !ccyRaw && totalCcys.length === 1 ? totalCcys[0] : null;
   const basisUnknown = positions.filter(p => p.basisUnknown).length;
   const doc = {broker: one || `${WL.t("Выгрузка", "Export")} · ${tag}`, brokerShort: one ? positions[0].brokerShort : WL.t("Выгрузка", "Export"),
-          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, ccyGuessed: ccyGuessed || undefined, basisUnknown: basisUnknown || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
+          kind: "positions", asOf, asOfGuessed: asOfGuessed || undefined, ccyGuessed: ccyGuessed || undefined, ccySuggest: ccySuggest || undefined, ccyRaw: ccyRaw || undefined,
+          ccySuggestTotal: ccySuggest && totalCcys.length === 1 && totalCcys[0] === ccySuggest || undefined, basisUnknown: basisUnknown || undefined, fileName: file.name, from: "sheet", note: notes.join(" · "),
           positions, checks, transactions: []};
   // Номер счёта: колонка «Account»/«Счёт» или подпись над таблицей. В отчёте хранится только отпечаток.
   const ids = new Set();
