@@ -1876,7 +1876,7 @@ function renderPositions(){
    поэтому отчёт показывает изменение сразу за все периоды и называет источники. */
 const PERIOD_NOTE = {"1d": t("акции: к закрытию прошлого дня", "stocks: vs previous close"), "1m": t("акции: к цене месяц назад", "stocks: vs price a month ago"),
   "3m": t("акции: к цене три месяца назад", "stocks: vs price three months ago"), "1y": t("акции: к цене год назад", "stocks: vs price a year ago"), "5y": t("акции: к цене пять лет назад", "stocks: vs price five years ago"),
-  "all": t("акции: к первой цене в истории CBOE", "stocks: vs first price in CBOE history"), "stmt": t("акции и опционы Schwab: к цене в выписке", "Schwab stocks and options: vs statement price"),
+  "all": t("акции: к первой цене в истории CBOE", "stocks: vs first price in CBOE history"), "stmt": t("позиции с текущей ценой: к цене в выписке", "positions with a current price: vs statement price"),
   "cost": t("акции и опционы: к себестоимости из выписки", "stocks and options: vs cost basis from the statement")};
 function renderPrintExtras(){
   const P = S.P, pe = $("#printPeriods"), pn = $("#printNotes");
@@ -1915,15 +1915,20 @@ function renderPrintExtras(){
                 : t("Текущие цены к позициям не применялись: все позиции оценены по ценам выписок.", "No current prices were applied to positions: all positions use statement prices."))
       + " " + (P.live.fxDate ? t(`Курсы валют — ЕЦБ на ${fmt.date(P.live.fxDate)}.`, `Exchange rates: ECB as of ${fmt.date(P.live.fxDate)}.`) : t("Курсы валют не загрузились.", "Exchange rates did not load."))
     : t("Текущие цены не загружались: все суммы — по данным выписок.", "Current prices were not loaded: all amounts are based on the statements.");
+  // Оговорка об истории цен — только когда история есть: без сопоставленных бумаг периоды пусты, а графика в отчёте нет.
+  const hist = P.history || {};
+  const histOk = !stmt && P.positions.some(p => { const s = WL.eq(p) && WL.quoteSymbol(P, p); return s && (hist[s] || []).length; });
+  const chartOk = histOk && (hist[S.bench] || []).length >= 2;
   const derivatives = P.positions.some(p => p.type === "option" || p.type === "future");
-  const ledgers = [...new Set(S.docs.filter(d => d.kind === "ledger").map(d => d.brokerShort || d.broker).filter(Boolean))];
+  const ledgers =[...new Set(S.docs.filter(d => d.kind === "ledger").map(d => d.brokerShort || d.broker).filter(Boolean))];
   const li = x => x ? `<li>${x}</li>` : "";
   pn.innerHTML = `<div class="sec-h"><h2>${t("Источники и оговорки", "Sources and caveats")}</h2></div><div class="card doc"><ul class="notes">${basisNote}` +
     li(t("Позиции, количества, себестоимость и комиссии — из выписок брокеров. Разбор сверен с итогами самих выписок, результаты сверки — в разделе «Документы».",
          "Positions, quantities, cost basis and fees come from the broker statements. Parsed data is reconciled with each statement's own totals; the results are in the “Documents and gaps” section.")) +
     li(pricesNote) +
-    li(!stmt && P.positions.some(p => WL.eq(p)) && t("История цен — дневные цены закрытия CBOE без учёта дивидендов. График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
-         "Price history: CBOE daily closing prices, excluding dividends. The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.")) +
+    li(histOk && t("История цен — дневные цены закрытия CBOE без учёта дивидендов.", "Price history: CBOE daily closing prices, excluding dividends.") + (chartOk ? " " +
+         t("График показывает, как менялся бы текущий состав акций; это не фактическая история счёта: сделки и ввод-вывод денег не учитываются.",
+           "The chart shows how the current stock holdings would have performed; it is not the actual account history, as trades, deposits and withdrawals are not included.") : "")) +
     li(derivatives && t("Даты экспираций опционов и первого дня уведомления по фьючерсам CME рассчитаны по правилам биржи без учёта праздников.",
          "Option expiry dates and first notice days for CME futures are calculated from exchange rules, without adjusting for holidays.")) +
     li(ledgers.length && t(`Данные ${esc(ledgers.join(", "))} — на дату журнала операций. Что открыто на этом счёте сейчас, из журнала не видно.`,
