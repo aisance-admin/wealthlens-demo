@@ -230,12 +230,12 @@ async function openCheckout(source){
       ${unverifiedDocs().length ? `<div class="muted pw-reasons">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
         <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
         ${t(`Позиции из ${unverifiedDocs().length === 1 ? "неё" : "них"} войдут в отчёт как прочитаны.`, "Their positions are included as read.")}</div>` : ""}
-      <p class="muted pw-where">${t("Отчёт и доступ хранятся в этом браузере. Открываете на другом устройстве или очистили данные браузера — ",
-        "The report and its access are kept in this browser. Opening it on another device, or cleared your browser data? ")}${SUPPORT
-        ? t(`напишите на ${supportLink()} с почты, указанной при оплате: проверим оплату и пришлём код, чтобы открыть отчёт заново без оплаты.`,
-            `Email ${supportLink()} from the address used at checkout: we will check the payment and send a code to unlock the report again at no cost.`)
-        : t("напишите нам с почты, указанной при оплате: проверим оплату и пришлём код, чтобы открыть отчёт заново без оплаты.",
-            "contact us from the address used at checkout: we will check the payment and send a code to unlock the report again at no cost.")}</p>
+      <p class="muted pw-where">${t("Отчёт и доступ хранятся в этом браузере. На другом устройстве или после очистки данных браузера загрузите выписки заново и нажмите «Восстановить доступ» — появится номер нового отчёта. ",
+        "The report and its access are kept in this browser. On another device or after clearing browser data, upload the statements again and use “Restore access” to get the new report number. ")}${SUPPORT
+        ? t(`Пришлите его на ${supportLink()} с почты, указанной при оплате: сверим оплату и привяжем её к этому отчёту — платить повторно не нужно.`,
+            `Send it to ${supportLink()} from the address used at checkout: we will check the payment and link it to that report, so you don't pay again.`)
+        : t("Пришлите его нам с почты, указанной при оплате: сверим оплату и привяжем её к этому отчёту — платить повторно не нужно.",
+            "Send it to us from the address used at checkout: we will check the payment and link it to that report, so you don't pay again.")}</p>
       <label class="ai-remember waiver"><input type="checkbox" data-waiver> ${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</label>
       ${ON_SITE ? `<p class="ai-more">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
@@ -1662,8 +1662,8 @@ function renderFoot(){
     ON_SITE && `<a href="${t("/legal/terms/", "/en/legal/terms/")}">${t("Условия", "Terms")}</a>`,
     ON_SITE && `<a href="${t("/legal/privacy/", "/en/legal/privacy/")}">${t("Конфиденциальность", "Privacy")}</a>`,
     window.WL_PIXEL_ID && `<a href="#" data-cookies>${t("Настройки cookies", "Cookie settings")}</a>`].filter(Boolean).join(" · ") +
-    (paid ? `<div class="foot-rid">${t(`Номер отчёта <code class="rid">${esc(S.rid)}</code>. Отчёт открыт в этом браузере; на другом устройстве или после очистки данных браузера ${SUPPORT ? `напишите на ${supportLink()}` : "напишите нам"} с почты, указанной при оплате, — пришлём код, чтобы открыть отчёт заново без оплаты.`,
-      `Report number <code class="rid">${esc(S.rid)}</code>. The report is unlocked in this browser; for another device or after clearing browser data, ${SUPPORT ? `email ${supportLink()}` : "contact us"} from the address used at checkout and we will send a code to unlock it again at no cost.`)}</div>` : "");
+    (paid ? `<div class="foot-rid">${t(`Номер отчёта <code class="rid">${esc(S.rid)}</code>. Отчёт открыт в этом браузере. На другом устройстве или после очистки данных браузера загрузите выписки заново, нажмите «Восстановить доступ» и пришлите номер нового отчёта ${SUPPORT ? `на ${supportLink()}` : "нам"} с почты, указанной при оплате, — привяжем к нему эту оплату.`,
+      `Report number <code class="rid">${esc(S.rid)}</code>. The report is unlocked in this browser. On another device or after clearing browser data, upload the statements again, use “Restore access” and send the new report number ${SUPPORT ? `to ${supportLink()}` : "to us"} from the address used at checkout, and we will link this payment to it.`)}</div>` : "");
 }
 /* Основание суммы — одна строка для заголовка, карточек, структуры и PDF. Оценка сейчас честно называет себя смешанной,
    если хоть одна цена или курс уже не из выписки, а часть сумм — ещё из выписок, независимо от доли и знака позиций.
