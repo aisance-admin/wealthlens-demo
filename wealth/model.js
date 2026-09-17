@@ -309,7 +309,9 @@ WL.idOf = (P, p) => {
       if(same) return {ok: true, how: "isin", market: same};
       // Тикера в выписке нет, а бумага американская и на бирже одна: берём её тикер.
       if(!sym && isin.startsWith("US") && r.matches.length === 1) return {ok: true, how: "isin", market: r.matches[0], ticker: tick(r.matches[0].ticker)};
-      if(sym) return {ok: false, how: "mismatch", market: r.matches[0]};
+      // ISIN и тикер указывают на разные бумаги — цена из выписки. Человеку показываем обе: что торгуется под тикером и что по ISIN.
+      if(sym){ const byTick = ID["t:" + sym];
+        return {ok: false, how: "mismatch", market: (byTick && !byTick.error && byTick.matches[0]) || null, isinMarket: r.matches[0]}; }
     }
     if(r.error && !sym) return {ok: false, how: "error"};
   }

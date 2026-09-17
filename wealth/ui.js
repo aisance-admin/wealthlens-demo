@@ -529,9 +529,10 @@ function renderIdentityInto(el){
       ${failed ? t(" Справочник бумаг сейчас не ответил — повторим при следующем обновлении цен.", " The securities reference did not respond — we will retry on the next price update.") : ""}</p>
     ${list.length ? `<ul class="q-list">${list.map(({p, id}) => { const opt = p.type === "option", sym = opt ? p.underlying : p.symbol, name = opt ? `${t("опционы на", "options on")} ${sym}` : p.name;
       return `<li><div><b>${esc(name)}</b> <span class="muted">· ${esc(sym)} · ${esc(p.brokerShort)}</span>
-        <div class="q-why">${id.how === "notfound" ? t("на биржах США бумаги с таким тикером не нашлось — стоимость из выписки", "no US-listed security with this ticker — the value comes from the statement")
-          : t(`под этим тикером на бирже США: ${esc(id.market.name)}`, `listed under this ticker in the US: ${esc(id.market.name)}`)}</div></div>
-        ${id.how === "mismatch" ? `<button class="btn small no-print" type="button" data-id-confirm="${esc(p.id)}">${t("Это та же бумага", "Same security")}</button>` : ""}</li>`; }).join("")}</ul>` : ""}</details>
+        <div class="q-why">${!id.market ? t("на биржах США бумаги с таким тикером не нашлось — стоимость из выписки", "no US-listed security with this ticker — the value comes from the statement")
+          : t(`под этим тикером на бирже США: ${esc(id.market.name)}`, `listed under this ticker in the US: ${esc(id.market.name)}`)}
+          ${id.isinMarket ? `<br>${t(`ISIN ${esc(p.isin)} указывает на другую бумагу: ${esc(id.isinMarket.name)} · ${esc(id.isinMarket.ticker)}`, `ISIN ${esc(p.isin)} points to a different listing: ${esc(id.isinMarket.name)} · ${esc(id.isinMarket.ticker)}`)}` : ""}</div></div>
+        ${id.how === "mismatch" && id.market ? `<button class="btn small no-print" type="button" data-id-confirm="${esc(p.id)}">${t("Это та же бумага", "Same security")}</button>` : ""}</li>`; }).join("")}</ul>` : ""}</details>
   </div>`;
 }
 // Подтверждение человека сохраняется в выписках отчёта — у всех позиций этой бумаги (тот же тикер и название).
@@ -2034,7 +2035,9 @@ function openDrawer(id, quiet){
       name: t(`${mk} — совпало название`, `${mk} — the name matches`),
       user: t(`${mk} — подтверждено вами`, `${mk} — confirmed by you`),
       underlying: t("базовый актив сопоставлен в отчёте", "the underlying is matched in this report"),
-      mismatch: `<span class="unk">${t(`под тикером на бирже — ${mk}; не подтверждено, цена из выписки`, `listed under this ticker: ${mk}; not confirmed, statement price used`)}</span>`,
+      mismatch: `<span class="unk">${idn.market ? t(`под тикером на бирже — ${mk}; не подтверждено, цена из выписки`, `listed under this ticker: ${mk}; not confirmed, statement price used`)
+        : t("под тикером на биржах США бумага не найдена — цена из выписки", "no US listing under this ticker — statement price used")}${idn.isinMarket
+        ? t(`; ISIN указывает на другую бумагу: ${esc(idn.isinMarket.name)} · ${esc(idn.isinMarket.ticker)}`, `; the ISIN points to a different listing: ${esc(idn.isinMarket.name)} · ${esc(idn.isinMarket.ticker)}`) : ""}</span>`,
       notfound: `<span class="unk">${t("на биржах США не найдена — цена из выписки", "not found on US exchanges — statement price used")}</span>`,
       pending: `<span class="unk">${t("сопоставляю с биржей…", "matching to exchange listings…")}</span>`,
       error: `<span class="unk">${t("справочник бумаг не ответил — цена из выписки", "the securities reference did not respond — statement price used")}</span>`,
