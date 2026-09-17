@@ -183,6 +183,18 @@ const hasPositions = () => !!(S.P && S.P.positions.length);
 const partialDocs = () => S.docs.filter(d => WL.quality(d).status === "partial");
 // Выписки без итога для сверки продаются как анализ с ограничениями: об этом говорим до оплаты, а не после.
 const unverifiedDocs = () => S.docs.filter(d => d.kind === "positions" && d.from !== "demo" && WL.quality(d).status === "unverified");
+/* Персональная ссылка с подарочным кодом (?promo=КОД): код запоминается в этом браузере до оплаты, адрес очищается.
+   Сервер применяет код к оплате сам — на странице Stripe уже €0. Если код не подошёл, человек узнаёт это до перехода к оплате. */
+const PROMO_KEY = "wl_promo", PROMO_RE = /^[A-Z0-9][A-Z0-9-]{3,31}$/;
+const promoCode = () => { try{ const c = localStorage.getItem(PROMO_KEY) || ""; return PROMO_RE.test(c) ? c : ""; }catch(e){ return ""; } };
+const forgetPromo = () => { try{ localStorage.removeItem(PROMO_KEY); }catch(e){} };
+function capturePromo(){
+  const u = new URL(location.href);
+  if(!u.searchParams.has("promo")) return;
+  const c = (u.searchParams.get("promo") || "").trim().toUpperCase();
+  u.searchParams.delete("promo"); history.replaceState(null, "", u.pathname + u.search + u.hash);
+  if(PROMO_RE.test(c)) try{ localStorage.setItem(PROMO_KEY, c); }catch(e){}
+}
 let checkoutBusy = false;
 const setBuyDisabled = on => document.querySelectorAll("[data-buy]").forEach(b => { b.disabled = on; });
 async function openCheckout(source){
@@ -207,10 +219,13 @@ async function openCheckout(source){
   }
   // Отчёт открывается сразу после оплаты — на это нужно явное согласие, а с ним и понимание, что право на отказ после этого не действует.
   checkoutBusy = true; setBuyDisabled(true);
+  const gift = promoCode();
   const {choice} = await dialog({
-    eyebrow: t("Полный отчёт", "Full report"),
-    title: t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),
-    body: `<p>${t("Разовая оплата через Stripe. Отчёт откроется в этом браузере сразу после оплаты. Выписки этого портфеля можно добавлять и потом — платить снова не нужно.",
+    eyebrow: gift ? t("Подарочный код", "Gift code") : t("Полный отчёт", "Full report"),
+    title: gift ? t("Открыть полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),
+    body: `<p>${gift ? t(`Код <b>${esc(gift)}</b> будет уже применён на странице Stripe — к оплате €0. Отчёт откроется в этом браузере сразу после подтверждения заказа. Выписки этого портфеля можно добавлять и потом.`,
+        `Code <b>${esc(gift)}</b> will already be applied on the Stripe page — you pay €0. The report unlocks in this browser right after you confirm the order. You can add statements of this portfolio later.`)
+      : t("Разовая оплата через Stripe. Отчёт откроется в этом браузере сразу после оплаты. Выписки этого портфеля можно добавлять и потом — платить снова не нужно.",
         "A one-off payment via Stripe. The report unlocks in this browser right after payment. You can add statements of this portfolio later at no extra cost.")}</p>
       ${unverifiedDocs().length ? `<div class="muted pw-reasons">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
         <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
@@ -219,7 +234,7 @@ async function openCheckout(source){
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</label>
       ${ON_SITE ? `<p class="ai-more">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
         `<a href="/en/legal/terms/" target="_blank" rel="noopener">Terms</a> · <a href="/en/legal/refund/" target="_blank" rel="noopener">refund if the report can't be built</a>`)}</p>` : ""}`,
-    buttons: [{id: "pay", label: t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
+    buttons: [{id: "pay", label: gift ? t("Продолжить", "Continue") : t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
     cancel: "cancel", gate: "[data-waiver]",
   });
   checkoutBusy = false; setBuyDisabled(false);
@@ -252,9 +267,10 @@ async function openCheckout(source){
       renderApp(); return;
     }
   }
-  track("InitiateCheckout", {value: PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
+  const code = promoCode();
+  track("InitiateCheckout", {value: code ? 0 : PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
   // paywall — проверочный режим на другом адресе: сервер сохранит его в адресах возврата со Stripe.
-  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE});
+  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE}, code ? {promo: code} : {});
   let r = null;
   try{
     r = await fetch(PAY_API + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
@@ -262,6 +278,22 @@ async function openCheckout(source){
   }catch(e){}
   if(stale()) return;
   if(r && r.url){
+    // Код из ссылки не применился — говорим об этом до страницы Stripe, а не оставляем человека с суммой €49.
+    if(code && r.promo !== "applied"){
+      if(r.promo === "invalid") forgetPromo();
+      checkoutBusy = false; setBuyDisabled(false);
+      const {choice: go} = await dialog({
+        eyebrow: t("Подарочный код", "Gift code"),
+        title: r.promo === "invalid" ? t("Код больше не действует", "This code is no longer valid") : t("Код не удалось применить автоматически", "The code could not be applied automatically"),
+        body: `<p>${r.promo === "invalid"
+          ? t(`Код <b>${esc(code)}</b> уже использован или истёк. Полный отчёт можно открыть за ${PRICE.label}.`, `Code <b>${esc(code)}</b> has already been used or has expired. You can unlock the full report for ${PRICE.label}.`)
+          : t(`На странице Stripe нажмите «Добавить промокод» и введите <b>${esc(code)}</b>.`, `On the Stripe page, choose “Add promotion code” and enter <b>${esc(code)}</b>.`)}</p>`,
+        buttons: [{id: "go", label: t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
+        cancel: "cancel",
+      });
+      if(go !== "go" || stale()) return;
+      if(r.promo === "invalid") renderPaywall();
+    }
     // Запоминаем начатую оплату: если после неё вкладку закроют до возврата на сайт, отчёт откроется при следующем заходе.
     try{ localStorage.setItem(PENDING, JSON.stringify({rid, sid: r.id, at: Date.now()})); }catch(e){}
     leaving = true; location.href = r.url; return;
@@ -279,6 +311,7 @@ async function unlockWith(sid, r, restored){
   setUnlocks(m);
   SERVER_OK.add(`${S.rid}|${r.token}`);               // сюда попадают только ответы сервера об оплате
   try{ localStorage.removeItem(PENDING); }catch(e){}
+  if(r.amount === 0) forgetPromo();                   // заказ по подарочному коду оформлен — код израсходован
   await primeGrant();
   if(restored) return;
   const seen = "wl_purchase_" + sid.slice(-16);     // событие покупки — один раз на платёж
@@ -384,7 +417,8 @@ function renderPaywall(){
   const el = $("#paywall"); if(!el) return;
   const lock = locked();
   document.body.classList.toggle("is-locked", lock);
-  $("#printBtn").textContent = lock && hasPositions() && !partialDocs().length ? t(`Полный отчёт · ${PRICE.label}`, `Full report · ${PRICE.label}`) : t("Отчёт PDF", "PDF report");
+  const priceNow = promoCode() ? "€0" : PRICE.label;
+  $("#printBtn").textContent = lock && hasPositions() && !partialDocs().length ? t(`Полный отчёт · ${priceNow}`, `Full report · ${priceNow}`) : t("Отчёт PDF", "PDF report");
   if(!lock){ el.hidden = true; el.innerHTML = ""; return; }
   if(hasPositions() && partialDocs().length){
     el.hidden = false;
@@ -448,12 +482,14 @@ function renderPaywall(){
         <li>Calendar of expiries and rollovers</li>
         <li>Benchmark comparison and a PDF report</li>`)}
       </ul></div>
-    <div class="pw-buy"><div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>
+    <div class="pw-buy">${promoCode() ? `<div class="pw-price"><s>${PRICE.label}</s> €0</div><div class="muted pw-note pw-gift">${t(`по подарочному коду <b>${esc(promoCode())}</b>`, `with gift code <b>${esc(promoCode())}</b>`)}</div>`
+      : `<div class="pw-price">${PRICE.label}</div><div class="muted pw-note">${t("разово за этот портфель", "one-off, for this portfolio")}</div>`}
       <button class="btn primary pw-btn" type="button" data-buy="paywall">${t("Открыть полный отчёт", "Unlock full report")}</button>
       ${unverifiedDocs().length ? `<div class="muted pw-note pw-warn">${t("Не сверено с итогом банка:", "Not reconciled with a bank total:")}
         <ul class="pw-why">${unverifiedDocs().map(d => `<li><b>${esc(d.fileName)}</b> — ${esc(unverifiedWhy(d))}</li>`).join("")}</ul>
         ${t("Позиции из них войдут в отчёт как прочитаны.", "Their positions are included as read.")}</div>` : ""}
-      <div class="muted pw-note">${t("Оплата через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
+      <div class="muted pw-note">${promoCode() ? t("Оформление через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
+        "Checkout via Stripe. The report is built and kept in this browser, and statements are not stored on a server, so open the report here.") : t("Оплата через Stripe. Отчёт собирается и хранится в этом браузере, выписки на сервере не хранятся — открывайте отчёт здесь же.",
         "Payment via Stripe. The report is built and kept in this browser, and statements are not stored on a server, so open the report here.")}</div>
       ${ON_SITE ? `<div class="muted pw-note">${t(`Оплачивая, вы принимаете <a href="/legal/terms/">условия</a> и <a href="/legal/refund/">правила возврата</a>.`,
         `By paying, you accept the <a href="/en/legal/terms/">terms</a> and <a href="/en/legal/refund/">refund policy</a>.`)}</div>` : ""}
@@ -566,6 +602,7 @@ function renderUpload(){
   $("#app").innerHTML = `<div class="drop" id="drop">
     <div class="drop-mark" aria-hidden="true"></div>
     <div class="eyebrow">${ON_SITE ? `<a class="home" href="${t("/", "/en/")}">WealthLens</a>` : "WealthLens"} · ${INVESTOR ? t("сводный отчёт", "consolidated report") : t("портфель клиента", "client portfolio")}</div>
+    ${PAYWALL && promoCode() ? `<p class="gift-pill">${t(`Подарочный код <b>${esc(promoCode())}</b> — полный отчёт для вас бесплатный`, `Gift code <b>${esc(promoCode())}</b> — your full report is free`)}</p>` : ""}
     <h1>${INVESTOR ? t("Загрузите выписки брокеров", "Upload your broker statements") : t("Загрузите выписки клиента", "Upload client statements")}</h1>
     <p>${t("Можно сразу несколько файлов. PDF Charles Schwab и Swissquote читаются сами; PDF, CSV и Excel других банков — с проверкой колонок перед импортом.",
       "You can add several files at once. Charles Schwab and Swissquote PDFs are read automatically; PDFs, CSV and Excel files from other banks are imported after a quick column check.")}</p>
@@ -589,7 +626,9 @@ function renderUpload(){
       <li><b>Other banks</b> — a portfolio statement in PDF, or a positions export (Positions, Holdings or Portfolio) to CSV or Excel. Scans cannot be read: the PDF text must be selectable.</li>`)}
     </ul></details>
     </div>
-    ${PAYWALL ? `<p class="drop-foot muted">${t(`Итог по счетам и первый вывод — бесплатно · полный отчёт ${PRICE.label} · оплата через Stripe`,
+    ${PAYWALL ? `<p class="drop-foot muted">${promoCode() ? t("Итог по счетам и первый вывод — сразу · полный отчёт по подарочному коду — €0 · оформление через Stripe",
+      "Account totals and the first finding right away · full report with your gift code — €0 · checkout via Stripe")
+      : t(`Итог по счетам и первый вывод — бесплатно · полный отчёт ${PRICE.label} · оплата через Stripe`,
       `Account totals and the first finding are free · full report ${PRICE.label} · payment via Stripe`)}</p>` : ""}`;
   $("#pick").onclick = () => $("#file").click();
   // Шаблон для тех, у кого выгрузки нет: заполнить в Excel и принести сюда.
@@ -2149,6 +2188,7 @@ window.addEventListener("storage", e => {
 liveBox("toasts", "toasts no-print"); liveBox("srStatus", "sr-only");
 WL.app = {addFiles, state: S, locked, openCheckout, queue: Q, modals: MODALS};
 (async function boot(){
+  capturePromo();
   if(new URLSearchParams(location.search).has("demo") && WL.demoDocs){
     S.demo = true; S.client = t("Демо-клиент", "Demo client"); S.docs = WL.demoDocs(WL.lang);
     track("ViewContent", {content_name: "demo_report"});
