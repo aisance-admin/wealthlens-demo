@@ -116,6 +116,11 @@ WL.quality = d => {
   if(d.aiIssues && d.aiIssues.length) issues.push(...d.aiIssues);
   else if(d.aiDoubt && d.aiDoubt.length)
     issues.push(t(`суммы ИИ не подтверждены текстом выписки: ${d.aiDoubt.join(", ")}`, `AI amounts not confirmed by the statement text: ${d.aiDoubt.join(", ")}`));
+  // Строки таблицы, которых нет в ответе ИИ, при несошедшемся итоге: пропуск, пока человек не подтвердит, что это не позиции.
+  const missed = d.aiMissed || [], rows = missed.slice(0, 5).join(", ") + (missed.length > 5 ? t(` и ещё ${missed.length - 5}`, ` and ${missed.length - 5} more`) : "");
+  if(missed.length && !d.rowsConfirmed) issues.push(t(`в таблице позиций есть строки, которых нет в ответе ИИ: ${rows}`, `the positions table has rows missing from the AI result: ${rows}`));
+  else if(missed.length) basis.push(t(`строки ${rows} — не позиции, со слов пользователя`, `rows ${rows} are not positions, as confirmed by the user`));
+  (d.aiNotes || []).forEach(x => basis.push(x));
   const totals = (d.checks || []).some(c => !c.count && !c.human);
   return {status: issues.length ? "partial" : totals ? "ok" : "unverified", issues, basis};
 };
@@ -257,7 +262,9 @@ const ABBR = {intl: "international", tot: "total", stk: "stock", mkt: "market", 
   ins: "insurance", elec: "electric", chem: "chemical", chemicals: "chemical", dvd: "dividend", eqty: "equity", bd: "bond",
   trsy: "treasury", tsy: "treasury", agg: "aggregate", vg: "vanguard", registry: "registered", pfd: "preferred", pref: "preferred",
   wts: "warrants", wt: "warrants", rts: "rights", hdg: "hedged", accumulating: "acc", accumulation: "acc", accum: "acc",
-  distributing: "dist", distribution: "dist", ads: "adr"};
+  distributing: "dist", distribution: "dist", ads: "adr",
+  // Сокращения из описаний опционов Schwab: «FACTSET RESH SYS», «AUTOMATIC DATA PROCE», «EXXONMOBIL HLDGS».
+  resh: "research", rsch: "research", proce: "processing", proc: "processing", hldgs: "holdings", hldg: "holdings", grp: "group"};
 const nameParts = x => {
   let raw = String(x || "").toLowerCase().replace(/s\s*&\s*p/g, "sp")
     .replace(/(^|[^a-z0-9])((?:[a-z][.\/]){1,3}[a-z])(?![a-z0-9])/g, (m, pre, ab) => pre + ab.replace(/[.\/]/g, ""))   // U.S., S.A., A/S, J.M.

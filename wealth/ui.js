@@ -195,6 +195,13 @@ function capturePromo(){
   u.searchParams.delete("promo"); history.replaceState(null, "", u.pathname + u.search + u.hash);
   if(PROMO_RE.test(c)) try{ localStorage.setItem(PROMO_KEY, c); }catch(e){}
 }
+// Плашка «Неполный отчёт» — там, что мешает, и кнопки, как поправить. Прокручиваем к ней с запасом на липкую шапку.
+function showQuality(){
+  const el = $("#qualityBar"); if(!el || !el.firstElementChild) return;
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  window.scrollTo({top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 76), behavior: reduce ? "auto" : "smooth"});
+}
+document.addEventListener("click", e => { if(e.target.closest && e.target.closest("[data-goto-quality]")) showQuality(); });
 let checkoutBusy = false;
 const setBuyDisabled = on => document.querySelectorAll("[data-buy]").forEach(b => { b.disabled = on; });
 async function openCheckout(source){
@@ -202,8 +209,8 @@ async function openCheckout(source){
   if(!hasPositions()){ toast(t("В загруженных файлах не нашлось позиций — оплачивать пока нечего. Загрузите выписку о портфеле.",
     "No positions were found in the uploaded files, so there is nothing to pay for yet. Upload a portfolio statement.")); return; }
   if(Q.running){ toast(t("Дождитесь, пока загрузятся выписки: оплачивается отчёт со всеми файлами.", "Wait until the statements finish uploading: you pay for the report with all its files.")); return; }
-  if(partialDocs().length){ toast(t("Сначала поправим выписки: пока одна из них прочитана не полностью, итог отчёта может быть неверным.",
-    "Fix the statements first: while one of them is not fully read, the report total may be wrong.")); return; }
+  if(partialDocs().length){ toast(t("Сначала поправим выписки: пока одна из них прочитана не полностью, итог отчёта может быть неверным. Что сделать — в плашке «Неполный отчёт».",
+    "Fix the statements first: while one of them is not fully read, the report total may be wrong. See the “Incomplete report” box for what to do.")); showQuality(); return; }
   if(checkoutBusy) return;
   // Оплатили в другой вкладке: полный отчёт уже открыт, второй раз платить не нужно.
   const paid = () => { if(locked()) return false; checkoutBusy = false; setBuyDisabled(false); renderApp();
@@ -427,16 +434,19 @@ function renderPaywall(){
   const lock = locked();
   document.body.classList.toggle("is-locked", lock);
   const priceNow = promoCode() ? "€0" : PRICE.label;
-  $("#printBtn").textContent = lock && hasPositions() && !partialDocs().length ? t(`Полный отчёт · ${priceNow}`, `Full report · ${priceNow}`) : t("Отчёт PDF", "PDF report");
+  // Пока выписка прочитана не полностью, кнопка ведёт к тому, что поправить, а не обещает PDF, которого не будет.
+  $("#printBtn").textContent = !lock || !hasPositions() ? t("Отчёт PDF", "PDF report")
+    : partialDocs().length ? t("Проверить выписки", "Check statements") : t(`Полный отчёт · ${priceNow}`, `Full report · ${priceNow}`);
   if(!lock){ el.hidden = true; el.innerHTML = ""; return; }
   if(hasPositions() && partialDocs().length){
     el.hidden = false;
     el.innerHTML = `<div class="card paywall empty"><div><div class="eyebrow">${t("Сначала выписки", "Statements first")}</div>
       <h2>${t("Полный отчёт откроется, когда выписки сойдутся с итогами банка", "The full report unlocks once the statements match the bank's totals")}</h2>
-      <p class="muted">${t("Сейчас в отчёте есть выписка, прочитанная не полностью, — итог и выводы по ней могут быть неверны, и продавать такой отчёт мы не будем. Уберите её в «Документах» или загрузите исходный PDF из интернет-банка либо выгрузку позиций в CSV или Excel.",
-        "One of the statements was not fully read, so the total and findings may be wrong, and we will not sell such a report. Remove it under “Documents”, or upload the original PDF from online banking or a positions export in CSV or Excel.")}
+      <p class="muted">${t("Сейчас в отчёте есть выписка, прочитанная не полностью, — итог и выводы по ней могут быть неверны, и продавать такой отчёт мы не будем. Что мешает и как поправить — в плашке «Неполный отчёт» вверху: там можно подтвердить, что лишние строки или страницы — не позиции, убрать выписку или загрузить исходный PDF из интернет-банка либо выгрузку позиций в CSV или Excel.",
+        "One of the statements was not fully read, so the total and findings may be wrong, and we will not sell such a report. What blocks it and how to fix it is in the “Incomplete report” box at the top: you can confirm that extra rows or pages are not positions, remove the statement, or upload the original PDF from online banking or a positions export in CSV or Excel.")}
       ${SUPPORT ? t(`Не получается — напишите на ${supportLink()}.`, `Stuck? Email ${supportLink()}.`) : ""}</p></div>
-      <div class="pw-buy"><button class="btn primary" type="button" data-add-file>${t("Добавить выписку", "Add a statement")}</button></div></div>`;
+      <div class="pw-buy"><button class="btn primary" type="button" data-goto-quality>${t("Что поправить", "What to fix")}</button>
+        <button class="btn" type="button" data-add-file>${t("Добавить выписку", "Add a statement")}</button></div></div>`;
     return;
   }
   if(!hasPositions()){
@@ -531,9 +541,10 @@ function renderQualityInto(el){
       <h2>${bad.length === 1 ? t("Одна выписка прочитана не полностью", "One statement was not fully read") : t(`${bad.length} выписки прочитаны не полностью`, `${bad.length} statements were not fully read`)}</h2></div>
     <p>${t("Итог, структура и выводы ниже посчитаны только по прочитанному и могут быть неверны.", "The total, breakdown and findings below cover only what was read and may be wrong.")}
       ${locked() ? t("Полный отчёт откроется, когда все выписки сойдутся с итогами банка.", "The full report unlocks once every statement matches the bank's totals.") : ""}</p>
-    <ul class="q-list">${bad.map(x => `<li><div><b>${esc(x.d.brokerShort || x.d.broker)}</b> <span class="muted">· ${esc(x.d.fileName)}</span>
+    <ul class="q-list">${bad.map(x => { const f = fixesOf(x.d, x.q), n = esc(x.d.fileName);
+      return `<li><div><b>${esc(x.d.brokerShort || x.d.broker)}</b> <span class="muted">· ${n}</span>
       <div class="q-why">${x.q.issues.map(esc).join("; ")}</div></div>
-      <button class="btn small no-print" type="button" data-q-remove="${esc(x.d.fileName)}">${t("Убрать из отчёта", "Remove from report")}</button></li>`).join("")}</ul>
+      <div class="q-btns no-print">${f.rows ? `<button class="btn small" type="button" data-q-rows="${n}">${t("Это не позиции", "Not positions")}</button>` : ""}${f.pages ? `<button class="btn small" type="button" data-q-pages="${n}">${f.pages.length === 1 ? t("На странице позиций нет", "No positions on the page") : t("На страницах позиций нет", "No positions on the pages")}</button>` : ""}<button class="btn small" type="button" data-q-remove="${n}">${t("Убрать из отчёта", "Remove from report")}</button></div></li>`; }).join("")}</ul>
     <div class="q-actions no-print"><button class="btn small" type="button" data-add-file>${t("Добавить исходный PDF или выгрузку CSV", "Add the original PDF or a CSV export")}</button></div>
   </div>`) + (!open.length ? "" : `<div class="card quality soft" role="note">
     <div class="q-top"><span class="lvl info">${t("К сведению", "Note")}</span>
@@ -546,6 +557,39 @@ function renderQualityInto(el){
   </div>`);
 }
 document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-q-remove]"); if(b) removeDoc(b.dataset.qRemove); });
+/* Что человек может подтвердить сам, если остальное в выписке сошлось: строки таблицы без ответа ИИ — не позиции (заявки, сделки),
+   или на страницах-картинках позиций нет. Кнопки есть, только когда это единственное, что мешает, — иначе подтверждение
+   ничего бы не дало, а человек думал бы, что исправил выписку. */
+function fixesOf(d, q){
+  const rows = d.aiMissed && d.aiMissed.length && !d.rowsConfirmed ? d.aiMissed : null, pages = unreadPages(d);
+  const n = (rows ? 1 : 0) + (pages.length ? 1 : 0);
+  return q.issues.length === n ? {rows, pages: pages.length ? pages : null} : {rows: null, pages: null};
+}
+async function confirmFix(fileName, what){
+  const d = S.docs.find(x => x.fileName === fileName); if(!d) return;
+  const q = WL.quality(d), f = fixesOf(d, q), rows = what === "rows" && f.rows, pages = what === "pages" && f.pages;
+  if(!rows && !pages) return;
+  const list = rows ? listShort(rows) : pages.join(", ");
+  const {choice} = await dialog({
+    eyebrow: d.brokerShort || d.broker,
+    title: rows ? t("Эти строки — не позиции?", "Are these rows not positions?") : t("На этих страницах нет позиций?", "No positions on these pages?"),
+    body: `<ul class="dlg-list"><li><span class="f">${esc(d.fileName)}</span><span class="m">${rows ? t(`строки: ${esc(list)}`, `rows: ${esc(list)}`) : t(`страницы: ${esc(list)}`, `pages: ${esc(list)}`)}</span></li></ul>
+      <p>${rows ? t("Подтвердите, если это заявки, сделки или пояснения, а не бумаги на счёте. Выписка останется в отчёте с пометкой «не позиции — со слов пользователя», и полный отчёт можно будет открыть. Если это позиции, лучше загрузить исходный PDF или выгрузку CSV.",
+          "Confirm if these are orders, trades or notes rather than holdings. The statement stays in the report marked “not positions, as confirmed by the user”, and the full report can be unlocked. If they are positions, upload the original PDF or a CSV export instead.")
+        : t("Подтвердите, если на этих страницах только графики, условия или реклама. Выписка останется в отчёте с пометкой «позиций нет — со слов пользователя». Если там позиции, лучше загрузить исходный PDF или выгрузку CSV.",
+          "Confirm if these pages only contain charts, terms or ads. The statement stays in the report marked “no positions, as confirmed by the user”. If they contain positions, upload the original PDF or a CSV export instead.")}</p>`,
+    buttons: [{id: "yes", label: rows ? t("Да, это не позиции", "Yes, not positions") : t("Да, позиций там нет", "Yes, no positions there"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
+    cancel: "cancel",
+  });
+  if(choice !== "yes" || !S.docs.includes(d)) return;
+  if(rows) d.rowsConfirmed = true;
+  else d.pagesConfirmed = [...new Set([...(d.pagesConfirmed || []), ...pages])];
+  save();
+  toast(t(`${fileName}: отмечено — выписка больше не помечена как прочитанная не полностью`, `${fileName}: noted — the statement is no longer marked as not fully read`));
+  renderNow();
+}
+document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-q-rows],[data-q-pages]"); if(!b) return;
+  confirmFix(b.dataset.qRows || b.dataset.qPages, b.dataset.qRows ? "rows" : "pages"); });
 /* Бумаги, которые не удалось сопоставить с биржей: текущая цена к ним не подставлена, новости и история не грузятся.
    Показываем, что торгуется под тикером на бирже США, и даём подтвердить, что это та же бумага. */
 const secKey = p => `${p.type === "option" ? "opt" : "eq"}|${String(p.type === "option" ? p.underlying : p.symbol || "").toUpperCase()}|${String(p.type === "option" ? p.underlyingName || "" : p.name || "").toLowerCase()}`;
@@ -1120,6 +1164,7 @@ async function commit(it, doc, gen){
     const {choice} = await askPartial(it, doc, quality, open);
     if(gen !== Q.gen) return;
     if(choice === "noPositions"){ doc.pagesConfirmed = [...new Set([...(doc.pagesConfirmed || []), ...open])]; quality = WL.quality(doc); }
+    else if(choice === "notPositions"){ doc.rowsConfirmed = true; quality = WL.quality(doc); }
     else if(choice !== "add") return setState(it, "skip", t("не добавлен — прочитан не полностью", "not added — not fully read"));
   }
   // Валюты в файле нет: доллары молча не подставляем — суммы в евро или франках исказили бы итог.
@@ -1161,8 +1206,11 @@ async function commit(it, doc, gen){
   if(doc.fromAi && Q.aiOk) setAiAllowed(true);
   if(!Q.lead){ Q.lead = true; track("Lead", {content_name: "statements_uploaded", documents: S.docs.length}); }
   const n = doc.kind === "ledger" ? null : doc.positions.length, partial = quality.status === "partial";
+  // Выписка по счёту без бумаг: в лотке — остаток, а не «1 позиция».
+  const cash = doc.cashOnly && doc.positions.length && doc.positions.every(p => p.type === "cash") ? doc.positions : null;
   setState(it, partial ? "partial" : "ok", (partial ? t("добавлен с пометкой «прочитан не полностью» · ", "added, marked as not fully read · ") : "") +
-    (n == null ? t("журнал операций", "transaction log") : `${n} ${WL.pl(n, ["позиция", "позиции", "позиций"], ["position", "positions"])}`) +
+    (n == null ? t("журнал операций", "transaction log") : cash ? t("деньги на счёте ", "account cash ") + cash.map(p => fmt.money(p.value, p.ccy)).join(", ")
+      : `${n} ${WL.pl(n, ["позиция", "позиции", "позиций"], ["position", "positions"])}`) +
     ` · ${doc.brokerShort || doc.broker}` + (doc.fromAi ? t(" · распознано ИИ", " · read by AI") : "") + (replace ? t(" · заменила прежнюю", " · replaced the earlier one") : ""));
   renderNow(); liveSoon();
   flashDoc(doc.fileName);
@@ -1203,9 +1251,12 @@ async function askPartial(it, doc, quality, open = []){
   let thumbs = [];
   if(open.length && WL.pageThumbs){ try{ thumbs = await WL.pageThumbs(it.file, open.slice(0, 4), {password: it.password}); }catch(e){} }
   const onlyPages = open.length && quality.issues.length === 1;
+  // Единственное замечание — строки таблицы, которых нет в ответе ИИ: человек может подтвердить, что это не позиции.
+  const rows = doc.aiMissed && doc.aiMissed.length && !doc.rowsConfirmed ? doc.aiMissed : null, onlyRows = !!rows && quality.issues.length === 1;
   return dialog({
     eyebrow: bankOf(doc) ? doc.brokerShort || doc.broker : t("Выгрузка без названия банка", "Export without a bank name"),
-    title: onlyPages ? t("Программа не прочитала часть страниц", "Some pages could not be read") : t("Выписка прочитана не полностью", "This statement was not fully read"),
+    title: onlyPages ? t("Программа не прочитала часть страниц", "Some pages could not be read")
+      : onlyRows ? t("ИИ не вернул часть строк таблицы", "The AI result skips some table rows") : t("Выписка прочитана не полностью", "This statement was not fully read"),
     body: `<ul class="ai-files"><li>${esc(it.name)}</li></ul>
       <ul class="dlg-issues">${quality.issues.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
       ${thumbs.length ? `<div class="pg-thumbs">${thumbs.map(x => `<figure><img src="${x.url}" alt="${esc(t(`Страница ${x.n}`, `Page ${x.n}`))}"><figcaption>${t("стр.", "p.")} ${x.n}</figcaption></figure>`).join("")}</div>` : ""}
@@ -1214,12 +1265,15 @@ async function askPartial(it, doc, quality, open = []){
               "This is an image: the program cannot read text on it, and recognition did not work. If it only contains a chart, terms or ads, confirm it — the statement joins the report marked “no positions, as confirmed by the user”. If it contains positions, upload the original PDF from online banking or a CSV export instead.")
           : t("Это изображения: текст на них программа не читает, и распознать их не получилось. Если на них только графики, условия или реклама, отметьте это — выписка войдёт в отчёт с пометкой «позиций нет — со слов пользователя». Если там позиции, лучше загрузить исходный PDF из интернет-банка или выгрузку CSV.",
               "These are images: the program cannot read text on them, and recognition did not work. If they only contain charts, terms or ads, confirm it — the statement joins the report marked “no positions, as confirmed by the user”. If they contain positions, upload the original PDF from online banking or a CSV export instead.")}</p>`
+        : onlyRows ? `<p>${t("Итога, который подтвердил бы, что позиции прочитаны все, в выписке нет или он не сошёлся. Если эти строки — не позиции (заявки, сделки, пояснения), отметьте это: выписка войдёт в отчёт с пометкой «не позиции — со слов пользователя», и полный отчёт можно будет открыть. Если это позиции, лучше загрузить исходный PDF из интернет-банка или выгрузку CSV.",
+          "There is no total confirming that every position was read, or it does not match. If these rows are not positions (orders, trades, notes), confirm it: the statement joins the report marked “not positions, as confirmed by the user”, and the full report can be unlocked. If they are positions, upload the original PDF from online banking or a CSV export instead.")}</p>`
         : `<p>${t("Итог и выводы с такой выпиской могут быть неверны. Её можно добавить с пометкой — посмотреть, что прочиталось, — но полный отчёт откроется, только когда все выписки сойдутся с итогами банка.",
           "The total and findings with this statement may be wrong. You can add it with a warning to see what was read, but the full report unlocks only when every statement matches the bank's totals.")}</p>
       <p>${t("Надёжнее загрузить исходный PDF из интернет-банка, без закрашивания и пересохранения, или выгрузку позиций в CSV или Excel.",
         "It is more reliable to upload the original PDF from online banking, not redacted or re-saved, or a positions export in CSV or Excel.")}</p>`}`,
     buttons: [{id: "add", label: t("Добавить с пометкой", "Add with a warning"), primary: true},
               onlyPages && {id: "noPositions", label: open.length === 1 ? t("На этой странице позиций нет", "No positions on this page") : t("На этих страницах позиций нет", "No positions on these pages")},
+              onlyRows && {id: "notPositions", label: t("Это не позиции", "These are not positions")},
               {id: "skip", label: t("Не добавлять", "Don't add")}].filter(Boolean),
     cancel: "skip",
   });
@@ -1334,7 +1388,8 @@ async function aiRead(file, hash, signal, prepared, password){
     AI_CACHE.set(key, data);
   }
   cancelled();
-  if(data.document_kind === "transactions") throw new Error("transactions");
+  // Выписка операций без остатка — позиций в ней нет. Выписка по счёту с исходящим остатком — это деньги: остаток и есть позиция.
+  if(data.document_kind === "transactions" && !(data.positions || []).some(p => p && p.market_value != null)) throw new Error("transactions");
   // Поля опциона приходят объектом без null («none», "", 0 — нет значения); страница 0 — неизвестна.
   const norm = p => { const o = p.option || {};
     return {...p, option_right: o.right && o.right !== "none" ? o.right : p.option_right || null, underlying: o.underlying || p.underlying || null,
@@ -1371,7 +1426,9 @@ async function aiRead(file, hash, signal, prepared, password){
     const d = p.maturity;
     return u + d.slice(2, 4) + d.slice(5, 7) + d.slice(8, 10) + (p.option_right === "call" ? "C" : "P") + String(Math.round(p.strike * 1000)).padStart(8, "0");
   };
-  const broker = prep.ctx.broker || String(data.institution || "").slice(0, 60);
+  // Известный банк — его коротким именем («Charles Schwab», а не «Charles Schwab & Co., Inc.» из ответа модели).
+  const known = x => WL.brokerByName && x ? WL.brokerByName(String(x)) : null;
+  const broker = known(prep.ctx.broker) || known(data.institution) || prep.ctx.broker || String(data.institution || "").slice(0, 60);
   const accrued = {}, sums = {};
   const mvOf = p => p.market_value ?? (pct(p) && p.price != null && p.quantity != null ? cents(p.quantity * p.price / 100) : null);
   ps.forEach(p => { const c = ccy(p.currency); if(p.accrued_interest) accrued[c] = cents((accrued[c] || 0) + p.accrued_interest);
@@ -1413,6 +1470,12 @@ async function aiRead(file, hash, signal, prepared, password){
     if(p.accrued_interest != null){ d.accruedRef = p.accrued_interest; d.refCcy = ccy(p.currency) || d.ccy; }
     if(d.type === "option" && !d.occ){ d.right = p.option_right === "call" ? "C" : p.option_right === "put" ? "P" : null; d.strike = p.strike ?? null;
       d.underlying = p.underlying || null; d.multiplier = p.contract_multiplier ?? null; }
+    // Название базовой бумаги — из описания опциона («PUT ARES MGMT CORP $65 EXP 03/19/27» → «ARES MGMT CORP»): по нему бумага
+    // сопоставляется с биржей так же, как опционы из разбора Schwab, а не ждёт ручного подтверждения.
+    if(d.type === "option" && !d.underlyingName){
+      const u = String(p.name || "").replace(/^(put|call)\s+/i, "").replace(/\s+\$?\d[\d.,]*\s*(exp\b.*)?$/i, "").replace(/\s+exp\b.*$/i, "").trim();
+      if(u && /\p{L}{2,}/u.test(u) && u !== p.name) d.underlyingName = u;
+    }
     // Поля, которых нет в строке выписки: показываем с пометкой, по ним не строим котировку.
     const unconfirmed = [v.date === "unknown" && "maturity", v.strike === "unknown" && "strike", v.under === "unknown" && "underlying"].filter(Boolean);
     if(unconfirmed.length) d.unconfirmed = unconfirmed;
@@ -1426,16 +1489,26 @@ async function aiRead(file, hash, signal, prepared, password){
   // Что именно не подтвердилось — по бумагам и полям: человек видит конкретную цифру, а не общий совет «сверьте».
   const FIELD = {market_value: t("стоимость", "value"), quantity: t("количество", "quantity"), price: t("цена", "price"),
     accrued_interest: t("НКД", "accrued interest"), currency: t("валюта", "currency"), row: t("строка бумаги", "the security's row")};
-  const issues = [];
+  /* Что мешает доверять выписке (issues) и что только к сведению (notes). Стоимость, количество, цена, валюта не из строки
+     своей бумаги — пропуск. Себестоимость, которой нет в строке, просто не показываем: на итог она не влияет. Строки таблицы,
+     которых нет в ответе, — пропуск, пока итог выписки не сошёлся с суммой прочитанного: сошёлся — значит, это не позиции
+     (заявки, пояснения), иначе итог бы разошёлся. Не сошёлся или итога нет — человек может подтвердить, что это не позиции. */
+  const issues = [], notes = [];
   ps.forEach((p, k) => { const v = V.pos[k];
     if(v.doubt.length) issues.push(v.doubt.includes("row") ? t(`${p.name}: бумаги нет в тексте выписки`, `${p.name}: the security is not in the statement text`)
       : t(`${p.name}: ${v.doubt.map(f => FIELD[f]).join(", ")} — не как в строке бумаги в выписке`, `${p.name}: ${v.doubt.map(f => FIELD[f]).join(", ")} — not as in the security's row in the statement`)); });
-  const noCost = ps.filter((p, k) => V.pos[k].drop.length).map(p => p.name);
-  if(noCost.length) issues.push(t(`себестоимость из ответа ИИ не нашлась в строке бумаги и не показана: ${listShort(noCost)}`,
-    `cost from the AI result was not found in the security's row and is not shown: ${listShort(noCost)}`));
-  if(V.missed.length) issues.push(t(`в таблице позиций есть строки, которых нет в ответе ИИ: ${listShort(V.missed.map(x => x.label))}`,
-    `the positions table has rows missing from the AI result: ${listShort(V.missed.map(x => x.label))}`));
+  const noCost = ps.filter((p, k) => V.pos[k].costLost).map(p => p.name);
+  if(noCost.length) notes.push(t(`себестоимость не нашлась в строке бумаги и не показана: ${listShort(noCost)}`,
+    `cost was not found in the security's row and is not shown: ${listShort(noCost)}`));
+  const sumChecks = doc.checks.filter(c => !c.count && !c.human), totalsOk = sumChecks.length > 0 && sumChecks.every(c => c.ok);
+  if(V.missed.length){
+    const labels = V.missed.map(x => x.label);
+    if(totalsOk) notes.push(t(`строки ${listShort(labels)} в ответ не вошли — это не позиции: итог выписки сошёлся с суммой прочитанного`,
+      `rows ${listShort(labels)} are not in the result — they are not positions: the statement total matches the sum read`));
+    else doc.aiMissed = labels;
+  }
   doc.aiIssues = issues;
+  doc.aiNotes = notes;
   doc.aiDoubt = doubtful.map(p => p.name);
   if(prep.pages) doc.pages = {count: prep.pages.count, unread: prep.pages.unread || [], ocr: []};
   doc.note = [doc.note, aiNote(doc)].filter(Boolean).join(" · ");
@@ -1778,7 +1851,7 @@ function renderHero(){
       <div class="meta">${x.d.kind === "ledger" ? t(`журнал за ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`, `transaction log ${fmt.date(x.d.periodFrom)}–${fmt.date(x.d.asOf)}`)
         : t(`${x.d.from === "sheet" ? "выгрузка" : x.d.from === "demo" ? "данные" : "выписка"} на ${fmt.date(x.d.asOf)}`,
             `${x.d.from === "sheet" ? "export" : x.d.from === "demo" ? "data" : "statement"} as of ${fmt.date(x.d.asOf)}`)} ·
-        ${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}</div>
+        ${x.d.cashOnly && x.ps.every(p => p.type === "cash") ? t("только деньги", "cash only") : `${x.ps.length} ${WL.pl(x.ps.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`}</div>
       ${byDoc.length > 1 && assets > 0 && x.pos > 0 ? `<div class="share" title="${esc(t("доля в активах портфеля (без обязательств)", "share of portfolio assets (excluding liabilities)"))}"><span class="trk"><i style="width:${Math.min(100, Math.max(x.pos / assets * 100, 1)).toFixed(1)}%"></i></span><b>${pctLabel(x.pos / assets * 100)}</b></div>` : ""}</div>`;
   }).join("");
   keepFlash();
@@ -1988,6 +2061,7 @@ function renderDocs(){
       <div class="muted" style="font-size:12.5px">${esc(d.fileName)} · ${d.kind === "ledger"
         ? t(`журнал операций, ${d.records.length} строк, ${d.trades.length} сделок${d.cancelled.length ? `, отменено банком: ${d.cancelled.length}` : ""}`,
             `transaction log, ${d.records.length} ${WL.pl(d.records.length, ["строка", "строки", "строк"], ["row", "rows"])}, ${d.trades.length} ${WL.pl(d.trades.length, ["сделка", "сделки", "сделок"], ["trade", "trades"])}${d.cancelled.length ? `, cancelled by the bank: ${d.cancelled.length}` : ""}`)
+        : d.cashOnly ? t(`выписка по счёту, остаток на ${fmt.date(d.asOf)}`, `account statement, balance as of ${fmt.date(d.asOf)}`)
         : t(`${d.from === "sheet" ? "выгрузка таблицей" : "снимок"}, позиции на ${fmt.date(d.asOf)}`, `${d.from === "sheet" ? "spreadsheet export" : "snapshot"}, positions as of ${fmt.date(d.asOf)}`)}${d.note ? " · " + esc(d.note) : ""}</div>
       ${docStatus(d)}
       ${d.checks.map(c => `<div class="check"><span>${c.ok ? "✓" : "✗"} ${esc(c.label)}</span><span class="num ${c.ok ? "" : "down"}">${c.count ? t(`${c.parsed} из ${c.stated}`, `${c.parsed} of ${c.stated}`) : `${fmt.money(c.parsed, ccyOf(c))}${c.ok ? "" : " ≠ " + fmt.money(c.stated, ccyOf(c))}`}</span></div>`).join("")}
@@ -2008,7 +2082,9 @@ function renderDocs(){
     if(!doc || !S.docs.includes(old)) return;
     doc.fileName = key; doc.hash = old.hash; if(old.accts) doc.accts = old.accts;
     // Цифры по-прежнему из ответа ИИ: пометка об этом и о суммах, не найденных в выписке, остаётся.
-    if(old.fromAi){ doc.fromAi = true; doc.aiDoubt = old.aiDoubt; doc.aiIssues = old.aiIssues; doc.note = [aiNote(doc), doc.note].filter(Boolean).join(" · "); }
+    if(old.fromAi){ doc.fromAi = true; doc.aiDoubt = old.aiDoubt; doc.aiIssues = old.aiIssues; doc.aiNotes = old.aiNotes;
+      if(old.aiMissed){ doc.aiMissed = old.aiMissed; if(old.rowsConfirmed) doc.rowsConfirmed = true; }
+      doc.note = [aiNote(doc), doc.note].filter(Boolean).join(" · "); }
     if(old.pages){ doc.pages = old.pages; if(old.pagesConfirmed) doc.pagesConfirmed = old.pagesConfirmed; }
     if(doc.ccyGuessed){ const cs = [...new Set(old.positions.map(p => p.ccy))]; if(cs.length === 1) setCurrency(doc, cs[0]); }
     S.docs = S.docs.map(d => d === old ? doc : d);
@@ -2248,7 +2324,9 @@ $("#file").onchange = e => { addFiles(e.target.files); e.target.value = ""; };
 $("#langBtn").onclick = () => { location.href = langUrl(EN ? "ru" : "en"); };
 $("#addBtn").onclick = () => $("#file").click();
 document.addEventListener("click", e => { if(e.target.closest && e.target.closest("[data-add-file]")) $("#file").click(); });
-$("#printBtn").onclick = () => locked() ? openCheckout("pdf") : window.print();
+// PDF — через окно печати браузера. Подсказка на случай, если окно не открылось или человек ищет файл, а не принтер.
+$("#printBtn").onclick = () => { if(locked()) return openCheckout("pdf");
+  toast(t("Открываю печать: чтобы получить PDF, выберите «Сохранить как PDF»", "Opening print: choose “Save as PDF” to get a PDF")); window.print(); };
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest("[data-buy]");
   if(b && !b.disabled){ e.preventDefault(); openCheckout(b.dataset.buy); }

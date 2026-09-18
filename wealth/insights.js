@@ -108,7 +108,8 @@ WL.insights = function(P){
     const movers = live.filter(p => WL.eq(p)).map(p => ({p, pct: (p.live.price / p.price - 1) * 100}))
       .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 3);
     const from = live[0].priceDate;
-    const moved = movers.map(m => `${m.p.symbol} ${fmt.pct(m.pct)}`).join(", ");
+    // У бумаг из PDF частного банка тикера нет — по названию; иначе в тексте было «null −2,3%».
+    const moved = movers.map(m => `${tick(m.p)} ${fmt.pct(m.pct)}`).join(", ");
     out.push({level: Math.abs(delta) >= 250000 ? "watch" : "info", kind: "since",
       title: t(`С ${fmt.date(from)} позиции ${delta < 0 ? "подешевели" : "подорожали"} на ${fmt.short(Math.abs(delta))}`,
                `Since ${fmt.date(from)}, positions are ${delta < 0 ? "down" : "up"} ${fmt.short(Math.abs(delta))}`),

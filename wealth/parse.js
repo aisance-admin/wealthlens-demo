@@ -83,9 +83,10 @@ async function pdfLines(buf, password){
       const page = await pdf.getPage(p);
       const vp = page.getViewport({scale: 1});
       const tc = await page.getTextContent();
-      const items = tc.items.filter(i => i.str.trim()).map(i => ({
-        s: i.str.trim(), x: Math.round(i.transform[4]), y: Math.round(vp.height - i.transform[5]),
-        w: i.width || 0, h: Math.abs(i.transform[3]) || i.height || 8}));
+      // Координаты — через область просмотра страницы: у повёрнутой страницы (/Rotate 90, альбомные выписки IB) без этого
+      // колонки превращались в «строки», и файл не читали ни разбор, ни ИИ. Высота буквы — длина вектора, а не одна ось матрицы.
+      const items = tc.items.filter(i => i.str.trim()).map(i => { const [x, y] = vp.convertToViewportPoint(i.transform[4], i.transform[5]);
+        return {s: i.str.trim(), x: Math.round(x), y: Math.round(y), w: i.width || 0, h: Math.hypot(i.transform[2], i.transform[3]) || i.height || 8}; });
       items.sort((a, b) => a.y - b.y || a.x - b.x);
       const lines = [];
       for(const it of items){
@@ -509,6 +510,157 @@ function parseDetailed(pages, fileName){
   doc.checks.forEach(ch => { if(!ch.count) ch.ccy = valCcy; });
   doc.note = WL.t("стоимость бумаг — без НКД, НКД отдельной строкой; цены облигаций — в процентах номинала",
     "securities are valued without accrued interest, which is shown as a separate line; bond prices are in percent of nominal");
+  return doc;
+}
+
+/* ── Выписка по счёту: операции и остаток ─────────────────────────────────
+   Банковская выписка (Account Statement, Transaction History) бумаг не содержит, но остаток на счёте — деньги клиента,
+   и в сводном отчёте они должны быть. Берём исходящий остаток на конец периода и сверяем: входящий остаток плюс операции
+   даёт исходящий, остаток каждой строки — предыдущий плюс сумма операции. Разбор работает и по тексту страницы, и по
+   распознанной картинке (закрашенная копия): числа берём по колонкам шапки таблицы. */
+// «**OPENING BALANCE**» распознавание картинки иногда отдаёт одним словом «**OPENING» — строка, которая с него начинается, тоже остаток.
+const OPEN_BAL = /^[*\s"'“”]*opening\b(?!\s+(?:date|price|time|hours))|(opening|beginning|previous|start(?:ing)?)\s+(?:ledger\s+|available\s+|book\s+)?balance|balance\s+(?:brought\s+forward|b\/f|at\s+start)|brought\s+forward|solde\s+(?:initial|pr[ée]c[ée]dent|d'ouverture)|anfangs(?:saldo|bestand)|alter\s+saldo|saldo\s+(?:inicial|anterior|iniziale)|входящий\s+остаток|остаток\s+на\s+начало/i;
+const CLOSE_BAL = /^[*\s"'“”]*closing\b(?!\s+(?:date|price|time|hours))|(closing|ending|end\s+of\s+period|final)\s+(?:ledger\s+|available\s+|book\s+)?balance|balance\s+(?:carried\s+forward|c\/f|at\s+end)|carried\s+forward|solde\s+(?:final|de\s+cl[ôo]ture|[àa]\s+reporter)|(?:end|schluss)saldo|neuer\s+saldo|saldo\s+(?:final|finale)|исходящий\s+остаток|остаток\s+на\s+конец/i;
+const DATE_CELL = /^(?:\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}[\s-][A-Za-z]{3}[a-z]*[\s-]\d{2,4})$/;
+const BAL_HEAD = [["date", /^(date|value date|booking date|transaction date|posting date|post date|trans\.? date|datum|buchungsdatum|valuta|date valeur|дата)$/i],
+  ["debit", /^(debit|debits|withdrawals?|paid out|money out|dr|списание|расход|soll|débit)$/i],
+  ["credit", /^(credit|credits|deposits?|paid in|money in|cr|зачисление|приход|haben|crédit)$/i],
+  ["amount", /^(amount|transaction amount|сумма|betrag|montant)(\s*\(?[A-Z]{3}\)?)?$/i],
+  ["balance", /^(balance|running balance|ledger balance|saldo|solde|остаток)(\s*\(?[A-Z]{3}\)?)?$/i]];
+// Выписка о портфеле (есть шапка с количеством и ценой) — не выписка по счёту, даже если в ней есть раздел денег с остатком.
+const holdingsHead = all => all.some(L => L.items.some(i => /^(quantity|qty|units|nominal|shares|no\.? of shares|st[üu]ck|anzahl|quantit[ée]|количество)$/i.test(i.s.trim())) &&
+  L.items.some(i => /^(price|market price|market value|valuation|kurs|cours|курс|цена)(\s*\(?[A-Z$€£]{1,3}\)?)?$/i.test(i.s.trim())));
+const isoCode = c => c && (WL.isoCcy ? WL.isoCcy(c) : /^[A-Z]{3}$/.test(c)) ? c : null;
+function parseCashStatement(pages, fileName){
+  const all = pages.flat();
+  if(!all.length || holdingsHead(all)) return null;
+  const mid = it => it.x + (it.w || it.s.length * 4.5) / 2;
+  const clean = s => String(s).replace(/[*:]/g, "").replace(/\s+/g, " ").trim();
+  // Шапка таблицы операций: дата, остаток и сумма (списание и зачисление или одна колонка суммы).
+  let head = null;
+  for(const L of all){
+    const cols = {};
+    L.items.forEach(it => { const k = BAL_HEAD.find(([, re]) => re.test(clean(it.s))); if(k && !(k[0] in cols)) cols[k[0]] = mid(it); });
+    if(cols.date != null && cols.balance != null && (cols.debit != null || cols.credit != null || cols.amount != null)){ head = {L, cols}; break; }
+  }
+  const closeLines = all.filter(L => CLOSE_BAL.test(L.text));
+  if(!head && !closeLines.length) return null;
+  const val = it => { const a = amount(it.s); return a && !a.pct ? a.value : null; };
+  const numItems = L => L.items.filter(it => !DATE_CELL.test(it.s.trim()) && val(it) != null && /\d[.,]\d{2}\b|\d{1,3}(,\d{3})+/.test(it.s));
+  // Число строки остатка: правое число строки, а если строка разорвана (надпись и сумма на разной высоте) — ближайшее справа ниже.
+  const lastNum = L => {
+    let ns = numItems(L);
+    if(!ns.length){ const near = all.filter(M => M !== L && M.page === L.page && Math.abs(M.y - L.y) <= 6); ns = near.flatMap(numItems).filter(it => it.x > L.items[0].x); }
+    return ns.length ? val(ns.sort((a, b) => a.x - b.x)[ns.length - 1]) : null;
+  };
+  const colOf = x => { let best = null, d = Infinity;
+    Object.entries(head.cols).forEach(([k, c]) => { if(k !== "date" && Math.abs(x - c) < d){ d = Math.abs(x - c); best = k; } }); return best; };
+  // Операции: строки после шапки, начинающиеся с даты.
+  const rows = [];
+  if(head){
+    const start = all.indexOf(head.L);
+    for(let i = start + 1; i < all.length; i++){
+      const L = all[i], f = L.items[0];
+      if(!f || !DATE_CELL.test(f.s.trim()) || CLOSE_BAL.test(L.text) || OPEN_BAL.test(L.text)) continue;
+      const r = {date: f.s.trim(), text: L.items.slice(1).filter(it => val(it) == null).map(it => it.s).join(" ").trim(), signed: null, bal: null};
+      numItems(L).forEach(it => {
+        const k = colOf(mid(it)), v = val(it);
+        if(k === "balance"){ if(r.bal == null) r.bal = v; }
+        else if(k === "debit") r.signed = (r.signed || 0) - Math.abs(v);
+        else if(k === "credit") r.signed = (r.signed || 0) + Math.abs(v);
+        else if(k === "amount") r.signed = (r.signed || 0) + v;
+      });
+      if(r.signed != null || r.bal != null) rows.push(r);
+    }
+  }
+  const openLine = all.find(L => OPEN_BAL.test(L.text));
+  let opening = openLine ? lastNum(openLine) : null;
+  let closing = closeLines.length ? lastNum(closeLines[closeLines.length - 1]) : null;
+  if(closing == null && rows.length && rows[rows.length - 1].bal != null) closing = rows[rows.length - 1].bal;
+  if(closing == null) return null;
+  if(opening == null && rows.length && rows[0].bal != null && rows[0].signed != null) opening = round2(rows[0].bal - rows[0].signed);
+  // Остаток в шапке («BALANCE: 2,557.75»): подпись и сумма справа от неё, вне таблицы.
+  const headBal = (() => { for(const L of all){ if(head && L === head.L) continue;
+    const k = L.items.findIndex(it => /^(current |available |ledger |account |closing )?balance\s*:?$/i.test(it.s.trim()) || /^остаток\s*:?$/i.test(it.s.trim()));
+    if(k < 0) continue; const n = L.items.slice(k + 1).find(it => val(it) != null); if(n) return val(n); } return null; })();
+  const text = all.map(l => l.text).join("\n");
+  const ccyTok = (/\bcurrency\s*:?\s*([A-Z]{3})\b/i.exec(text) || [])[1];
+  const fromName = (String(fileName).match(/(?<![A-Za-z])[A-Z]{3}(?![A-Za-z])/g) || []).find(c => c !== "PDF" && isoCode(c));
+  const inText = [...new Set((text.match(/(?<![A-Za-z])[A-Z]{3}(?![A-Za-z])/g) || []).filter(isoCode))];
+  const ccy = isoCode(ccyTok && ccyTok.toUpperCase()) || fromName || (inText.length === 1 ? inText[0] : null);
+  const period = /(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]{3,}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,}\.?\s+\d{4})\s*(?:-|–|—|to|till|until|bis|au|по)\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}-\d{2}-\d{2}|[A-Za-z]{3,}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,}\.?\s+\d{4})/i.exec(text);
+  const asOf = (period && pdfDate(period[2])) || (rows.length && pdfDate(rows[rows.length - 1].date.replace(/-/g, "/"))) || pdfDate(text);
+  // Банк — из шапки, а если логотип картинкой — по известному имени в любой строке (адрес сайта, подвал).
+  const top = (pages[0] || []).slice(0, 14).map(l => l.text);
+  const broker = pdfBank(top) || (WL.brokerByName ? all.map(l => WL.brokerByName(l.text)).find(Boolean) : null) || WL.t("Банк", "Bank");
+  const name = WL.t(`Текущий счёт ${ccy || ""}`.trim(), `Current account ${ccy || ""}`.trim());
+  const pos = {id: `BAL:${ccy || "?"}:${fileName}`, broker, brokerShort: broker.length <= 22 ? broker : broker.slice(0, 21) + "…", type: "cash",
+    symbol: ccy || "", name, value: closing, ccy: ccy || "USD", priceDate: asOf, page: closeLines.length ? closeLines[closeLines.length - 1].page : null};
+  if(!ccy){ pos.ccyGuessed = true; }
+  const doc = {broker, brokerShort: pos.brokerShort, kind: "positions", fileName, asOf, currency: ccy || null, positions: [pos], checks: [], cashOnly: true,
+    transactions: rows.map(r => ({date: r.date, text: r.text, amount: r.signed}))};
+  const sum = round2(rows.reduce((a, r) => a + (r.signed || 0), 0));
+  if(openLine && opening != null)
+    doc.checks.push({...check(WL.t("Входящий остаток и операции дают исходящий", "Opening balance plus transactions gives the closing balance"), round2(opening + sum), closing), whole: true, ccy: pos.ccy});
+  const withBal = rows.filter(r => r.bal != null && r.signed != null);
+  if(withBal.length && opening != null){
+    let prev = opening, good = 0;
+    rows.forEach(r => { if(r.bal == null || r.signed == null){ if(r.bal != null) prev = r.bal; return; } if(Math.abs(prev + r.signed - r.bal) < 0.01) good++; prev = r.bal; });
+    doc.checks.push({label: WL.t("Остатки по строкам сходятся с суммами операций", "Running balances agree with the transaction amounts"), parsed: good, stated: withBal.length, ok: good === withBal.length, count: true});
+  }
+  const notes = [WL.t("выписка по счёту: в отчёт идёт остаток на конец периода", "account statement: the closing balance goes into the report")];
+  if(headBal != null && Math.abs(headBal - closing) < 0.01) notes.push(WL.t("остаток в шапке выписки тот же", "the balance in the statement header is the same"));
+  else if(headBal != null) notes.push(WL.t(`в шапке выписки другой остаток (${headBal}) — видимо, на дату формирования, а не на конец периода`, `the statement header shows another balance (${headBal}), probably as of the generation date rather than the period end`));
+  if(!ccy){ doc.ccyGuessed = 1; }
+  doc.note = notes.join(" · ");
+  return doc;
+}
+
+/* ── Interactive Brokers: Activity Statement ─────────────────────────────────
+   Когда на счёте только деньги, позиций в выписке нет, но остаток есть: «Ending Cash» в Cash Report по каждой валюте
+   (или по базовой) и строка Cash в Net Asset Value. Сверяем одно с другим и с итогом NAV. Если в NAV есть бумаги, этот
+   разбор не берётся за позиции — файл идёт общим разбором таблиц или в ИИ, как раньше. */
+function parseIBActivity(pages, fileName){
+  const all = pages.flat(), text = all.map(l => l.text).join("\n");
+  const pm = /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})\s*[-–]\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})/.exec(text)
+    || /(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})/.exec(text);
+  if(!pm) return null;
+  const asOf = pm[6] ? iso(pm[6], MONTHS[pm[4]], pm[5]) : iso(pm[3], MONTHS[pm[1]], pm[2]);
+  const base = isoCode((/Base Currency\s+([A-Z]{3})\b/.exec(text) || [])[1]) || "USD";
+  const nums = L => L.items.map(i => i.s).filter(isNumTok).map(num);
+  const label = L => L.items.filter(i => !isNumTok(i.s)).map(i => i.s).join(" ").trim();
+  const SECTION = /^(Net Asset Value|Change in NAV|Mark-to-Market Performance Summary|Realized & Unrealized|Cash Report|Open Positions|Trades|Deposits & Withdrawals|Dividends|Withholding Tax|Interest\b(?! Accruals)|Fees|Financial Instrument Information|Codes|Notes\/Legal Notes|Time Weighted Rate of Return)/i;
+  // Разделы идут от левого поля; справа на тех же строках бывает соседняя таблица («Change in NAV» рядом с NAV) — она раздел не закрывает.
+  const left = L => L.items[0] && L.items[0].x < 120;
+  const sectionAfter = re => { const a = all.findIndex(L => left(L) && re.test(L.text)); if(a < 0) return [];
+    const b = all.findIndex((L, i) => i > a && left(L) && SECTION.test(L.text) && !re.test(L.text)); return all.slice(a + 1, b < 0 ? undefined : b); };
+  // Net Asset Value: класс · прошлый итог · длинные · короткие · итог · изменение.
+  const nav = {};
+  sectionAfter(/^Net Asset Value\b/i).forEach(L => { const n = nums(L), k = label(L);
+    if(!k || n.length < 4 || /^(Total Long|Long|Short)$/i.test(k)) return; nav[k.toLowerCase()] = n[3]; });
+  if(nav.cash == null && nav.total == null) return null;
+  const ACCR = /^(interest accruals|dividend accruals|accruals)$/i;
+  if(Object.keys(nav).some(k => k !== "total" && k !== "cash" && !ACCR.test(k) && Math.abs(nav[k]) >= 0.005)) return null;
+  // Cash Report: «Ending Cash» по базовой валюте и по каждой валюте счёта.
+  const ending = {}; let cur = null;
+  sectionAfter(/^Cash Report\b/i).forEach(L => { const k = label(L);
+    if(/^Base Currency Summary$/i.test(k)) cur = "BASE";
+    else if(/^[A-Z]{3}$/.test(k) && isoCode(k)) cur = k;
+    else if(/^Ending Cash$/i.test(k) && cur && nums(L).length) ending[cur] = nums(L)[0]; });
+  const broker = "Interactive Brokers";
+  const P = (ccy, value, name) => ({id: `IB:CASH:${ccy}${name ? ":" + name : ""}`, broker, brokerShort: broker, type: "cash", symbol: ccy,
+    name: name || WL.t(`Денежные средства ${ccy}`, `Cash ${ccy}`), value, ccy, priceDate: asOf});
+  const ccys = Object.keys(ending).filter(c => c !== "BASE");
+  const positions = ccys.length ? ccys.map(c => P(c, ending[c])) : ending.BASE != null ? [P(base, ending.BASE)] : nav.cash != null ? [P(base, nav.cash)] : [];
+  Object.keys(nav).filter(k => ACCR.test(k) && Math.abs(nav[k]) >= 0.005).forEach(k =>
+    positions.push(P(base, nav[k], /dividend/i.test(k) ? WL.t("Начисленные дивиденды", "Accrued dividends") : WL.t("Начисленные проценты", "Accrued interest"))));
+  if(!positions.length) return null;
+  const doc = {broker, brokerShort: broker, kind: "positions", fileName, asOf, currency: base, positions, checks: [], cashOnly: true, transactions: []};
+  if(ending.BASE != null && nav.cash != null)
+    doc.checks.push({...check(WL.t("Деньги: Cash Report и Net Asset Value", "Cash: Cash Report and Net Asset Value"), ending.BASE, nav.cash), ccy: base});
+  if(positions.every(p => p.ccy === base) && nav.total != null)
+    doc.checks.push({...check(WL.t("Чистые активы счёта (NAV)", "Account net asset value (NAV)"), round2(positions.reduce((a, p) => a + p.value, 0)), nav.total), whole: true, ccy: base});
+  doc.note = WL.t("бумаг на счёте нет: деньги — из Cash Report, сверены с Net Asset Value", "no securities in the account: cash from the Cash Report, reconciled with the Net Asset Value");
   return doc;
 }
 
@@ -989,8 +1141,16 @@ async function parsePdfPages(pages, file){
     const doc = parseDetailed(pages, file.name);
     if(doc.positions.length) return doc;
   }
+  // Interactive Brokers: счёт только с деньгами (с бумагами — общий разбор ниже или ИИ).
+  if(/Activity Statement/i.test(head) && /Interactive Brokers/i.test(head)){
+    const doc = parseIBActivity(pages, file.name);
+    if(doc) return doc;
+  }
   // Скан — это картинка без текста: читать в нём нечего, и сказать надо именно это.
   if(!pages.some(lines => lines.length)) return {unknown: true, fileName: file.name, pdf: true, scan: true};
+  // Выписка по счёту с остатком (банк, история операций): деньги на конец периода — позиция отчёта.
+  const cashDoc = parseCashStatement(pages, file.name);
+  if(cashDoc) return cashDoc;
   const tables = pdfTables(pages);
   // Шапка документа — строки первой страницы до первой таблицы: ниже в позициях свои даты
   // (погашения) и свои банки («UBS Group AG» среди акций).
@@ -1151,6 +1311,11 @@ const ccysIn = text => { const out = new Set((String(text).toUpperCase().match(C
 const TOTAL_LINE = /(?<!\p{L})(total|sub-?total|grand total|net assets|total assets|portfolio value|account value|gesamt\p{L}*|summe|totale?|итого|всего|чистые активы)(?!\p{L})/iu;
 const GENERIC_NAME = /^(inc|corp|corporation|co|ltd|limited|plc|ag|sa|nv|se|llc|lp|the|of|and|class|cl|shares?|common|stock|ord|ordinary|adr|fund|etf|ucits|acc|dist|bond|bonds|note|notes|trust|group|holdings?|company|reg|registered|put|call)$/i;
 const MONTH_RE = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*";
+// Разделы выписки без позиций: операции, заявки, доходы, отчёт о деньгах, примечания. «Notes» без уточнения — нет: так бывает
+// назван раздел структурных нот.
+const NOT_HOLDINGS = /^(transactions?\b|transaction (details|summary|history)|account activity|activity\b|pending\b|open orders?\b|orders?\b|trades?\b|executed trades|cash (activity|transactions?|report|movements?)\b|income (summary|details)|dividends?\b|realized|deposits?\b|withdrawals?\b|transfers?\b|fees\b|corporate actions|mark-to-market|change in nav|endnotes|legal notes|notes\/legal|codes\b|disclosures?\b|terms and conditions|bank sweep activity|umsätze|buchungen|mouvements|opérations|операции|движение)/i;
+const ACTION_ROW = /^(open orders?|pending|buy|sell|bought|sold|sell short|buy to (open|close)|sell to (open|close)|exercised?|assigned|assignment|expired)\b/i;
+const CASH_LINE = /(balance|cash|ending|closing|остаток|saldo|solde|guthaben|kontostand)/i;
 function dateForms(iso){
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); if(!m) return null;
   const [y, mo, d] = [m[1], m[2], m[3]], yy = y.slice(2), mon = Object.keys(MON3)[+mo - 1];
@@ -1166,10 +1331,13 @@ WL.aiVerify = function(prep, ps){
   const totalLike = L => TOTAL_LINE.test(L.text);
   const headKeys = L => !numCells(L) && WL.sheetMap ? Object.keys(WL.sheetMap(cellsOf(L))) : [];
   // Таблица строки — ближайшая шапка выше; шапка позиций — с названием и количеством или стоимостью, без даты сделки.
+  // Заголовок раздела без позиций («Transaction Details», «Pending / Open Activity», «Cash Report») закрывает таблицу позиций:
+  // строки под ним до следующей шапки — заявки и операции, даже если шапку их таблицы узнать не удалось (−2).
   let tab = -1;
   const heads = {};
-  const tableOf = lines.map((L, i) => { const k = headKeys(L); if(k.length >= 2){ tab = i; heads[i] = k; } return tab; });
-  const holdingsTable = ti => ti < 0 || (() => { const k = heads[ti] || []; return (k.includes("name") || k.includes("ticker")) && (k.includes("qty") || k.includes("value")) && !k.includes("date"); })();
+  const sectionOff = L => { const c = cellsOf(L); return c.length <= 3 && !numCells(L) && NOT_HOLDINGS.test(c.join(" ").trim()); };
+  const tableOf = lines.map((L, i) => { const k = headKeys(L); if(k.length >= 2){ tab = i; heads[i] = k; } else if(sectionOff(L)) tab = -2; return tab; });
+  const holdingsTable = ti => ti === -1 || (ti >= 0 && (() => { const k = heads[ti] || []; return (k.includes("name") || k.includes("ticker")) && (k.includes("qty") || k.includes("value")) && !k.includes("date"); })());
   const esc = x => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const word = (text, w) => new RegExp(`(^|[^\\p{L}\\p{N}])${esc(w)}($|[^\\p{L}\\p{N}])`, "iu").test(text);
   const sig = p => String(p.name || "").toLowerCase().split(/[^\p{L}\p{N}&]+/u).filter(w => w.length >= 3 && !GENERIC_NAME.test(w) && !/^\d+$/.test(w));
@@ -1183,6 +1351,8 @@ WL.aiVerify = function(prep, ps){
     if(!at.length) at = nameAt(p);
     if(!at.length && p.quantity != null && p.market_value != null)             // названия в тексте нет — строка, где есть оба числа
       at = lines.map((L, i) => L.abs.has(cents(p.quantity)) && L.abs.has(cents(p.market_value)) ? i : -1).filter(i => i >= 0);
+    if(!at.length && p.asset_class === "cash" && p.market_value != null)     // остаток счёта: строка с этой суммой и словом «остаток»
+      at = lines.map((L, i) => L.abs.has(cents(p.market_value)) && CASH_LINE.test(L.text) ? i : -1).filter(i => i >= 0);
     if(p.page){ const on = at.filter(i => lines[i].page === p.page); if(on.length) at = on; }
     return at;
   });
@@ -1223,6 +1393,9 @@ WL.aiVerify = function(prep, ps){
     blk.forEach(i => claimed.add(i));
     const doubt = [...best.miss], drop = [];
     ["cost_price", "cost_value"].forEach(f => { if(p[f] != null && !hasAbs(blk, p[f])) drop.push(f); });
+    // Себестоимость потеряна, только если не подтвердилась её сумма. Цену покупки за штуку модель часто досчитывает сама
+    // (сумма ÷ количество ÷ 100 у опционов): если сумма в строке есть, средняя цена следует из неё, и говорить не о чем.
+    const costLost = drop.includes("cost_value") || (drop.includes("cost_price") && (p.cost_value == null || drop.includes("cost_value")));
     // Валюта: код в строке бумаги, в шапке её таблицы, а если во всём тексте одна валюта — она. Другой код там — противоречие;
     // кода нет нигде — валюту спросим у человека, как в выгрузке без валюты.
     let ccy = "ok";
@@ -1241,7 +1414,7 @@ WL.aiVerify = function(prep, ps){
     const date = !p.maturity ? null : forms && forms.some(f => lower.includes(f)) ? "ok" : DATE_ANY.test(text) ? "bad" : "unknown";
     const strike = p.strike == null ? null : hasAbs(blk, p.strike) || String(p.name || "").includes(String(p.strike)) ? "ok" : "unknown";
     const under = !p.underlying ? null : word(text, p.underlying) || word(String(p.name || ""), p.underlying) ? "ok" : "unknown";
-    return {doubt, drop, block: blk, ccy, date, strike, under};
+    return {doubt, drop, costLost, block: blk, ccy, date, strike, under};
   });
   // Итоги документа по валютам: числа строк итога.
   const totals = [];
@@ -1252,9 +1425,9 @@ WL.aiVerify = function(prep, ps){
     const ccy = cs.length === 1 ? cs[0] : !cs.length && headC.length === 1 ? headC[0] : !cs.length && exact.size === 1 ? [...exact][0] : null;
     totals.push({line: i, ccy, values: [...L.signed].map(v => v / 100)});
   });
-  // Строки таблиц позиций, которых нет в ответе.
-  const missed = lines.map((L, i) => rowLike(L) && !totalLike(L) && !claimed.has(i) && holdingsTable(tableOf[i]) ? i : -1).filter(i => i >= 0)
-    .map(i => ({line: i, label: cellsOf(lines[i])[0]}));
+  // Строки таблиц позиций, которых нет в ответе. Строка заявки или сделки («Sell», «Open Orders 07/15») — не позиция.
+  const missed = lines.map((L, i) => rowLike(L) && !totalLike(L) && !claimed.has(i) && holdingsTable(tableOf[i]) && !ACTION_ROW.test(cellsOf(L)[0] || "") ? i : -1)
+    .filter(i => i >= 0).map(i => ({line: i, label: cellsOf(lines[i])[0]}));
   return {pos, totals, missed};
 };
 WL.util = {num, amount, dmy, iso, pad, round2, titleCase};

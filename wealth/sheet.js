@@ -206,7 +206,8 @@ const BROKER_BY_NAME = [[/exante/i, "Exante"], [/interactive|(?<![a-z])ibkr(?![a
   [/saxo/i, "Saxo Bank"], [/pictet/i, "Pictet"], [/julius|baer/i, "Julius Baer"], [/lombard/i, "Lombard Odier"],
   [/(?<![a-z])efg(?![a-z])/i, "EFG Bank"], [/vontobel/i, "Vontobel"], [/(?<![a-z])lgt(?![a-z])/i, "LGT"], [/mirabaud/i, "Mirabaud"], [/rothschild/i, "Rothschild"],
   [/credit suisse/i, "Credit Suisse"], [/safra sarasin/i, "J. Safra Sarasin"],
-  [/emirates nbd/i, "Emirates NBD"], [/(?<![a-z])hsbc(?![a-z])/i, "HSBC"], [/barclays/i, "Barclays"]];
+  [/emirates nbd/i, "Emirates NBD"], [/(?<![a-z])hsbc(?![a-z])/i, "HSBC"], [/barclays/i, "Barclays"],
+  [/united bank (limited|ltd)|(?<![a-z])ubl(?![a-z])|ubldigital/i, "UBL United Bank"]];
 const brokerFromFile = name => (BROKER_BY_NAME.find(b => b[0].test(name)) || [null, null])[1];
 
 function brokerFromHead(rows, upto){
@@ -443,6 +444,7 @@ WL.sheetDoc = buildDoc;          // (строки, {row, map}, файл) → д�
 WL.sheetMap = mapHeaders;        // ячейки строки → карта колонок
 WL.sheetFind = findHeader;       // строки листа → {row, map} или null
 WL.brokerByName = brokerFromFile;  // строка текста → известный брокер или null
+WL.isoCcy = c => ISO_CCY.has(String(c || "").toUpperCase());   // настоящий код валюты ISO 4217
 // Поля для панели сопоставления: порядок и подписи. Первые два — обязательный минимум.
 WL.sheetFields = [["name", WL.t("Наименование", "Name")], ["ticker", WL.t("Тикер", "Ticker")],
   ["qty", WL.t("Количество", "Quantity")], ["value", WL.t("Стоимость", "Market value")],

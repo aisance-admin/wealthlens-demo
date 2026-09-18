@@ -188,11 +188,12 @@ table.pos{width:100%; border-collapse:collapse; font-size:13px}
 .pos td.brk{white-space:nowrap}
 .pos td.brk .sub2{margin-left:0; max-width:none; white-space:nowrap}
 .pos td:not(.nm):not(.l) .sub2,.pos th .sub2{max-width:128px; margin-left:auto}
-.pos th:first-child,.pos td:first-child{position:sticky; left:0; z-index:1; background:var(--surface)}
-.pos th:first-child,.pos tr.foot td:first-child,.pos tr.row:hover td:first-child{background:var(--surface-2)}
-.pos tr.grp td:first-child{background:var(--ground)}
-/* Фон таблицы сплошной: закреплённая первая колонка иначе выделяется полосой на градиенте карточки */
+/* Первая колонка не закреплена (position: sticky). Закреплённые ячейки таблицы внутри прокручиваемой скруглённой
+   карточки в части браузеров не рисовались: пустыми были названия, итог и строка «Ещё N позиций», а в оплаченном
+   отчёте пропадало всё ниже таблицы. На широком экране таблица помещается целиком, на телефоне — карточки позиций. */
 #positions.card{background:var(--surface)}
+/* Планшет и узкое окно: таблица плотнее, чтобы помещалась без прокрутки вбок (закреплённой колонки больше нет). */
+@media screen and (min-width:821px) and (max-width:1060px){ .pos td,.pos th{padding:8px 7px} .pos .nm{min-width:160px} }
 .cdot{display:inline-block; width:8px; height:8px; border-radius:2px; background:var(--c); margin-right:8px; vertical-align:1px}
 
 /* График */
@@ -322,7 +323,8 @@ code.rid{font:12px var(--mono); color:var(--ink-2); background:var(--surface-2);
 .q-list li{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:10px; background:rgba(6,9,14,.35)}
 .q-list .q-why{font-size:12.5px; color:var(--ink-2); margin-top:3px; line-height:1.45}
 .q-actions{margin-top:10px}
-@media screen and (max-width:760px){ .q-list li{flex-direction:column} }
+.q-btns{display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; flex-shrink:0; max-width:50%}
+@media screen and (max-width:760px){ .q-list li{flex-direction:column} .q-btns{justify-content:flex-start; max-width:none} }
 /* Выписки без итога для сверки: спокойнее, чем «неполный отчёт», но видно до оплаты и в PDF */
 .quality.soft{border-color:rgba(130,181,255,.35); background:linear-gradient(0deg, var(--info-soft), var(--info-soft)), var(--surface)}
 .pw-note.pw-warn{color:var(--info)}
@@ -615,7 +617,7 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
   .pos tr.grp,.pos tr.foot{display:flex; justify-content:space-between; align-items:baseline; gap:12px;
     border-radius:8px; padding:8px 12px; margin-top:10px}
   .pos tr.grp td,.pos tr.foot td{display:block; border:0; padding:0; text-align:right; white-space:normal}
-  .pos tr.grp td:first-child,.pos tr.foot td:first-child{text-align:left; position:static}
+  .pos tr.grp td:first-child,.pos tr.foot td:first-child{text-align:left}
   .pos tr.grp td:empty,.pos tr.foot td:empty{display:none}
   /* Заголовок группы — одна полоса, а не тёмные прямоугольники под словами */
   .pos tr.grp{background:var(--ground)} .pos tr.grp td,.pos tr.grp td:first-child{background:transparent}
@@ -670,7 +672,6 @@ body.dragging:not(.on-upload)::after{content:attr(data-drop); position:fixed; in
   table.pos{font-size:10px}
   .pos .nm{min-width:150px; max-width:230px}
   .pos td,.pos th{padding:4px 6px}
-  .pos th:first-child,.pos td:first-child{position:static}
   .pos thead{display:table-header-group}
   .pos tr{break-inside:avoid}
   .total .value{font-size:30px}
@@ -752,14 +753,14 @@ WL.apiReady = (async () => {
 </script>
 <script>window.WL_PIXEL_ID = ""; window.WL_SUPPORT_EMAIL = ""; window.WL_ACCESS_KEY = null;   /* подставляет publish.sh: пиксель и почта — из site/config.json, открытый ключ разрешений на доступ — с api.euroaff.eu */</script>
 <script src="wealth/track.js?v=28c9c9c48152"></script>
-<script src="wealth/parse.js?v=eb1c06e45a2f"></script>
-<script src="wealth/sheet.js?v=25a113615ad2"></script>
+<script src="wealth/parse.js?v=28c1963dd048"></script>
+<script src="wealth/sheet.js?v=df389f4d7a21"></script>
 <script src="wealth/demo.js?v=504239201eca"></script>
-<script src="wealth/model.js?v=7aac330be94a"></script>
-<script src="wealth/insights.js?v=87b2b22d745d"></script>
+<script src="wealth/model.js?v=e3a26365fb99"></script>
+<script src="wealth/insights.js?v=34dfa23a7d9a"></script>
 <script src="wealth/table.js?v=4bbff06af412"></script>
 <script src="wealth/market.js?v=646aeacaee24"></script>
 <script src="wealth/analysis.js?v=67517d8c526e"></script>
-<script src="wealth/ui.js?v=ebfd28fcde54"></script>
+<script src="wealth/ui.js?v=7b17b0321b2f"></script>
 </body>
 </html>
