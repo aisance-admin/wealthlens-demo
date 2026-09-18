@@ -70,6 +70,33 @@ const KEEP_UPPER = new Set(["ETF", "ADR", "TR", "SA", "NV", "N.V.", "US", "USA",
 const titleCase = s => String(s || "").split(/\s+/).map(w =>
   KEEP_UPPER.has(w) ? w : w.charAt(0) + w.slice(1).toLowerCase()).join(" ");
 
+/* Текст, нарезанный по буквам. Некоторые программы (пересохранение, «печать в PDF», телефон) пишут каждую букву отдельным
+   куском: строка приходит как «P o s i t i o n s», и шаблоны банков её не узнают — выписка уходит в общий разбор таблиц.
+   Если на странице больше половины кусков — одиночные знаки, соседние в пределах строки склеиваем: вплотную — в слово,
+   через промежуток до 0,6 кегля — через пробел. Колонки таблиц стоят дальше и остаются отдельными. */
+function glueLetters(items){
+  if(items.length < 30 || items.filter(i => i.s.length === 1).length < items.length * 0.5) return items;
+  const rows = [];
+  [...items].sort((a, b) => a.y - b.y || a.x - b.x).forEach(it => { const r = rows[rows.length - 1];
+    if(r && Math.abs(r.y - it.y) <= 2) r.items.push(it); else rows.push({y: it.y, items: [it]}); });
+  const out = [];
+  rows.forEach(r => {
+    // Пробел между словами — не шире буквы с четвертью: мерим по буквам самой строки (заглавные шире, чем полкегля).
+    const ws = r.items.filter(i => i.s.length === 1 && /\p{L}/u.test(i.s) && i.w > 0).map(i => i.w).sort((a, b) => a - b);
+    const wMed = ws.length ? ws[Math.floor(ws.length / 2)] : 0;
+    let cur = null;
+    r.items.sort((a, b) => a.x - b.x).forEach(it => {
+      const w = it.w || it.s.length * (it.h || 8) * 0.5;
+      if(cur){
+        const gap = it.x - (cur.x + cur.w), h = Math.max(cur.h, it.h) || 8;
+        if(gap < Math.max(h * 0.15, 1.2)){ cur.s += it.s; cur.w = it.x + w - cur.x; return; }
+        if(gap < Math.max(h * 0.6, wMed * 1.3)){ cur.s += " " + it.s; cur.w = it.x + w - cur.x; return; }
+      }
+      cur = {...it, w}; out.push(cur);
+    });
+  });
+  return out;
+}
 // password — пароль, который человек ввёл для защищённой выписки; хранится только в памяти вкладки.
 const openPdf = async (buf, password) => (await PDFJS()).getDocument({data: buf, isEvalSupported: false, password: password || undefined}).promise;
 async function pdfLines(buf, password){
@@ -85,8 +112,10 @@ async function pdfLines(buf, password){
       const tc = await page.getTextContent();
       // Координаты — через область просмотра страницы: у повёрнутой страницы (/Rotate 90, альбомные выписки IB) без этого
       // колонки превращались в «строки», и файл не читали ни разбор, ни ИИ. Высота буквы — длина вектора, а не одна ось матрицы.
-      const items = tc.items.filter(i => i.str.trim()).map(i => { const [x, y] = vp.convertToViewportPoint(i.transform[4], i.transform[5]);
-        return {s: i.str.trim(), x: Math.round(x), y: Math.round(y), w: i.width || 0, h: Math.hypot(i.transform[2], i.transform[3]) || i.height || 8}; });
+      // Неразрывные и узкие пробелы — обычные: «Charles Schwab» с U+00A0 иначе не узнаётся ни одним шаблоном.
+      let items = tc.items.filter(i => i.str.trim()).map(i => { const [x, y] = vp.convertToViewportPoint(i.transform[4], i.transform[5]);
+        return {s: i.str.replace(/[   ]/g, " ").trim(), x: Math.round(x), y: Math.round(y), w: i.width || 0, h: Math.hypot(i.transform[2], i.transform[3]) || i.height || 8}; });
+      items = glueLetters(items);
       items.sort((a, b) => a.y - b.y || a.x - b.x);
       const lines = [];
       for(const it of items){
