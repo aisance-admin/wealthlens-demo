@@ -137,7 +137,7 @@ const ccy3 = v => (String(v == null ? "" : v).toUpperCase().match(/\b[A-Z]{3}\b/
 const clean = v => String(v == null ? "" : v).replace(/\s+/g, " ").trim();
 /* Распознанный скан путает похожие знаки: «USD» приходит как «ush», «U5D», «USO». Молча валюту не подставляем:
    если код отличается от распространённой валюты одним похожим знаком, эта валюта предлагается человеку на подтверждение. */
-const OCR_LIKE = {D: "OQ0H", O: "DQ0", Q: "O0", "0": "ODQ", S: "5$", "5": "S", H: "DN", N: "H", B: "8", "8": "B", I: "1LJ", L: "1I", "1": "IL",
+const OCR_LIKE = {D: "OQ0HB", O: "DQ0", Q: "O0", "0": "ODQ", S: "5$", "5": "S", H: "DN", N: "H", B: "8", "8": "B", I: "1LJ", L: "1I", "1": "IL",
   U: "VW", V: "UY", E: "F", F: "EP", C: "G(", G: "C6", "6": "G", K: "X", X: "K", Y: "V", P: "F", R: "K", J: "I", A: "4", "4": "A"};
 const COMMON_CCY = ["USD", "EUR", "CHF", "GBP", "JPY", "CAD", "AUD", "SEK", "NOK", "DKK", "HKD", "SGD", "CNY", "RUB"];
 const ocrCcy = v => {
@@ -445,6 +445,7 @@ WL.sheetMap = mapHeaders;        // ячейки строки → карта к�
 WL.sheetFind = findHeader;       // строки листа → {row, map} или null
 WL.brokerByName = brokerFromFile;  // строка текста → известный брокер или null
 WL.isoCcy = c => ISO_CCY.has(String(c || "").toUpperCase());   // настоящий код валюты ISO 4217
+WL.ocrCcy = ocrCcy;   // «usb» с картинки → USD на подтверждение (или null)
 // Поля для панели сопоставления: порядок и подписи. Первые два — обязательный минимум.
 WL.sheetFields = [["name", WL.t("Наименование", "Name")], ["ticker", WL.t("Тикер", "Ticker")],
   ["qty", WL.t("Количество", "Quantity")], ["value", WL.t("Стоимость", "Market value")],
@@ -492,6 +493,7 @@ WL.parseRows = function(tables, file, ctx){
   if(!best) return {unknown: true, fileName: file.name, sheets, headers: [], pdf: true};
   const doc = best.doc;
   doc.sheetIndex = best.si; doc.head = best.head; doc.fromPdf = true;
+  cashTables(doc, sheets, best.si, ctx);
   /* Разобрана одна таблица, а в файле есть ещё таблица позиций со своей шапкой (облигации отдельно от акций): её строки
      в отчёт не попали. Итог выбранной таблицы при этом может сойтись — полноты он не доказывает. */
   const other = sheets.filter((sh, si) => si !== best.si && sh.holdings && sh.rows.length - 1 >= 1);
@@ -500,6 +502,40 @@ WL.parseRows = function(tables, file, ctx){
   Object.defineProperty(doc, "sheets", {value: sheets, enumerable: false});
   return doc;
 };
+
+/* Денежные счета отдельной таблицей в выписке о портфеле: «Account | Opening balance | Closing balance | Currency». В таблицу позиций
+   она не похожа (нет количества и цены), и раньше молча выпадала — отчёт недосчитывал деньги, а итог бумаг при этом сходился.
+   Берём только таблицы про счета и деньги (заголовок раздела или подписи строк), значение — исходящий остаток. */
+const CASH_WORD = /(cash|account|current|liquid|money market|deposit|konto|kontokorrent|liquidit|compte|liquidités|conto|деньги|денежн|сч[её]т)/i;
+function cashTables(doc, sheets, bestSi, ctx){
+  const amount = WL.util && WL.util.amount;
+  if(!amount) return;
+  const added = [];
+  sheets.forEach((sh, si) => {
+    if(si === bestSi || sh.ops || sh.holdings) return;
+    const rows = sh.rows || [], hi = rows.findIndex(r => r.filter(c => clean(c)).length >= 2 && !r.some(c => amount(c) && /\d/.test(clean(c))));
+    if(hi < 0) return;
+    const H = rows[hi].map(c => clean(c).toLowerCase());
+    const bal = [/^(closing|ending|end of period|final) balance/, /^(closing|ending)\b/, /^(balance|saldo|solde|остаток|kontostand)\b/, /^(market value|value|amount|сумма|betrag|montant)\b/]
+      .map(re => H.findIndex(h => re.test(h))).find(i => i >= 0);
+    if(bal == null || bal < 0 || H.some(h => /^(quantity|qty|units|nominal|price|количество|цена|stück|anzahl)\b/.test(h))) return;
+    const lab = H.findIndex((h, i) => i !== bal && h && !/(currency|ccy|währung|devise|валюта|opening|asset class)/.test(h));
+    const ci = H.findIndex(h => /(currency|ccy|währung|devise|валюта)/.test(h));
+    if(lab < 0) return;
+    const title = `${sh.name} ${rows.slice(0, hi).flat().join(" ")}`;
+    rows.slice(hi + 1).forEach(r => {
+      const name = clean(r[lab]), a = amount(r[bal]);
+      if(!name || !a || /^(total|sub-?total|итого|всего|gesamt|summe)/i.test(name) || !(CASH_WORD.test(title) || CASH_WORD.test(name))) return;
+      const ccy = ccy3(ci >= 0 ? r[ci] : "") || ccy3(name) || ccy3(r[bal]) || (ctx && ctx.currency) || null;
+      if(!ccy) return;
+      added.push({id: `CASHTB:${si}:${added.length}:${name}`, broker: doc.broker, brokerShort: doc.brokerShort, type: "cash", symbol: ccy, name,
+        value: a.value, ccy, priceDate: doc.asOf, page: sh.page});
+    });
+  });
+  if(!added.length) return;
+  doc.positions.push(...added);
+  doc.note = [doc.note, WL.t(`деньги на счетах — из отдельной таблицы: ${added.length}`, `account cash from a separate table: ${added.length}`)].filter(Boolean).join(" · ");
+}
 
 /* Шаблон для тех, у кого выгрузки нет: понятные заголовки, точка с запятой и
    десятичная запятая — так Excel на русской раскладке открывает файл без вопросов. */

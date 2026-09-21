@@ -789,8 +789,8 @@ const aiAllowed = () => { if(Q.aiOk) return true; try{ return !!(S.rid && S.docs
 const setAiAllowed = on => { try{ const m = JSON.parse(localStorage.getItem(AI_OK) || "{}"); if(on) m[S.rid] = 1; else delete m[S.rid];
   localStorage.setItem(AI_OK, JSON.stringify(m)); }catch(e){} };
 const MSG = {
-  ops: () => t("похоже на выписку операций: нашлось только движение денег, таблицы позиций нет. Нужна выписка о портфеле (Portfolio, Holdings, Valuation)",
-               "this looks like a transaction statement: only cash movements were found, no positions table. Upload a portfolio statement (Portfolio, Holdings, Valuation)"),
+  ops: () => t("похоже на выписку операций: нашлось только движение денег — без позиций и без остатка на счёте. Нужна выписка о портфеле (Portfolio, Holdings, Valuation) или выписка по счёту с остатком на конец периода",
+               "this looks like a transaction statement: only cash movements were found — no positions and no account balance. Upload a portfolio statement (Portfolio, Holdings, Valuation) or an account statement with the closing balance"),
   scan: () => t("это скан без текста — нужна электронная выписка из интернет-банка или выгрузка CSV или Excel",
                 "this is a scan with no text — download an electronic statement or a CSV or Excel export"),
   plain: () => t("в PDF нет таблиц с суммами — похоже, это не выписка", "this PDF has no tables with amounts — it does not look like a statement"),
