@@ -1461,6 +1461,11 @@ WL.aiVerify = function(prep, ps){
   };
   const allCcy = new Set(lines.flatMap(L => [...ccysIn(L.text)]).map(c => c.replace("?", "")));
   const exact = new Set(lines.flatMap(L => (L.text.toUpperCase().match(CCY_RE) || [])));
+  // Знак валюты в выписке без кодов ISO (Schwab пишет «$2,428,772.03», слова USD в тексте нет): «$» — та единственная валюта,
+  // в которой модель прочитала позиции, если знак ей подходит. Иначе итог со знаком не имел валюты и не сверялся вовсе.
+  const docCcy = new Set(ps.map(p => String(p.currency || "").toUpperCase()).filter(Boolean));
+  const signCcy = !exact.size && docCcy.size === 1 && [...allCcy].includes([...docCcy][0]) ? [...docCcy][0] : null;
+  const codesOf = set => [...set].map(x => x.endsWith("?") ? (signCcy && x.slice(0, -1) === signCcy ? signCcy : null) : x).filter(Boolean);
   const claimed = new Set();
   const pos = ps.map((p, k) => {
     const has = (blk, v) => blk.some(i => lines[i].signed.has(v < 0 ? -cents(v) : cents(v)));
@@ -1505,8 +1510,8 @@ WL.aiVerify = function(prep, ps){
   const totals = [];
   lines.forEach((L, i) => {
     if(!totalLike(L)) return;
-    const cs = [...ccysIn(L.text)].filter(x => !x.endsWith("?"));
-    const headC = tableOf[i] >= 0 ? [...ccysIn(lines[tableOf[i]].text)].filter(x => !x.endsWith("?")) : [];
+    const cs = codesOf(ccysIn(L.text));
+    const headC = tableOf[i] >= 0 ? codesOf(ccysIn(lines[tableOf[i]].text)) : [];
     const ccy = cs.length === 1 ? cs[0] : !cs.length && headC.length === 1 ? headC[0] : !cs.length && exact.size === 1 ? [...exact][0] : null;
     totals.push({line: i, ccy, values: [...L.signed].map(v => v / 100)});
   });
