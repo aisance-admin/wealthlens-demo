@@ -824,7 +824,17 @@ function alignBlocks(blocks){
   blocks.forEach((bl, bi) => {
     const band = bandsOf(bl.rows);
     data += band ? band.data : 0;
-    const cols = band && band.cols.length >= 2 ? band.cols : lastCols || bl.rows[bl.head].map(c => [c.x, c.x2]);
+    const hdrCells = bl.rows[bl.head] || [];
+    let cols = band && band.cols.length >= 2 ? band.cols : lastCols || hdrCells.map(c => [c.x, c.x2]);
+    /* Разреженный кусок: в разделе денег заполнены только название, тип, сумма и валюта, и полос по занятости данных выходит
+       заметно меньше, чем ячеек в шапке. Ячейки шапки тогда слипались по полосам («ISIN Type», «Quantity Price Market value»),
+       «Cash» попадал в колонку ISIN, сумма — в колонку цены, и деньги пропадали из отчёта без предупреждения. В таком куске
+       колонки — по ячейкам самой шапки; полосы данных без своей подписи добавляются отдельными колонками. */
+    if(band && hdrCells.length >= 3 && band.cols.length < hdrCells.length - 1){
+      cols = hdrCells.map(c => [c.x, c.x2]);
+      band.cols.forEach(([a, b]) => { if(!cols.some(([x1, x2]) => Math.min(b, x2) - Math.max(a, x1) > 0)) cols.push([a, b]); });
+      cols.sort((p, q) => p[0] - q[0]);
+    }
     lastCols = cols;
     const grid = bl.rows.map(cells => place(cells, cols));
     const hdr = grid[bl.head], fieldAt = {};
