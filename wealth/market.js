@@ -30,6 +30,7 @@ async function getJSON(path){ return WL.api(path, undefined, {timeout: 40000}); 
 /* Свежие данные: сопоставление новых бумаг, котировки, опционы, главные котировки и бенчмарки, новости. */
 WL.market.refresh = async (S, M) => {
   if(!M || !M.positions.length) return false;
+  if(S.symbolsV !== 2){ S.symbols = {}; S.symbolsV = 2; }      // сопоставления прежних версий (до выбора домашней биржи) пересчитываются
   S.symbols = S.symbols || {};
   const now = Date.now();
   const want = new Map();
