@@ -175,8 +175,8 @@ function checkLine(c){
   if(c.unchecked) return `<li class="na">${ICON.dash}<span>${what} — ${c.unchecked === "fx" ? t("не проверено: нет курса валюты", "not checked: no exchange rate")
     : t("не проверено: позиции не разнесены по этому счёту", "not checked: the positions aren't split by this account")}</span></li>`;
   if(c.ok) return `<li class="ok">${ICON.check}<span>${what}${c.withAccrued ? t(" — сошлось с учётом НКД", " — matches incl. accrued interest") : t(" — сошлось", " — matches")}</span></li>`;
-  const got = c.group && c.group !== c.ccy ? t(`по позициям в ${c.group}`, `positions in ${c.group}`) : t("прочитано", "read");
-  return `<li class="bad">${ICON.warn}<span>${what} — ${got}: ${esc(fmt.money(c.sum, c.ccy, 2))}</span></li>`;
+  const got = (c.group && c.group !== c.ccy ? t(`по позициям в ${c.group}`, `positions in ${c.group}`) : t("прочитано", "read")) + (c.shownAcc ? t(" с НКД", " incl. accrued") : "");
+  return `<li class="bad">${ICON.warn}<span>${what} — ${got}: ${esc(fmt.money(c.shown ?? c.sum, c.ccy, 2))}</span></li>`;
 }
 function recBadge(st, open){
   if(st === "ok" && open) return `<span class="badge part" title="${t(`Общий итог совпал с итогом банка, но ${open} ${WL.pl(open, ["частичный итог", "частичных итога", "частичных итогов"], ["", ""])} (по валютам или счетам) — нет`,

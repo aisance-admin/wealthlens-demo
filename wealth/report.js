@@ -218,8 +218,9 @@ function reconcile(doc, rows, S){
     const tol = approx ? Math.max(2, Math.abs(tot.amount) * 0.006) : Math.max(1.01, Math.abs(tot.amount) * 0.0005);
     const d0 = sum - tot.amount, d1 = sum + acc - tot.amount;
     const ok = !unchecked && (Math.abs(d0) <= tol || Math.abs(d1) <= tol);
+    const nearAcc = acc !== 0 && Math.abs(d1) < Math.abs(d0);   // что ближе к итогу банка — с НКД или без; разница и показанная сумма — из одного варианта
     checks.push({label: tot.label, scope: tot.scope, account: tot.account, ccy, group, amount: tot.amount, sum, sumAcc: sum + acc,
-      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: Math.abs(d1) < Math.abs(d0) ? d1 : d0, ok, approx, missing, unchecked, page: tot.page});
+      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: nearAcc ? d1 : d0, shown: nearAcc ? sum + acc : sum, shownAcc: nearAcc, ok, approx, missing, unchecked, page: tot.page});
   }
   const live = checks.filter(c => !c.unchecked), grand = live.filter(c => c.scope === "total");
   let status;
@@ -334,14 +335,14 @@ function alerts(M, S){
       const c = d.recon.checks.filter(x => !x.ok).sort((a, b) => (a.scope === "total" ? -1 : 0) - (b.scope === "total" ? -1 : 0))[0];
       if(c) add(d.recon.status === "mismatch" ? "high" : "watch", "recon-" + d.id,
         t(`«${d.institution || d.file}»: сумма позиций не совпала с итогом банка`, `“${d.institution || d.file}”: positions don't add up to the bank's total`),
-        t(`Итог в выписке «${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, сумма прочитанных позиций — ${fmt.money(c.sum, c.ccy, 2)}${c.approx ? " (через курс)" : ""}, разница ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`,
-          `The statement total “${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions read add up to ${fmt.money(c.sum, c.ccy, 2)}${c.approx ? " (via FX)" : ""}, a difference of ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`), [d.id]);
+        t(`Итог в выписке «${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, сумма прочитанных позиций${c.shownAcc ? " с НКД" : ""} — ${fmt.money(c.shown, c.ccy, 2)}${c.approx ? " (через курс)" : ""}, разница ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`,
+          `The statement total “${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions read add up to ${fmt.money(c.shown, c.ccy, 2)}${c.shownAcc ? " incl. accrued interest" : ""}${c.approx ? " (via FX)" : ""}, a difference of ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`), [d.id]);
     } else if(d.recon.status === "ok" && d.recon.open){
       const bad = d.recon.checks.filter(x => !x.ok && !x.unchecked), c = bad[0], more = bad.length - 1;
       const of = c.group ? t(` в ${c.group}`, ` in ${c.group}`) : c.account ? t(` счёта ${c.account}`, ` of account ${c.account}`) : "";
       add("info", "recon-" + d.id, t(`«${d.institution || d.file}»: общий итог сошёлся, частичные — нет`, `“${d.institution || d.file}”: the grand total matches, some subtotals don't`),
-        t(`«${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, позиции${of} — ${fmt.money(c.sum, c.ccy, 2)}${more ? ` (и ещё ${more} ${WL.pl(more, ["итог", "итога", "итогов"], ["", ""])})` : ""}. Итог отчёта совпадает с банком; не сходится состав — возможно, у части позиций неверно прочитаны валюта или счёт. Проверьте по выписке.`,
-          `“${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions${of} add up to ${fmt.money(c.sum, c.ccy, 2)}${more ? ` (and ${more} more)` : ""}. The report total matches the bank's; the breakdown doesn't — the currency or account of some positions may have been read wrong. Check against the statement.`), [d.id]);
+        t(`«${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, позиции${of}${c.shownAcc ? " с НКД" : ""} — ${fmt.money(c.shown, c.ccy, 2)}, разница ${fmt.money(Math.abs(c.diff), c.ccy, 2)}${more ? ` (и ещё ${more} ${WL.pl(more, ["итог", "итога", "итогов"], ["", ""])})` : ""}. Итог отчёта совпадает с банком; не сходится состав — возможно, у части позиций неверно прочитаны валюта или счёт. Проверьте по выписке.`,
+          `“${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions${of} add up to ${fmt.money(c.shown, c.ccy, 2)}${c.shownAcc ? " incl. accrued interest" : ""}, a difference of ${fmt.money(Math.abs(c.diff), c.ccy, 2)}${more ? ` (and ${more} more)` : ""}. The report total matches the bank's; the breakdown doesn't — the currency or account of some positions may have been read wrong. Check against the statement.`), [d.id]);
     }
     if(d.summaryOnly) add("watch", "summary-" + d.id, t(`«${d.file}»: найдены только сводные таблицы`, `“${d.file}”: only summary tables were found`),
       t("Полного списка позиций в файле нет — отчёт построен по сводной таблице и может быть неполным.", "The file has no complete list of positions — the report uses a summary table and may be incomplete."), [d.id]);
