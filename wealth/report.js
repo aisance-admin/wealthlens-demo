@@ -21,16 +21,43 @@ WL.CLS = {cash: t("счёт", "account"), deposit: t("депозит", "deposit"
 WL.BASES = ["USD", "EUR", "CHF", "GBP"];
 
 const digits = s => String(s || "").replace(/\D/g, "");
+/* Номер счёта: буквы значимы («ABC123» и «XYZ123» — разные счета), пробелы и разделители — нет. Маскированный номер
+   («****7342», «U•••4411») совпадает с полным, если совпадают видимые начало и конец. */
+function acctInfo(s){
+  const raw = String(s || "").toUpperCase().replace(/[\s\-_.\/:#№]+/g, "");
+  const m = raw.match(/^([A-Z0-9]*?)(?:[*•·…]+|X{3,})([A-Z0-9]*)$/);
+  if(m && (m[2].length >= 3)) return {key: raw, masked: true, head: m[1], tail: m[2]};
+  const key = raw.replace(/[^A-Z0-9]/g, "");
+  return key.length >= 3 ? {key, masked: false} : null;
+}
+function sameAcct(a, b){
+  if(!a || !b) return false;
+  if(!a.masked && !b.masked) return a.key === b.key;
+  if(a.masked && b.masked) return a.tail === b.tail && a.head === b.head;
+  const [m, f] = a.masked ? [a, b] : [b, a];
+  return f.key.length > m.tail.length && f.key.endsWith(m.tail) && f.key.startsWith(m.head);
+}
+WL.sameAcct = (x, y) => sameAcct(acctInfo(x), acctInfo(y));
 const normInst = s => String(s || "").toLowerCase().replace(/\b(ag|sa|plc|ltd|limited|inc|llc|gmbh|bank|banque|& co\.?|co\.?|n\.a\.|s\.a\.|corp\.?|corporation|group|the)\b/g, "").replace(/[^a-zа-я0-9]+/g, "");
 const ident = r => (r.isin || r.ticker || r.name || "").toLowerCase().replace(/\s+/g, " ").trim();
-const acctIds = d => d.accounts.map(a => digits(a.id)).filter(x => x.length >= 3);
+const accts = d => d.accounts.map(a => Object.assign({id: a.id}, acctInfo(a.id) || {})).filter(a => a.key);
+/* Строка — к какому счёту выписки она относится: единственный счёт, совпавший номер или номер субсчёта (начинается
+   с номера счёта). null — строку нельзя надёжно отнести к счёту. */
+function rowAcct(d, r, list = accts(d)){
+  if(list.length === 1) return list[0];
+  const ri = acctInfo(r.acct);
+  if(!ri) return null;
+  return list.find(a => sameAcct(a, ri)) || list.find(a => !a.masked && !ri.masked && (ri.key.startsWith(a.key) || a.key.startsWith(ri.key))) || null;
+}
 
 /* Какие выписки учитывать. Не финансовые документы и файлы без позиций — в отчёт не входят. Две выписки одного счёта:
-   на одну дату — дубль, учитывается та, где больше позиций; на разные — учитывается свежая, старая показана как история.
-   Один счёт — общий номер счёта; если номеров нет — тот же банк и больше половины одинаковых бумаг. Решение можно
-   поменять вручную (S.include[id] = true/false). */
+   на одну дату — дубль (учитывается та, где больше позиций), на разные — учитывается свежая. Решение принимается по
+   каждому счёту: если в старой выписке есть и другие счета, они остаются в отчёте, убираются только строки счетов,
+   по которым есть выписка свежее (x.drop). Если строки нельзя надёжно разнести по счетам — документ не исключается,
+   а отчёт предупреждает о возможном двойном учёте (x.conflict). Без номеров счетов один счёт — тот же банк и больше
+   половины одинаковых бумаг. Решение можно поменять вручную (S.include[id] = true/false). */
 function chooseDocs(S){
-  const docs = S.docs.map(d => ({d, use: true, why: "", by: ""}));
+  const docs = S.docs.map(d => ({d, use: true, why: "", by: "", drop: []}));
   for(const x of docs){
     const d = x.d;
     if(d.type === "not_financial"){ x.use = false; x.why = "not_financial"; }
@@ -42,22 +69,25 @@ function chooseDocs(S){
     if(!a.use || !b.use) continue;
     const A = a.d, B = b.d;
     if(normInst(A.institution) && normInst(B.institution) && normInst(A.institution) !== normInst(B.institution)) continue;
-    const ia = acctIds(A), ib = acctIds(B);
+    const ia = accts(A), ib = accts(B);
     let same = false;
-    if(ia.length && ib.length) same = ia.some(x => ib.includes(x));
+    if(ia.length && ib.length) same = ia.some(x => ib.some(y => sameAcct(x, y)));
     else {
       const sa = new Set(A.rows.filter(r => r.cls !== "cash").map(ident)), sb = new Set(B.rows.filter(r => r.cls !== "cash").map(ident));
       const common = [...sa].filter(x => sb.has(x)).length;
       same = !!normInst(A.institution) && Math.min(sa.size, sb.size) >= 2 && common / Math.min(sa.size, sb.size) >= 0.6;
     }
     if(!same) continue;
-    let drop, keep;
-    if(A.as_of && B.as_of && A.as_of !== B.as_of){ [keep, drop] = A.as_of > B.as_of ? [a, b] : [b, a]; drop.why = "older"; }
-    else { [keep, drop] = B.rows.length > A.rows.length ? [b, a] : [a, b]; drop.why = "duplicate"; }
-    drop.use = false; drop.by = keep.d.id;
+    let keep, drop, why;
+    if(A.as_of && B.as_of && A.as_of !== B.as_of){ [keep, drop] = A.as_of > B.as_of ? [a, b] : [b, a]; why = "older"; }
+    else { [keep, drop] = B.rows.length > A.rows.length ? [b, a] : [a, b]; why = "duplicate"; }
+    const mine = accts(drop.d), theirs = accts(keep.d);
+    const covered = mine.length && theirs.length ? mine.filter(x => theirs.some(y => sameAcct(x, y))) : mine;
+    if(covered.length === mine.length){ drop.use = false; drop.why = why; drop.by = keep.d.id; }         // все счета есть в другой выписке
+    else covered.forEach(acct => { if(!drop.drop.some(z => z.acct.id === acct.id)) drop.drop.push({acct, by: keep.d.id, why}); });
   }
   const over = S.include || {};
-  for(const x of docs) if(over[x.d.id] === true && x.why !== "not_financial" && x.d.rows.length){ x.use = true; x.forced = true; }
+  for(const x of docs) if(over[x.d.id] === true && x.why !== "not_financial" && x.d.rows.length){ x.use = true; x.forced = true; x.drop = []; }
     else if(over[x.d.id] === false){ x.use = false; x.why = "removed"; }
   return docs;
 }
@@ -76,11 +106,16 @@ function sameHolding(a, b){
   const na = wa.join(" "), nb = wb.join(" ");
   return na.includes(nb) || nb.includes(na) || (wa[0] === wb[0] && (wa[1] || "") === (wb[1] || ""));
 }
-function docRows(d){
+function docRows(d, drop = []){
   const full = d.rows.some(r => r.table !== "S");
-  const out = [], byQv = new Map();
-  let summaryDropped = 0, dupDropped = 0;
+  const out = [], byQv = new Map(), list = accts(d);
+  let summaryDropped = 0, dupDropped = 0, acctDropped = 0, unattributed = 0;
+  // Счета, которые есть в выписке свежее: их строки не берём. Если хоть одну строку нельзя отнести к счёту — ничего не
+  // убираем (решает пользователь, отчёт предупреждает).
+  if(drop.length && d.rows.some(r => (!full || r.table !== "S") && !rowAcct(d, r, list))) unattributed = 1;
+  const dropped = r => !unattributed && drop.length && (a => a && drop.some(z => sameAcct(z.acct, a)))(rowAcct(d, r, list));
   for(const r of d.rows){
+    if(dropped(r)){ acctDropped++; continue; }
     if(full && r.table === "S"){ summaryDropped++; continue; }
     if(r.cls !== "cash" && r.value && r.qty != null){
       const k = [r.acct || "", r.ccy || "", r.qty, r.value].join("|"), prev = byQv.get(k) || [];
@@ -95,7 +130,7 @@ function docRows(d){
     }
     out.push(x);
   }
-  return {rows: out, summaryDropped, dupDropped, summaryOnly: !full && d.rows.length > 0};
+  return {rows: out, summaryDropped, dupDropped, acctDropped, conflict: !!(drop.length && unattributed), summaryOnly: !full && d.rows.length > 0};
 }
 
 /* Курсы: rates[ВАЛЮТА] — единиц валюты за 1 единицу валюты отчёта, на дату выписки. */
@@ -143,8 +178,8 @@ function reconcile(doc, rows, S){
     const ccy = (tot.currency || doc.ref_ccy || "").toUpperCase();
     let pool = rows;
     if(tot.scope === "account" && tot.account){
-      const id = digits(tot.account) || tot.account;
-      const mine = rows.filter(r => r.acct && (r.acct === tot.account || (digits(r.acct) && digits(r.acct) === id)));
+      const ti = acctInfo(tot.account);
+      const mine = rows.filter(r => r.acct && (r.acct === tot.account || (ti && (a => a && (sameAcct(a, ti) || (!a.masked && !ti.masked && a.key.startsWith(ti.key))))(acctInfo(r.acct)))));
       if(mine.length) pool = mine;
     }
     if(tot.scope === "currency") pool = pool.filter(r => (r.ccy || doc.ref_ccy) === ccy);
@@ -189,9 +224,14 @@ WL.build = S => {
       rowsRead: d.rows.length, pages: d.pages};
     docs.push(info);
     if(!x.use) continue;
-    const pr = docRows(d);
+    const all = docRows(d), pr = x.drop.length ? docRows(d, x.drop) : all;
     info.summaryDropped = pr.summaryDropped; info.dupDropped = pr.dupDropped; info.summaryOnly = pr.summaryOnly;
-    info.recon = reconcile(d, pr.rows, S);
+    info.recon = reconcile(d, all.rows, S);                   // сверка — по всему прочитанному, даже если часть счетов заменена
+    if(x.drop.length){
+      const byFile = id => (S.docs.find(z => z.id === id) || {});
+      const items = x.drop.map(z => ({acct: z.acct.id, by: z.by, byFile: byFile(z.by).file || "", byDate: byFile(z.by).as_of || "", why: z.why}));
+      if(pr.conflict) info.conflict = items; else { info.replaced = items; info.acctDropped = pr.acctDropped; }
+    }
     info.positions = pr.rows.length;
     let docValue = 0;
     for(const r of pr.rows){
@@ -246,6 +286,12 @@ function alerts(M, S){
     }
     if(d.truncated) add("watch", "trunc-" + d.id, t(`Прочитаны первые ${d.pageCount} страниц из ${d.fullPages} в «${d.file}»`, `Only the first ${d.pageCount} of ${d.fullPages} pages of “${d.file}” were read`),
       t("Разделите файл на части и добавьте их отдельно.", "Split the file and add the parts separately."), [d.id]);
+    if(d.use && d.conflict && d.conflict.length){
+      const c = d.conflict[0], more = d.conflict.length - 1;
+      add("watch", "overlap-" + d.id, t(`Счёт ${c.acct} есть в двух выписках на разные даты`, `Account ${c.acct} appears in two statements with different dates`),
+        t(`«${d.file}»${d.as_of ? " на " + fmt.date(d.as_of) : ""} и «${c.byFile}»${c.byDate ? " на " + fmt.date(c.byDate) : ""}${more > 0 ? ` (и ещё ${more})` : ""}. В старой выписке строки не удалось разнести по счетам, поэтому она учтена целиком — итог может учитывать счёт дважды. Если в ней нет других счетов, нажмите у файла «Не учитывать».`,
+          `“${d.file}”${d.as_of ? " as of " + fmt.date(d.as_of) : ""} and “${c.byFile}”${c.byDate ? " as of " + fmt.date(c.byDate) : ""}${more > 0 ? ` (and ${more} more)` : ""}. The older statement's rows could not be split by account, so it is counted in full — the total may count the account twice. If it holds no other accounts, use “Exclude” on the file.`), [d.id]);
+    }
     if(!d.use || !d.recon) continue;
     if(d.recon.status === "mismatch" || d.recon.status === "partial"){
       const c = d.recon.checks.filter(x => !x.ok).sort((a, b) => (a.scope === "total" ? -1 : 0) - (b.scope === "total" ? -1 : 0))[0];
@@ -337,8 +383,9 @@ WL.compact = (M, S, opts = {}) => {
       option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, cost: p.cost ?? undefined, account: p.acct || undefined, institution: p.inst})),
     positions_not_listed: rest.length ? {count: rest.length, value: r2(rest.reduce((s, p) => s + (p.vb || 0), 0))} : undefined,
     automatic_alerts_already_shown: M.alerts.map(a => ({level: a.level, title: a.title})),
-    market: M.mkt ? {as_of: M.mkt.at, value_now: r2(M.mkt.nowTotal), repriced_share_pct: r2(M.mkt.coverage * 100),
-      portfolio_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.pct != null).map(([k, v]) => [k, r2(v.pct * 100)])),
+    market: M.mkt ? {as_of: M.mkt.at, value_now: r2(M.mkt.nowTotal), repriced_share_of_whole_portfolio_pct: r2(M.mkt.coverage * 100),
+      listed_part_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.pct != null).map(([k, v]) => [k, r2(v.pct * 100)])),
+      whole_portfolio_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.whole != null).map(([k, v]) => [k, r2(v.whole * 100)])),
       benchmarks: M.mkt.benchmarks.filter(b => b.perf).map(b => ({name: b.label, change_pct: {"1m": b.perf["1m"], "ytd": b.perf.ytd, "1y": b.perf["1y"], "5y": b.perf["5y"]}})),
       positions: M.positions.filter(p => p.mk || p.underQ).slice(0, 300).map(p => ({id: p.id, price_now: p.mk ? p.mk.price : undefined, value_now_report_ccy: p.nowB != null ? r2(p.nowB) : undefined,
         change_1d_pct: p.mk ? p.mk.change : undefined, change_1m_pct: p.mk && p.mk.perf ? p.mk.perf["1m"] : undefined, change_1y_pct: p.mk && p.mk.perf ? p.mk.perf["1y"] : undefined,

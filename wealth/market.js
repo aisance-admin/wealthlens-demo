@@ -75,11 +75,12 @@ WL.market.apply = (M, S) => {
   if(!m || !m.quotes) return;
   const base = M.base, tab = (S.fx || {})[`${base}|latest`];
   const toBase = ccy => !ccy || ccy === base ? 1 : tab && tab.rates[ccy] ? 1 / tab.rates[ccy] : null;
-  let covered = 0, total = 0, suspect = 0;
+  // Покрытие — доля всей стоимости портфеля (с деньгами и депозитами), которая переоценена по рыночной цене.
+  let covered = 0, suspect = 0;
+  const total = M.positions.reduce((s, p) => s + Math.abs((p.vb || 0) + (p.ab || 0)), 0);
   for(const p of M.positions){
     delete p.mk; delete p.nowB; delete p.underQ;
     const k = keyOf(p), sym = k && S.symbols && S.symbols[k] && S.symbols[k].symbol, q = sym && m.quotes[sym];
-    if(p.cls !== "cash" && p.cls !== "deposit") total += Math.abs(p.vb || 0);
     if(p.cls === "note"){
       if(q && q.price != null) p.underQ = {symbol: sym, name: q.name || p.under, price: q.price, ccy: q.currency, change: q.change, perf: q.perf || {}, delayed: q.delayed};
       continue;
@@ -105,7 +106,17 @@ WL.market.apply = (M, S) => {
     }
   }
   const nowTotal = M.positions.reduce((s, p) => s + (p.nowB != null ? p.nowB : (p.vb || 0)) + (p.ab || 0), 0);
-  // Изменение портфеля за период — по бумагам с котировкой; остальное (деньги, облигации без котировки) считается неизменным.
+  // Доли, категории, банки и валюты по текущей оценке: в режиме «Сейчас» всё считается от одной базы.
+  for(const p of M.positions){ p.nowV = (p.nowB != null ? p.nowB : (p.vb || 0)) + (p.ab || 0); p.wNow = nowTotal ? p.nowV / nowTotal : 0; }
+  const group = (keyOf2, label) => { const m2 = new Map(); for(const p of M.positions){ const k2 = keyOf2(p); const g = m2.get(k2) || {value: 0, count: 0}; g.value += p.nowV; g.count++; m2.set(k2, g); }
+    return m2; };
+  const cats = group(p => p.cat), insts = group(p => p.inst), ccys = group(p => p.ccy || "?");
+  const liveByCat = M.byCat.map(c => { const g = cats.get(c.key) || {value: 0}; return Object.assign({}, c, {value: g.value, share: nowTotal ? g.value / nowTotal : 0}); });
+  const liveByInst = M.byInst.map(i => { const g = insts.get(i.name) || {value: 0}; return Object.assign({}, i, {value: g.value, share: nowTotal ? g.value / nowTotal : 0}); })
+    .sort((a, b) => b.value - a.value);
+  const liveByCcy = [...ccys.entries()].map(([ccy, g]) => ({ccy, value: g.value, share: nowTotal ? g.value / nowTotal : 0})).sort((a, b) => b.value - a.value);
+  // Изменение за период: по бумагам с котировкой (pct — только котируемая часть, для сравнения с индексом) и для всего
+  // портфеля (whole), где деньги и бумаги без котировки считаются неизменными.
   const perf = {};
   for(const [id] of PERIODS){
     let chg = 0, startVal = 0, n = 0;
@@ -114,10 +125,10 @@ WL.market.apply = (M, S) => {
       if(v == null || pc == null || p.cls === "option") continue;
       const abs = v * pc / (100 + pc); chg += abs; startVal += v - abs; n++;
     }
-    perf[id] = n ? {abs: chg, pct: startVal ? chg / startVal : null, n} : null;
+    perf[id] = n ? {abs: chg, pct: startVal ? chg / startVal : null, whole: nowTotal - chg ? chg / (nowTotal - chg) : null, n} : null;
   }
   M.mkt = {at: m.at, nowTotal, covered, coverage: total ? covered / total : 0, suspect, perf, overview: m.overview || [], benchmarks: m.benchmarks || [], news: m.news || {market: [], byTicker: []},
-    delta: nowTotal - M.total};
+    delta: nowTotal - M.total, byCat: liveByCat, byInst: liveByInst, byCcy: liveByCcy};
   M.alerts = M.alerts.concat(marketAlerts(M));
   const rank = {high: 0, watch: 1, info: 2};
   M.alerts.sort((a, b) => rank[a.level] - rank[b.level]);
@@ -170,10 +181,10 @@ WL.marketSection = () => {
       <div class="card pad"><div class="eyebrow">${t("Портфель и бенчмарк", "Portfolio vs benchmark")}</div>
         <div class="chips bench no-print" role="group">${mk.benchmarks.filter(b => b.price != null).map(b => `<button type="button" data-bench="${esc(b.symbol)}" aria-pressed="${bench && b.symbol === bench.symbol}">${esc(b.label)}</button>`).join("")}</div>
         <div class="print-only small muted">${t("Бенчмарк:", "Benchmark:")} ${esc(bench ? bench.label : "")}</div>
-        <div class="cmp"><div class="cmp-h"><span></span><span><i class="k c-port"></i>${t("Портфель", "Portfolio")}</span><span><i class="k c-bench"></i>${esc(bench ? bench.label : "")}</span></div>
+        <div class="cmp"><div class="cmp-h"><span></span><span><i class="k c-port"></i>${t("Котируемая часть", "Listed part")}</span><span><i class="k c-bench"></i>${esc(bench ? bench.label : "")}</span></div>
           ${rows.map(r => `<div class="cmp-r"><span class="cl">${esc(r.label)}</span><span class="cv">${bar(r.p, "port")}</span><span class="cv">${bar(r.b, "bench")}</span></div>`).join("")}</div>
-        <p class="fine">${t(`Портфель — по бумагам с биржевой котировкой (${fmt.pct(mk.coverage, 0)} стоимости) в нынешнем составе, без учёта взносов, выводов и дивидендов.`,
-          `Portfolio — holdings with a listed price (${fmt.pct(mk.coverage, 0)} of the value) in the current mix, excluding deposits, withdrawals and dividends.`)}</p></div>
+        <p class="fine">${t(`«Портфель» здесь — только бумаги с биржевой котировкой (${fmt.pct(mk.coverage, 0)} стоимости) в нынешнем составе, без учёта взносов, выводов и дивидендов. Изменение всего портфеля — в строке «Итого» таблицы позиций.`,
+          `“Portfolio” here means only the holdings with a listed price (${fmt.pct(mk.coverage, 0)} of the value) in the current mix, excluding deposits, withdrawals and dividends. The change of the whole portfolio is in the Total row of the positions table.`)}</p></div>
       <div class="card pad"><div class="eyebrow">${t("Главные котировки", "Key market quotes")}</div>
         <ul class="ov">${ov.map(x => `<li><span>${esc(x.label)}</span><b>${esc(fmt.num(x.price, x.price >= 1000 ? 0 : x.price >= 10 ? 2 : 4))}</b><em class="${(x.change || 0) < 0 ? "dn" : "up"}">${x.change > 0 ? "+" : ""}${esc(fmt.num(x.change || 0, 2))}%</em></li>`).join("")}</ul>
         <p class="fine">${t("TradingView, акции и индексы — с задержкой до 15 минут. В информационных целях.", "TradingView; stocks and indices delayed up to 15 minutes. For information only.")}</p></div>

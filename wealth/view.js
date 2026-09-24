@@ -96,11 +96,11 @@ function hero(){
       <div class="ts">${esc([m.mkt && WL.ui.val !== "stmt" ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
         `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
-      ${mix(m)}
+      ${mix(agg(m))}
     </div>
     <div class="card where">
-      <div class="eyebrow">${t("Где лежит", "Where it is")}</div>
-      <ul class="inst">${m.byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
+      <div class="eyebrow">${t("Где лежит", "Where it is")}${liveMode(m) ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>
+      <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
         return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
           <div class="iv"><b>${esc(money(i.value))}</b>${recBadge(worst)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
     </div>
@@ -108,6 +108,9 @@ function hero(){
 }
 /* Итог: по текущим ценам (если есть котировки) или по выпискам. Переключатель и время обновления — рядом. */
 const liveMode = m => !!(m.mkt && m.mkt.coverage > 0 && WL.ui.val !== "stmt");
+/* В режиме «Сейчас» итог, доли, категории, банки и валюты считаются от одной базы — текущей оценки. */
+const agg = m => liveMode(m) && m.mkt.byCat ? m.mkt : m;
+const wOf = p => liveMode(M()) && p.wNow != null ? p.wNow : p.w;
 function valuation(m, dates){
   if(!m.mkt || !(m.mkt.coverage > 0)) return `<div class="tv">${esc(money(m.total))}</div>${WL.marketLoading ? `<div class="ts muted">${t("загружаю текущие котировки…", "loading current prices…")}</div>` : ""}`;
   const live = liveMode(m), at = new Date(m.mkt.at), when = at.toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
@@ -115,7 +118,7 @@ function valuation(m, dates){
   return `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" data-val="now" aria-pressed="${live}">${t("Сейчас", "Now")}</button><button type="button" data-val="stmt" aria-pressed="${!live}">${t("По выписке", "Per statement")}</button></div>
     <div class="tv">${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
     ${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")} · ${t("цены на", "prices at")} ${esc(when)}${WL.marketLoading ? " · " + t("обновляю…", "refreshing…") : ""}</div>
-      <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))} · по рыночной цене ${esc(fmt.pct(m.mkt.coverage, 0))} портфеля`, `per statement ${esc(dates)}: ${esc(money(m.total))} · ${esc(fmt.pct(m.mkt.coverage, 0))} of the portfolio at market prices`)}</div>`
+      <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))} · по рыночной цене ${esc(fmt.pct(m.mkt.coverage, 0))} портфеля, остальное — по выпискам`, `per statement ${esc(dates)}: ${esc(money(m.total))} · ${esc(fmt.pct(m.mkt.coverage, 0))} of the portfolio at market prices, the rest at statement values`)}</div>`
       : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
 }
 function recBadge(st){
@@ -227,8 +230,8 @@ function detailOf(p){
 function nowCell(p){
   if(p.cls === "cash" || p.cls === "deposit") return "";
   if(p.underQ) return `<span class="sub">${esc(p.underQ.name || p.under || "")}</span>${esc(fmt.num(p.underQ.price, p.underQ.price >= 1000 ? 0 : 2))}<span class="sub ${(p.underQ.change || 0) < 0 ? "dn" : "up"}">${p.underQ.change > 0 ? "+" : ""}${esc(fmt.num(p.underQ.change || 0, 1))}% ${t("день", "day")}</span>`;
-  if(!p.mk) return `<span class="unk" title="${t("нет биржевой котировки — цена из выписки", "no listed price — the statement price is used")}">—</span>`;
-  if(p.mk.suspect) return `<span class="unk" title="${t("котировка не совпадает с выпиской — не используется", "the quote doesn't match the statement — not used")}">?</span>`;
+  if(!p.mk) return `<span class="unk" title="${t("нет биржевой котировки — цена из выписки", "no listed price — the statement price is used")}">${t("по выписке", "statement")}</span>`;
+  if(p.mk.suspect) return `<span class="unk" title="${t("котировка не совпадает с выпиской в разы (другая бумага или единица цены) — не используется", "the quote is off from the statement by a large factor (another security or price unit) — not used")}">${t("не сходится", "mismatch")}</span>`;
   const d = p.mk.change;
   return `${esc(fmt.money(p.mk.price, p.mk.ccy || "", p.mk.price >= 1000 ? 0 : 2))}${d != null ? `<span class="sub ${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(fmt.num(d, 1))}% ${t("день", "day")}</span>` : ""}${p.mk.underlying ? `<span class="sub">${t("акция", "stock")} ${esc(fmt.money(p.mk.underlying, "USD", 2))}</span>` : ""}`;
 }
@@ -242,18 +245,22 @@ function chgCell(p){
   return `<b class="${pc < 0 ? "dn" : "up"}">${pc > 0 ? "+" : ""}${esc(fmt.num(pc, 1))}%</b>${v != null ? `<span class="sub">${v > 0 ? "+" : ""}${esc(money(v))}</span>` : p.underQ ? `<span class="sub">${t("базовый актив", "underlying")}</span>` : ""}`;
 }
 function row(p){
-  const w = p.w, price = p.price != null ? (p.unit === "%" ? fmt.num(p.price, 2) + "%" : fmt.num(p.price, p.price >= 1000 ? 0 : 2)) : "—";
+  const w = wOf(p), price = p.price != null ? (p.unit === "%" ? fmt.num(p.price, 2) + "%" : fmt.num(p.price, p.price >= 1000 ? 0 : 2)) : "—";
   return `<tr class="pr" data-pos="${esc(p.id)}" tabindex="0">
     <td class="nm"><b>${esc(p.name || p.isin || "—")}</b><span class="sub">${esc(detailOf(p))}</span></td>
-    <td class="ac">${esc(p.inst)}${p.acct ? `<span class="sub">${esc(p.acct)}</span>` : ""}</td>
-    <td class="n">${p.cls === "cash" || (p.cls === "deposit" && p.qty == null) ? "" : esc(fmt.qty(p.qty))}</td>
-    <td class="n">${p.cls === "cash" || (p.cls === "deposit" && p.price == null) ? "" : esc(price)}</td>
-    <td class="n">${esc(p.value != null ? fmt.money(p.value, p.ccy || "", p.cls === "cash" ? 2 : 0) : "—")}${p.accrued ? `<span class="sub">+ ${t("НКД", "acc.")} ${esc(fmt.money(p.accrued, p.ccy || "", 0))}</span>` : ""}</td>
-    <td class="n mk">${nowCell(p)}</td>
+    <td class="ac mh">${esc(p.inst)}${p.acct ? `<span class="sub">${esc(p.acct)}</span>` : ""}</td>
+    <td class="n mh mt">${p.cls === "cash" || (p.cls === "deposit" && p.qty == null) ? "" : esc(fmt.qty(p.qty))}</td>
+    <td class="n mh mt">${p.cls === "cash" || (p.cls === "deposit" && p.price == null) ? "" : esc(price)}</td>
+    <td class="n mh">${esc(p.value != null ? fmt.money(p.value, p.ccy || "", p.cls === "cash" ? 2 : 0) : "—")}${p.accrued ? `<span class="sub">+ ${t("НКД", "acc.")} ${esc(fmt.money(p.accrued, p.ccy || "", 0))}</span>` : ""}</td>
+    <td class="n mk mh mt">${nowCell(p)}</td>
     <td class="n mk">${chgCell(p)}</td>
     <td class="n strong">${p.vb == null ? `<span class="unk" title="${t("нет курса", "no FX rate")}">—</span>` : esc(money((liveMode(M()) && p.nowB != null ? p.nowB : p.vb) + (p.ab || 0)))}</td>
     <td class="n w">${esc(fmt.pct(w, Math.abs(w) < 0.1 ? 1 : 0))}</td></tr>`;
 }
+/* Пустые ячейки колонок «Где», «Кол-во», «Цена», «Стоимость», «Сейчас» для строк категорий, «Итого» и замка: на узком экране
+   эти колонки скрываются по классу во всех строках сразу (mt — «Кол-во», «Цена», «Сейчас» до 1020 px; mh — все пять до 760 px),
+   и суммы стоят под своими заголовками. */
+const PH = '<td class="mh"></td><td class="mh mt"></td><td class="mh mt"></td><td class="mh"></td><td class="mh mt"></td>';
 function holdings(){
   const m = M(), s = S(), f = WL.ui.filter || "all", q = (WL.ui.search || "").trim().toLowerCase();
   const printing = WL.printing, lock = locked() && !printing;
@@ -267,11 +274,12 @@ function holdings(){
     if(!ps.length) return "";
     const shown = vis ? ps.filter(p => vis.has(p.id)) : ps, hidden = ps.length - shown.length;
     const cval = liveMode(m) ? ps.reduce((s, p) => s + (p.nowB != null ? p.nowB : (p.vb || 0)) + (p.ab || 0), 0) : c.value;
-    return `<tbody class="grp"><tr class="gh"><td colspan="7"><span class="k c-${c.key}"></span>${esc(c.label)} <span class="muted">· ${ps.length}</span></td>
-        <td class="n strong">${esc(money(cval))}</td><td class="n w">${esc(fmt.pct(c.share, 0))}</td></tr>
+    const cshare = (agg(m).byCat.find(x => x.key === c.key) || c).share;
+    return `<tbody class="grp"><tr class="gh"><td><span class="k c-${c.key}"></span>${esc(c.label)} <span class="muted">· ${ps.length}</span></td>${PH}<td></td>
+        <td class="n strong">${esc(money(cval))}</td><td class="n w">${esc(fmt.pct(cshare, 0))}</td></tr>
       ${shown.map(row).join("")}
-      ${hidden ? `<tr class="lockrow"><td colspan="9">${ICON.lock}${t(`Ещё ${hidden} ${WL.pl(hidden, ["позиция", "позиции", "позиций"], ["position", "positions"])} — в полном отчёте`, `${hidden} more ${WL.pl(hidden, ["position", "positions"], ["position", "positions"])} in the full report`)}
-        <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td></tr>` : ""}</tbody>`;
+      ${hidden ? `<tr class="lockrow"><td>${ICON.lock}${t(`Ещё ${hidden} ${WL.pl(hidden, ["позиция", "позиции", "позиций"], ["position", "positions"])} — в полном отчёте`, `${hidden} more ${WL.pl(hidden, ["position", "positions"], ["position", "positions"])} in the full report`)}
+        <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td>${PH}<td></td><td></td><td></td></tr>` : ""}</tbody>`;
   }).join("");
   return `<section class="sec" id="holdings"><div class="sh"><h2>${t("Все позиции", "All positions")}</h2><span class="muted">${m.positions.length}</span></div>
     ${m.mkt ? `<div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.PERIODS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "1d") === id}">${esc(l)}</button>`).join("")}</div></div>` : ""}
@@ -280,10 +288,10 @@ function holdings(){
       <input class="search" id="search" type="search" value="${esc(WL.ui.search || "")}" placeholder="${t("Найти бумагу, ISIN, банк", "Find a security, ISIN, bank")}" aria-label="${t("Поиск по позициям", "Search positions")}">
     </div>
     ${WL.ui.only ? `<p class="only no-print">${t("Показаны позиции из предупреждения.", "Showing the positions from a finding.")} <button class="link" type="button" data-clear-only>${t("Показать все", "Show all")}</button></p>` : ""}
-    <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l">${t("Где", "Where")}</th><th>${t("Кол-во", "Qty")}</th><th>${t("Цена", "Price")}</th>
-      <th>${t("Стоимость", "Value")}</th><th>${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.periodLabel(WL.ui.per || "1d").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
+    <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l mh">${t("Где", "Where")}</th><th class="mh mt">${t("Кол-во", "Qty")}</th><th class="mh mt">${t("Цена", "Price")}</th>
+      <th class="mh">${t("Стоимость", "Value")}</th><th class="mh mt">${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.periodLabel(WL.ui.per || "1d").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
       ${groups || `<tbody><tr><td colspan="9" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
-      <tfoot><tr><td colspan="6">${t("Итого", "Total")}</td><td class="n">${m.mkt && m.mkt.perf[WL.ui.per || "1d"] && m.mkt.perf[WL.ui.per || "1d"].pct != null ? `<b class="${m.mkt.perf[WL.ui.per || "1d"].pct < 0 ? "dn" : "up"}">${m.mkt.perf[WL.ui.per || "1d"].pct > 0 ? "+" : ""}${esc(fmt.pct(m.mkt.perf[WL.ui.per || "1d"].pct, 1))}</b>` : ""}</td>
+      <tfoot><tr><td>${t("Итого", "Total")}</td>${PH}<td class="n">${(pf => pf && pf.whole != null ? `<b class="${pf.whole < 0 ? "dn" : "up"}" title="${t("Изменение всего портфеля: деньги и бумаги без котировки считаются неизменными", "Change of the whole portfolio: cash and holdings without a listed price are treated as unchanged")}">${pf.whole > 0 ? "+" : ""}${esc(fmt.pct(pf.whole, 1))}</b><span class="sub">${t("весь портфель", "whole portfolio")}</span>` : "")(m.mkt && m.mkt.perf[WL.ui.per || "1d"])}</td>
         <td class="n strong">${esc(money(liveMode(m) ? m.mkt.nowTotal : m.total))}</td><td class="n w">100%</td></tr></tfoot></table></div>
     ${m.mkt ? `<p class="fine">${t(`«Сейчас» — биржевые цены на ${new Date(m.mkt.at).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}, акции с задержкой до 15 минут. Облигации, ноты и деньги без биржевой котировки — по выписке; у нот показан базовый актив.`,
       `“Now” — market prices at ${new Date(m.mkt.at).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"})}, stocks delayed up to 15 minutes. Bonds, notes and cash without a listed price stay at statement values; notes show their underlying.`)}</p>` : ""}
@@ -292,10 +300,10 @@ function holdings(){
 
 function currenciesAndDates(){
   const m = M(), lock = locked() && !WL.printing;
-  const cc = m.byCcy.filter(c => Math.abs(c.value) > 0.5);
+  const cc = agg(m).byCcy.filter(c => Math.abs(c.value) > 0.5);
   const tl = m.timeline.slice(0, 14);
   return `<section class="sec two">
-    <div class="card pad"><div class="eyebrow">${t("Валюты", "Currencies")}</div>
+    <div class="card pad"><div class="eyebrow">${t("Валюты", "Currencies")}${liveMode(m) ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>
       <ul class="bars">${cc.map(c => `<li><span class="bl">${esc(c.ccy)}</span><span class="bt"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, c.share)))}%"></i></span><b>${esc(fmt.pct(c.share, 0))}</b><span class="muted">${esc(money(c.value))}</span></li>`).join("")}</ul></div>
     <div class="card pad"><div class="eyebrow">${t("Сроки на год вперёд", "Dates in the next 12 months")}</div>
       ${tl.length ? `<ul class="tl">${tl.map((x, i) => `<li class="${lock && i >= 2 ? "blur" : ""}"><span class="td">${esc(fmt.date(x.p.date))}</span><span class="tn">${lock && i >= 2 ? "▇▇▇▇▇▇▇" : esc(x.p.name)}<span class="sub">${esc(["option", "future"].includes(x.p.cls) ? t("экспирация", "expiry") : t("погашение", "maturity"))} · ${x.days} ${WL.pl(x.days, ["день", "дня", "дней"], ["day", "days"])}</span></span><b>${lock && i >= 2 ? "" : esc(money(x.p.vb))}</b></li>`).join("")}</ul>`
@@ -316,6 +324,8 @@ function files(){
           <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
           ${d && d.use && d.recon ? recBadge(d.recon.status) : ""}</div>
         ${status ? `<p class="dst">${esc(status)}</p>` : ""}
+        ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
+          `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
         ${d && d.use && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 6).map(c => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? ICON.check : ICON.warn}<span>${esc(c.label)}: ${esc(fmt.money(c.amount, c.ccy, 2))}${c.ok ? (c.withAccrued ? t(" — сошлось с учётом НКД", " — matches incl. accrued interest") : t(" — сошлось", " — matches")) : t(` — прочитано ${fmt.money(c.sum, c.ccy, 2)}`, ` — read ${fmt.money(c.sum, c.ccy, 2)}`)}</span></li>`).join("")}</ul>` : ""}
         ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
         ${raw && raw.notes && raw.notes.length ? (note
@@ -390,7 +400,7 @@ WL.openPos = async id => {
     [t("Стоимость", "Value"), p.value != null ? fmt.money(p.value, p.ccy || "", 2) : ""],
     [t("Накопленный купон", "Accrued interest"), p.accrued ? fmt.money(p.accrued, p.ccy || "", 2) : ""],
     [t(`В ${M().base}`, `In ${M().base}`), p.vb != null ? money(p.vb + (p.ab || 0), 2) : t("нет курса", "no FX rate")],
-    [t("Доля портфеля", "Share of portfolio"), fmt.pct(p.w, 2)],
+    [liveMode(M()) ? t("Доля портфеля по текущим ценам", "Share of portfolio at current prices") : t("Доля портфеля", "Share of portfolio"), fmt.pct(wOf(p), 2)],
     [t("Себестоимость", "Cost"), p.cost != null ? fmt.money(p.cost, p.ccy || "", 2) : ""],
     [t("Результат к себестоимости", "Gain vs cost"), p.cost != null && p.value != null ? fmt.money(p.value - p.cost, p.ccy || "", 2) + (p.cost ? ` (${fmt.pct((p.value - p.cost) / Math.abs(p.cost))})` : "") : ""],
     [["option", "future"].includes(p.cls) ? t("Экспирация", "Expiry") : t("Погашение", "Maturity"), p.date ? fmt.date(p.date) : ""],
@@ -471,8 +481,9 @@ WL.excel = async () => {
     const mk = m.mkt, P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
     const sheet = [[t("Рынок", "Market"), new Date(mk.at).toLocaleString()], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],
       [t("Доля по рыночной цене, %", "Share at market prices, %"), round(mk.coverage * 100)], [],
-      [t("Изменение, %", "Change, %"), t("Портфель", "Portfolio"), ...mk.benchmarks.map(b => b.label)],
-      ...P.map(([id, l]) => [l, mk.perf[id] && mk.perf[id].pct != null ? round(mk.perf[id].pct * 100) : null, ...mk.benchmarks.map(b => b.perf ? b.perf[id] : null)]), [],
+      [t("Изменение, %", "Change, %"), t("Весь портфель", "Whole portfolio"), t("Котируемая часть", "Listed part"), ...mk.benchmarks.map(b => b.label)],
+      ...P.map(([id, l]) => [l, mk.perf[id] && mk.perf[id].whole != null ? round(mk.perf[id].whole * 100) : null, mk.perf[id] && mk.perf[id].pct != null ? round(mk.perf[id].pct * 100) : null,
+        ...mk.benchmarks.map(b => b.perf ? b.perf[id] : null)]), [],
       [t("Котировка", "Quote"), t("Цена", "Price"), t("Изм. день, %", "Chg. day, %")], ...mk.overview.map(x => [x.label, x.price, x.change])];
     X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sheet), t("Рынок", "Market"));
   }

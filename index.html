@@ -401,15 +401,25 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .alerts,.docs{grid-template-columns:minmax(0,1fr)}
   .fl{grid-template-columns:20px minmax(0,1fr) 90px} .fl .fm{grid-column:2 / -1; grid-row:2}
 }
+@media (max-width:1020px){
+  .pos .mt{display:none}
+  .pos .nm{min-width:160px}
+  .pos th{white-space:normal}
+}
 @media (max-width:760px){
   .wrap{padding:0 16px}
+  .pos th,.pos td,.pos tfoot td{padding-left:6px; padding-right:6px}
+  .pos tfoot td .sub{display:none}
+  .pos td.mk .sub{display:none}                  /* на телефоне в «Изм.» — только процент; сумма изменения — в карточке позиции */
+  .pos .nm,.pos .nm .sub{overflow-wrap:anywhere}  /* длинные ISIN и тикеры переносятся, а не расширяют таблицу */
   .bar .wrap{flex-wrap:wrap; padding-top:8px; padding-bottom:8px; gap:8px}
   .client{flex:1 1 140px; width:auto}
   #addBtn,#newBtn{padding:6px 9px}
   .drop{padding:34px 20px 28px; border-radius:22px} .drop h1{font-size:26px}
   .how{grid-template-columns:minmax(0,1fr)}
-  .pos th:nth-child(2),.pos td:nth-child(2),.pos th:nth-child(3),.pos td:nth-child(3),.pos th:nth-child(4),.pos td:nth-child(4),.pos th:nth-child(5),.pos td:nth-child(5),.pos th:nth-child(6),.pos td:nth-child(6){display:none}
-  .pos tr.gh td[colspan],.pos tfoot td[colspan],.pos tr.lockrow td[colspan]{display:table-cell}
+  /* колонки «Где», «Кол-во», «Цена», «Стоимость», «Сейчас» помечены классом mh во всех строках (у категорий, «Итого» и замка —
+     пустой ячейкой той же ширины), поэтому после скрытия строки выравниваются одинаково и итоги остаются на экране */
+  .pos .mh{display:none}
   .ov,.news-grid{grid-template-columns:minmax(0,1fr)}
   .cmp-h,.cmp-r{grid-template-columns:78px minmax(0,1fr) minmax(0,1fr); gap:8px}
   .pos .nm{min-width:0}
@@ -418,11 +428,17 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .search{width:100%}
   .paywall .pa{align-items:stretch; width:100%}
   .chat{width:100vw; border-left:0}
-  .chat-fab{right:16px; bottom:16px; padding:11px 14px 11px 12px}
+  .chat-fab{right:16px; bottom:16px; padding:12px}
+  .chat-fab span{display:none}                    /* на телефоне — только значок и число тем, чтобы не закрывать таблицу */
   .chat-nudge{right:16px; bottom:72px}
   .sh-hint{display:none}
   .starters{flex-wrap:nowrap; overflow-x:auto; margin-right:-4px; padding-bottom:2px}
   .starters .sug{white-space:nowrap}
+}
+
+@media (max-width:360px){
+  table.pos{font-size:12.5px}
+  .pos tr.gh td:first-child,.pos .nm b{-webkit-hyphens:auto; hyphens:auto}   /* «Альтернатив-ные активы» на 320 px */
 }
 
 /* Печать: светлая бумага, всё раскрыто, без кнопок */
@@ -512,10 +528,10 @@ WL.apiReady = (async () => {
 <script src="wealth/track.js?v=28c9c9c48152"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=060f346364c4"></script>
-<script src="wealth/report.js?v=fe42b2a7b77b"></script>
-<script src="wealth/market.js?v=3532b636f415"></script>
+<script src="wealth/report.js?v=a63b27eb6784"></script>
+<script src="wealth/market.js?v=75b336d2bdf2"></script>
 <script src="wealth/pay.js?v=57f94cccba8f"></script>
-<script src="wealth/view.js?v=010d1c2e925f"></script>
+<script src="wealth/view.js?v=2f6755d7d532"></script>
 <script src="wealth/chat.js?v=fd7898daa189"></script>
 <script src="wealth/demo.js?v=c8b504f61923"></script>
 <script src="wealth/app.js?v=ab40f8339a4e"></script>
