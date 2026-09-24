@@ -144,8 +144,7 @@ function renderPanel(){
     el = document.createElement("aside"); el.id = "chat"; el.className = "chat"; el.setAttribute("aria-label", t("Обсуждение портфеля", "Portfolio discussion"));
     document.body.appendChild(el);
   }
-  const prev = $("#chatForm textarea");
-  if(prev) C.draft = prev.value;
+  const prev = $("#chatForm textarea");                  // черновик хранится в C.draft (обновляется при вводе), здесь только фокус
   const focused = prev && document.activeElement === prev;
   el.classList.toggle("open", C.open);
   el.setAttribute("aria-hidden", C.open ? "false" : "true");
@@ -215,14 +214,20 @@ async function turn(topic, text){
   const body = Object.assign({lang: WL.lang, rid: rid(), topic: {kind: topic.kind, title: topic.title, text: topic.text, level: topic.level, positions: topic.refs || []},
     messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(), preview: !S().demo && WL.pay.locked(),
     tally: tally() || undefined, packs: packs()}, auth());
-  const r = await WL.api("/chat", body, {timeout: 200000});
+  const r = await WL.api("/chat", body, {timeout: 285000});
   C.pending.delete(id);
   if(r && r.credits){ C.credits = Object.assign(r.credits, {rid: rid()}); keepTally(r.credits); }
   if(r && r.reply){ ch.messages.push({role: "assistant", text: r.reply, at: Date.now()}); ch.suggestions = r.suggestions || []; ch.updated = Date.now(); }
   else if(r && r.error === "no_credits"){ if(text){ ch.messages.pop(); C.draft = text; } }
   else if(r && r.error === "no_opens"){ C.errors[id] = {text: t("Ассистент уже открыл много тем в этом отчёте — задайте вопрос сами, внизу.", "The assistant has already opened many topics in this report — ask your question below.")}; }
   else if(r && r.error === "quota"){ if(text){ ch.messages.pop(); C.draft = text; } C.errors[id] = {text: t("Слишком много вопросов за час — попробуйте чуть позже.", "Too many questions this hour — try again a little later.")}; }
-  else { if(text){ ch.messages.pop(); } C.errors[id] = {text: t("Ответ не пришёл.", "No answer came back."), retry: () => turn(topic, text)}; }
+  else {
+    if(text){ ch.messages.pop(); C.draft = text; }       // вопрос возвращается в поле ввода — набирать заново не нужно
+    const why = {busy: t("Сервис сейчас перегружен — повторите через минуту.", "The service is busy right now — try again in a minute."),
+      timeout: t("Ответ готовился слишком долго.", "The answer took too long."), network: t("Нет связи с сервером — проверьте интернет.", "No connection to the server — check the internet."),
+      too_large: t("Ответ получился слишком длинным — сузьте вопрос.", "The answer came out too long — narrow the question.")}[r && r.error];
+    C.errors[id] = {text: why || t("Ответ не пришёл.", "No answer came back."), retry: () => { C.draft = ""; turn(topic, text); }};
+  }
   if(!ch.messages.length) delete chats()[id];
   WL.save(); renderPanel(); launcher();
 }
@@ -306,5 +311,5 @@ document.addEventListener("keydown", e => {
   if(e.key === "Enter" && !e.shiftKey && !e.isComposing && e.target.closest && e.target.closest("#chatForm")){ e.preventDefault(); e.target.form.requestSubmit(); }
   if(e.key === "Escape" && C.open && !document.querySelector(".modal-wrap") && !($("#drawer") && $("#drawer").classList.contains("open"))) WL.closeChat();
 });
-document.addEventListener("input", e => { if(e.target.closest && e.target.closest("#chatForm")) grow(e.target); });
+document.addEventListener("input", e => { if(e.target.closest && e.target.closest("#chatForm")){ C.draft = e.target.value; grow(e.target); } });
 })();
