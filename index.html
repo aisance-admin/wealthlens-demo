@@ -394,6 +394,27 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 .hchart .ha{fill:var(--accent); opacity:.1} .hchart .hl{fill:none; stroke:var(--accent); stroke-width:2; stroke-linejoin:round; stroke-linecap:round}
 .hchart .hl.live{stroke-dasharray:4 4; opacity:.8}
 .hchart .hp{fill:var(--accent); stroke:var(--surface); stroke-width:2} .hchart .hp.open{fill:var(--surface); stroke:var(--accent); stroke-width:2} .hchart .hp.live{fill:var(--up)}
+/* Стоимость по дням: график с подсказкой под указателем, последние дни таблицей */
+.navtop{display:flex; flex-wrap:wrap; gap:12px 24px; align-items:flex-end; justify-content:space-between; margin-bottom:8px}
+.navtop .dv b{font-size:24px}
+.navtop .chips{gap:4px} .navtop .chips button{padding:4px 8px; font-size:12px}
+.navplot{position:relative}
+.navchart{touch-action:pan-y; cursor:crosshair; -webkit-tap-highlight-color:transparent}
+.navchart:focus-visible{outline:2px solid var(--accent); outline-offset:4px; border-radius:6px}
+.hchart .hp.na{r:3; fill:var(--surface); stroke:var(--accent); stroke-width:1.5} .hchart .hp.end{r:4.5}
+.hchart .nx{stroke:var(--ink-2); stroke-width:1; stroke-dasharray:3 3; vector-effect:non-scaling-stroke}
+.hchart .nm{r:5; fill:var(--accent); stroke:var(--ground); stroke-width:2}
+.navtip{position:absolute; left:0; top:0; z-index:5; pointer-events:none; display:grid; gap:1px; padding:7px 10px; border-radius:10px;
+  background:#131C28; border:1px solid var(--line-2); box-shadow:var(--shadow); font-size:12px; white-space:nowrap; color:var(--ink-2)}
+.navtip[hidden]{display:none} .navtip b{font-size:15px; font-weight:650; color:var(--ink); font-variant-numeric:tabular-nums}
+.navtip .up{color:var(--up)} .navtip .dn{color:var(--dn)}
+.navt{width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums}
+.navt th{font:600 10px/1.3 var(--mono); letter-spacing:.08em; text-transform:uppercase; color:var(--muted); text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap}
+.navt td{padding:7px 8px; border-top:1px solid var(--line); text-align:right; white-space:nowrap}
+.navt .l{text-align:left} .navt td.l{font:500 12px var(--mono); color:var(--ink-2)}
+.navt .tag{margin-left:8px; font:500 10.5px var(--mono); color:var(--accent)}
+.navt .pos{color:var(--up)} .navt .neg{color:var(--dn)} .navt .mo{display:none}
+.navmore{margin-top:10px}
 .hlist{list-style:none; margin:0; padding:0; display:grid}
 .hlist li{display:grid; grid-template-columns:88px minmax(0,1fr) auto auto; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--line); font-size:13px}
 .hlist .hd{font:500 12px var(--mono); color:var(--ink-2)} .hlist .hn .sub{display:block; color:var(--muted); font-size:11.5px; margin-top:2px}
@@ -429,7 +450,7 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .fl .fb{grid-column:3; grid-row:1} .fl .fx{grid-column:4; grid-row:1}
 }
 @media screen and (max-width:1020px){
-  .hchart .hv,.hchart .hx{font-size:17px} .hchart .hp{r:6.5}
+  .hchart .hv,.hchart .hx{font-size:17px} .hchart .hp{r:6.5} .hchart .hp.na{r:4.5} .hchart .hp.end{r:6.5} .hchart .nm{r:7}
   .pos .mt{display:none}
   .pos .nm{min-width:160px}
   .pos th{white-space:normal}
@@ -461,6 +482,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .chat-nudge{right:16px; bottom:72px}
   .sh-hint{display:none}
   .hchart.hc-wide{display:none} .hchart.hc-narrow{display:block} .hchart.hc-narrow .hv,.hchart.hc-narrow .hx{font-size:17px} .hchart.hc-narrow .hp{r:6.5}
+  .hchart.hc-narrow .hp.na{r:5} .navt th,.navt td{padding-left:5px; padding-right:5px} .navt td.l{font-size:11.5px}
+  .navt .mh,.navt .wd{display:none} .navt .mo{display:block; font-size:11.5px} .navt .tag{display:block; margin:2px 0 0}
   .hlist li{grid-template-columns:minmax(0,1fr) auto; gap:4px 10px} .hlist .hd{grid-column:1} .hlist .hn{grid-column:1 / -1; grid-row:2} .hlist li .badge{grid-column:1 / -1; justify-self:start}
   .dyn .chips button{white-space:nowrap}
   .starters{flex-wrap:nowrap; overflow-x:auto; margin-right:-4px; padding-bottom:2px}
@@ -498,7 +521,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .alerts > .alert:nth-child(odd),.docs > .doc:nth-child(odd){margin-right:4mm}
   .keep{display:inline-block; width:100%; vertical-align:top}   /* заголовок раздела и первый ряд карточек — на одной странице */
   #holdings{break-before:page; page-break-before:always}
-  #history .card{break-inside:avoid; page-break-inside:avoid} .hchart .ha{opacity:.12}          /* таблица позиций — с новой страницы, а не шапкой внизу предыдущей */
+  #history .card,#nav .card{break-inside:avoid; page-break-inside:avoid} .hchart .ha{opacity:.12} .navtip,.hchart .nx,.hchart .nm{display:none}
+  .hchart .hv,.hchart .hx{font-size:21px} .hchart .hp,.hchart .hp.end{r:7} .hchart .hp.na{r:5}   /* широкий график на A4 сжат вдвое — подписи иначе ~5 pt */          /* таблица позиций — с новой страницы, а не шапкой внизу предыдущей */
   .alerts.more,.docs.more{margin-top:0}
   .hero .card,.two .card,.brief,.qlist li{break-inside:avoid; page-break-inside:avoid}
   .sh,h2,h3{break-after:avoid; page-break-after:avoid}
@@ -543,13 +567,14 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/track.js?v=689876582aab"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=7a84e6edd872"></script>
-<script src="wealth/report.js?v=34280f626f96"></script>
+<script src="wealth/report.js?v=a49f5719d760"></script>
 <script src="wealth/market.js?v=75b336d2bdf2"></script>
-<script src="wealth/period.js?v=dc659bb18ca4"></script>
+<script src="wealth/period.js?v=f1a477c3fdab"></script>
+<script src="wealth/nav.js?v=6e7b32aca772"></script>
 <script src="wealth/pay.js?v=d5482dcb642b"></script>
-<script src="wealth/view.js?v=dbf96e2b0cd8"></script>
+<script src="wealth/view.js?v=d17b3abe02ec"></script>
 <script src="wealth/chat.js?v=f0e886576145"></script>
 <script src="wealth/demo.js?v=c8b504f61923"></script>
-<script src="wealth/app.js?v=5c2fe28c3443"></script>
+<script src="wealth/app.js?v=b6929b469dcc"></script>
 </body>
 </html>

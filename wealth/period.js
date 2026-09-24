@@ -21,20 +21,28 @@ function startOf(id, end){
 }
 WL.windowStart = startOf;
 
-/* Курсы ЕЦБ по дням — один запрос на отчёт: валюты позиций, с самой ранней нужной даты по сегодня. */
-let fxs = null, fxsKey = "";
-WL.ensureFxSeries = async (M) => {
+/* Курсы ЕЦБ по дням — один запрос на отчёт: валюты позиций (и старых выписок), с самой ранней нужной даты по сегодня.
+   extra — валюты котировок раздела «Стоимость по дням»; они запоминаются, чтобы следующий пересчёт их не потерял.
+   Запросы идут по одному: следующий видит, что уже загружено, и не затирает ряд более узким. */
+let fxs = null, fxsBusy = null;
+const fxExtra = new Set();
+WL.ensureFxSeries = async (M, extra = []) => {
   if(!M) return false;
-  const base = M.base, ccys = [...new Set(M.positions.map(p => p.ccy).filter(c => c && c !== base))].sort();
+  for(const c of extra) if(c) fxExtra.add(c);
+  while(fxsBusy) await fxsBusy.catch(() => {});
+  const histCcy = (M.hist ? M.hist.lines : []).flatMap(L => L.snaps.flatMap(s => s.pos.map(p => p.ccy)));
+  const base = M.base, ccys = [...new Set(M.positions.map(p => p.ccy).concat(histCcy, [...fxExtra]).filter(c => c && c !== base && /^[A-Z]{3}$/.test(c)))].sort();
   if(!ccys.length) return false;
   const dates = M.positions.map(p => p.bought).filter(Boolean).concat((M.hist ? M.hist.lines : []).flatMap(L => L.points.map(p => p.date)));
   const five = startOf("5y", WL.today()), from = dates.concat(five).sort()[0];
-  const key = [base, ccys.join(","), from].join("|");
-  if(fxs && fxsKey === key) return false;
-  const r = await WL.api(`/fx/series?base=${base}&symbols=${ccys.join(",")}&from=${from}`, undefined, {timeout: 30000});
-  if(!r || !Array.isArray(r.dates) || !r.dates.length) return false;
-  fxs = r; fxsKey = key;
-  return true;
+  if(fxs && fxs.base === base && fxs.from <= from && fxs.to >= WL.today() && ccys.every(c => fxs.asked.includes(c))) return false;
+  fxsBusy = WL.api(`/fx/series?base=${base}&symbols=${ccys.join(",")}&from=${from}`, undefined, {timeout: 30000});
+  try{
+    const r = await fxsBusy;
+    if(!r || !Array.isArray(r.dates) || !r.dates.length) return false;
+    fxs = Object.assign(r, {asked: ccys, from, to: WL.today()});
+    return true;
+  }finally{ fxsBusy = null; }
 };
 /* Единиц валюты за 1 единицу валюты отчёта на дату (последний рабочий день ЕЦБ не позже даты). */
 function rateOn(base, ccy, date){

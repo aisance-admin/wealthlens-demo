@@ -371,7 +371,8 @@ function historyOf(chosen, conv){
       const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0};
       if(a.v == null){ missing++; continue; }
       const v = a.v + (b.v || 0); value += v;
-      pos.push({key: posKey(r, d), cls: r.cls, qty: r.qty, price: r.price, unit: r.unit, vb: v});
+      pos.push({key: posKey(r, d), cls: r.cls, qty: r.qty, price: r.price, unit: r.unit, vb: v, isin: r.isin || "", ticker: r.ticker || "", name: r.name || "",
+        ccy: r.ccy || d.ref_ccy || "", value: r.value, accrued: r.accrued || 0});
     }
     const snap = {id: d.id, file: d.file, as_of: d.as_of, from: d.period_from || "", to: d.period_to || "", value, missing, pos, flows: flowsOf(d, conv), current: !!x.use};
     const ia = accts(d), inst = normInst(d.institution);

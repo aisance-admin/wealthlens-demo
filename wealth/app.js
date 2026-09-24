@@ -47,6 +47,8 @@ WL.refreshMarket = () => {
     WL.marketLoading = false; marketBusy = null;
     if(!ok) WL.toast(t("Котировки не загрузились — показаны данные выписок. Попробуйте «Обновить» позже.", "Market data did not load — statement values are shown. Try “Refresh” later."));
     await WL.rebuild();
+    // цены закрытия по дням — для раздела «Стоимость по дням»; пришли — перерисовать
+    if(WL.nav) WL.nav.load(WL.model, WL.state).then(ch => { if(ch){ WL.fxsVer = (WL.fxsVer || 0) + 1; WL.render(); } });
     return ok;
   });
   return marketBusy;
@@ -343,8 +345,15 @@ document.addEventListener("input", e => {
   if(e.target.id === "search"){ clearTimeout(searchTimer); const v = e.target.value; searchTimer = setTimeout(() => { WL.ui.search = v; WL.ui.only = null; WL.render(); }, 140); }
   if(e.target.id === "client"){ clearTimeout(clientTimer); const v = e.target.value; clientTimer = setTimeout(() => { WL.state.client = v.slice(0, 80); WL.save(); }, 250); }
 });
+/* График «Стоимость по дням»: подсказка под указателем или пальцем (палец — ведением по графику), стрелки — по дням. */
+const navOf = e => e.target && e.target.closest ? e.target.closest(".navchart") : null;
+document.addEventListener("pointermove", e => { const g = navOf(e); if(g && WL.navHover) WL.navHover(g, e.clientX); });
+document.addEventListener("pointerdown", e => { const g = navOf(e); if(g){ if(WL.navHover) WL.navHover(g, e.clientX); } else if(WL.navLeave) WL.navLeave(); });
+document.addEventListener("pointerout", e => { const g = navOf(e); if(g && e.pointerType === "mouse" && !(e.relatedTarget && g.contains(e.relatedTarget)) && WL.navLeave) WL.navLeave(g); });
+document.addEventListener("focusout", e => { const g = navOf(e); if(g && WL.navLeave) WL.navLeave(g); });
 document.addEventListener("keydown", e => {
   if(e.key === "Escape" && $("#drawer").classList.contains("open")) WL.closeDrawer();
+  if(navOf(e) && WL.navKey && WL.navKey(e.target, e.key)) e.preventDefault();
   if(e.key === "Enter" && e.target.matches && e.target.matches("tr.pr")) WL.openPos(e.target.dataset.pos);
 });
 document.addEventListener("click", async e => {
@@ -360,6 +369,7 @@ document.addEventListener("click", async e => {
   const menu = $("#dlMenu"); if(menu && !menu.hidden && !el.closest("#dlMenu")) menu.hidden = true;
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
   if(d.per){ WL.ui.per = d.per; return WL.render(); }
+  if(d.navAll !== undefined){ WL.ui.navAll = !WL.ui.navAll; return WL.render(); }
   if(d.val){ WL.ui.val = d.val; return WL.render(); }
   if(d.bench){ WL.ui.bench = d.bench; return WL.render(); }
   if(d.refreshMarket !== undefined) return WL.refreshMarket();
