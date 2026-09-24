@@ -13,6 +13,57 @@ function thirdFriday(minDays){
 }
 const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d; };
 
+/* Итоги выписок примера — из самих строк, как их напечатал бы банк: сверка в примере всегда сходится. */
+const r2 = v => Math.round(v * 100) / 100;
+const refSum = d => d.rows.reduce((s, r) => s + (r.ccy === d.ref_ccy ? r.value : r.value_ref || 0), 0);
+const accr = d => d.rows.reduce((s, r) => s + (r.ccy === d.ref_ccy ? (r.accrued || 0) : r.value && r.value_ref && r.accrued ? r.accrued * r.value_ref / r.value : 0), 0);
+function totals(docA, docB, docC){
+  docA.totals = [{label: t("Итого портфель, включая НКД", "Total portfolio incl. accrued interest"), scope: "total", account: "", currency: "USD", amount: r2(refSum(docA) + accr(docA)), accrued: "incl", page: 2}];
+  docB.totals = [{label: "Total Account Value", scope: "total", account: "", currency: "USD", amount: r2(refSum(docB)), accrued: "unknown", page: 1}];
+  docC.totals = [{label: "Closing balance", scope: "account", account: "...0917", currency: "AED", amount: 1250000, accrued: "unknown", page: 1},
+    {label: "Deposit principal", scope: "account", account: "...0925", currency: "AED", amount: 2000000, accrued: "excl", page: 2}];
+}
+/* Цены примера — на дату его выписки. Дата выписки в примере всегда «конец прошлого месяца», а цены в коде постоянные, поэтому,
+   когда приходят цены закрытия по дням, акции и фонды примера переоцениваются по закрытию на дату выписки (итоги — заново
+   из строк). Иначе «Всего сейчас», «Стоимость по дням» и сама выписка расходились бы на движение рынка с тех пор, как цены
+   записаны в код. Без цен закрытия пример остаётся со своими ценами. */
+/* Опционы примера — по модели Блэка–Шоулза от цены акции на дату выписки (волатильность 35%, ставка 4%, 100 акций в контракте). */
+const ncdf = x => { const k = 1 / (1 + 0.2316419 * Math.abs(x)), p = 0.3989423 * Math.exp(-x * x / 2) * k * (0.3193815 + k * (-0.3565638 + k * (1.781478 + k * (-1.821256 + k * 1.330274))));
+  return x > 0 ? 1 - p : p; };
+function bs(S, K, T, right, vol = 0.35, r = 0.04){
+  if(!(T > 0)) return Math.max(0, right === "C" ? S - K : K - S);
+  const d1 = (Math.log(S / K) + (r + vol * vol / 2) * T) / (vol * Math.sqrt(T)), d2 = d1 - vol * Math.sqrt(T);
+  return right === "C" ? S * ncdf(d1) - K * Math.exp(-r * T) * ncdf(d2) : K * Math.exp(-r * T) * ncdf(-d2) - S * ncdf(-d1);
+}
+WL.demoReprice = (s, series) => {
+  if(!s || !s.demo || !series || s.docs.length !== 3) return false;
+  let changed = false;
+  for(const d of s.docs){
+    const moved = {};
+    for(const r of d.rows){
+      if(!["stock", "etf", "fund"].includes(r.cls) || !r.qty || !r.price) continue;
+      const ser = series[WL.market.keyOf(r)];
+      if(!ser || ser.ccy !== r.ccy) continue;
+      let px = null;
+      for(let i = 0; i < ser.dates.length && ser.dates[i] <= d.as_of; i++) px = ser.close[i];
+      if(!(px > 0) || px / r.price < 0.5 || px / r.price > 2 || Math.abs(px / r.price - 1) < 0.0005) continue;
+      const rate = r.value_ref != null && r.value ? r.value_ref / r.value : null;
+      r.price = r2(px); r.value = r2(r.qty * r.price);
+      if(rate != null) r.value_ref = r2(r.value * rate);
+      if(r.ticker) moved[r.ticker] = r.price;
+      changed = true;
+    }
+    for(const r of d.rows){
+      const S = r.cls === "option" && moved[r.under];
+      if(!S || !r.strike || !r.date) continue;
+      r.price = r2(bs(S, r.strike, (Date.parse(r.date) - Date.parse(d.as_of)) / (365 * 864e5), r.right));
+      r.value = r2(r.qty * 100 * r.price);
+    }
+  }
+  if(changed) totals(...s.docs);
+  return changed;
+};
+
 WL.demoState = () => {
   const asOf = iso(monthEnd());
   const row = (o, i, doc) => Object.assign({cls: "other", name: "", isin: "", ticker: "", qty: null, price: null, unit: "", value: null, ccy: "", value_ref: null, accrued: null, cost: null,
@@ -53,15 +104,7 @@ WL.demoState = () => {
       {cls: "cash", name: "Current account AED", value: 1250000, ccy: "AED", acct: "...0917", page: 1},
       {cls: "deposit", name: "Time deposit AED 4.50%", value: 2000000, ccy: "AED", accrued: 22191.78, date: iso(plusDays(152)), coupon: 4.5, acct: "...0925", page: 2},
     ].map((o, i) => row(o, i, "demo-dxb"))};
-  const sum = (d, f) => d.rows.reduce((s, r) => s + (r[f] != null ? r[f] : r.value_ref == null && d.ref_ccy === (r.ccy || d.ref_ccy) ? r.value || 0 : 0), 0);
-  const refSum = d => d.rows.reduce((s, r) => s + (r.ccy === d.ref_ccy ? r.value : r.value_ref || 0), 0);
-  const accr = d => d.rows.reduce((s, r) => s + (r.ccy === d.ref_ccy ? (r.accrued || 0) : r.value && r.value_ref && r.accrued ? r.accrued * r.value_ref / r.value : 0), 0);
-  const r2 = v => Math.round(v * 100) / 100;
-  docA.totals = [{label: t("Итого портфель, включая НКД", "Total portfolio incl. accrued interest"), scope: "total", account: "", currency: "USD", amount: r2(refSum(docA) + accr(docA)), accrued: "incl", page: 2}];
-  docB.totals = [{label: "Total Account Value", scope: "total", account: "", currency: "USD", amount: r2(refSum(docB)), accrued: "unknown", page: 1}];
-  docC.totals = [{label: "Closing balance", scope: "account", account: "...0917", currency: "AED", amount: 1250000, accrued: "unknown", page: 1},
-    {label: "Deposit principal", scope: "account", account: "...0925", currency: "AED", amount: 2000000, accrued: "excl", page: 2}];
-  void sum;
+  totals(docA, docB, docC);
   const files = [docA, docB, docC].map(d => ({id: d.id, name: d.file, size: 0, kind: "pdf", status: "done", done: d.pageCount, total: d.pageCount, hash: d.id}));
   return {v: 2, demo: true, rid: "", client: t("Пример: семья Ивановых", "Sample: the Smith family"), base: "USD", files, docs: [docA, docB, docC], include: {}, review: null, chats: {}, fx: {}};
 };

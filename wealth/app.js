@@ -48,7 +48,12 @@ WL.refreshMarket = () => {
     if(!ok) WL.toast(t("Котировки не загрузились — показаны данные выписок. Попробуйте «Обновить» позже.", "Market data did not load — statement values are shown. Try “Refresh” later."));
     await WL.rebuild();
     // цены закрытия по дням — для раздела «Стоимость по дням»; пришли — перерисовать
-    if(WL.nav) WL.nav.load(WL.model, WL.state).then(ch => { if(ch){ WL.fxsVer = (WL.fxsVer || 0) + 1; WL.render(); } });
+    if(WL.nav) WL.nav.load(WL.model, WL.state).then(async ch => {
+      if(!ch) return;
+      // в примере — цены на дату его выписки (demo.js), затем пересчёт; в настоящем отчёте — только перерисовать
+      if(WL.state.demo && WL.demoReprice && WL.demoReprice(WL.state, WL.nav.series())) await WL.rebuild();
+      WL.fxsVer = (WL.fxsVer || 0) + 1; WL.render();
+    });
     return ok;
   });
   return marketBusy;
