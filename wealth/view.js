@@ -1,4 +1,4 @@
-/* WealthLens · экраны. Всё, что пришло из выписок и от Claude, выводится только через esc(): текст документа не может
+/* WealthLens · экраны. Всё, что пришло из выписок и от ИИ, выводится только через esc(): текст документа не может
    стать разметкой страницы. */
 (function(){
 const WL = window.WL, t = WL.t, esc = WL.esc, fmt = WL.fmt, $ = WL.$;
@@ -29,8 +29,8 @@ function upload(){
     <div class="drop" id="drop">
       <div class="mark"></div>
       <h1>${t("Положите выписки — получите один понятный отчёт", "Drop your statements — get one clear report")}</h1>
-      <p class="lede">${t("Файлы или целую папку: PDF из банков и от брокеров, сканы и фото, Excel. Claude прочитает каждую страницу и разложит всё по полочкам: сколько денег, где они лежат, из чего состоит портфель и на что обратить внимание.",
-        "Files or a whole folder: PDFs from banks and brokers, scans and photos, Excel. Claude reads every page and lays it all out: how much there is, where it sits, what the portfolio is made of and what needs attention.")}</p>
+      <p class="lede">${t("Файлы или целую папку: PDF из банков и от брокеров, сканы и фото, Excel. Мы прочитаем каждую страницу и разложим всё по полочкам: сколько денег, где они лежат, из чего состоит портфель и на что обратить внимание.",
+        "Files or a whole folder: PDFs from banks and brokers, scans and photos, Excel. We read every page and lay it all out: how much there is, where it sits, what the portfolio is made of and what needs attention.")}</p>
       <div class="actions">
         <button class="btn primary big" type="button" data-pick="files">${t("Выбрать файлы", "Choose files")}</button>
         <button class="btn big" type="button" data-pick="folder">${t("Выбрать папку", "Choose a folder")}</button>
@@ -40,11 +40,11 @@ function upload(){
     </div>
     <ol class="how">
       <li><b>${t("Кладёте файлы", "Drop the files")}</b><span>${t("Любые выписки, в любом виде и на любом языке.", "Any statements, in any layout or language.")}</span></li>
-      <li><b>${t("Claude читает", "Claude reads them")}</b><span>${t("Каждую страницу, как человек: таблицы, итоги, валюты.", "Every page, like a person would: tables, totals, currencies.")}</span></li>
+      <li><b>${t("Читаем каждую страницу", "We read every page")}</b><span>${t("Как человек: таблицы, итоги, валюты — с помощью ИИ.", "Like a person would: tables, totals, currencies — with AI.")}</span></li>
       <li><b>${t("Получаете отчёт", "You get the report")}</b><span>${t("Здесь в браузере, в PDF и в Excel.", "Here in the browser, as PDF and as Excel.")}</span></li>
     </ol>
-    <p class="privacy">${ICON.lock}<span>${t("Страницы выписок читает ИИ Claude компании Anthropic через наш сервер. Мы не храним ни файлы, ни результат: отчёт остаётся в этом браузере.",
-      "Statement pages are read by Anthropic's Claude AI through our server. We store neither the files nor the result: the report stays in this browser.")}
+    <p class="privacy">${ICON.lock}<span>${t("Выписки читает наша технология на основе ИИ. Мы не храним ни файлы, ни результат: отчёт остаётся в этом браузере.",
+      "Statements are read by our AI-based technology. We store neither the files nor the result: the report stays in this browser.")}
       ${WL.pay.ON_SITE ? `<a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Подробнее", "Details")}</a>` : ""}</span></p>
   </section>`;
 }
@@ -73,7 +73,7 @@ function readingPanel(){
   if(!WL.reading && !active.length) return "";
   const pages = files.reduce((s, f) => s + (f.total || 0), 0), done = files.reduce((s, f) => s + (f.done || 0), 0);
   return `<section class="reading card" id="reading" aria-live="polite">
-    <div class="rh"><span class="orb">${ICON.spark}</span><div><h2>${t("Claude читает выписки", "Claude is reading your statements")}</h2>
+    <div class="rh"><span class="orb">${ICON.spark}</span><div><h2>${t("Читаем выписки", "Reading your statements")}</h2>
       <p class="muted">${pages ? t(`${done} из ${pages} страниц · отчёт собирается ниже по мере чтения`, `${done} of ${pages} pages · the report builds up below as it reads`) : t("готовлю страницы…", "preparing pages…")}</p></div></div>
     <ul class="files">${files.map(fileLine).join("")}</ul>
   </section>`;
@@ -121,14 +121,14 @@ function mix(m){
 function claude(){
   const s = S(), r = s.review, m = M();
   let body;
-  if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда Claude дочитает все файлы.", "The summary appears once Claude has read all files.")}</p>`;
+  if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
   else if(WL.reviewing) body = `<div class="skel"><i></i><i></i><i style="width:62%"></i></div>`;
   else if(r && r.summary) body = `<p class="summary">${esc(r.summary)}</p>${r.base && r.base !== m.base ? `<p class="fine">${t(`Суммы в сводке — в ${r.base}.`, `Amounts in the summary are in ${r.base}.`)}</p>` : ""}`;
   else if(r && r.error) body = `<p class="muted">${t("Сводку получить не удалось.", "Could not get the summary.")} <button class="link" type="button" data-review>${t("Повторить", "Try again")}</button></p>`;
-  else body = `<p class="muted"><button class="link" type="button" data-review>${t("Получить сводку от Claude", "Get a summary from Claude")}</button></p>`;
+  else body = `<p class="muted"><button class="link" type="button" data-review>${t("Получить сводку", "Get the summary")}</button></p>`;
   const qa = (s.qa || []).map(x => `<div class="q">${esc(x.q)}</div><div class="a">${x.a == null ? '<div class="skel"><i></i><i style="width:48%"></i></div>' : esc(x.a)}</div>`).join("");
   return `<section class="card claude" id="claude">
-    <div class="ch"><span class="orb">${ICON.spark}</span><div><div class="eyebrow">${t("Коротко о портфеле", "The portfolio in brief")}</div><span class="muted small">${t("сводка Claude по прочитанным выпискам", "Claude's summary of the statements it read")}</span></div></div>
+    <div class="ch"><span class="orb">${ICON.spark}</span><div><div class="eyebrow">${t("Коротко о портфеле", "The portfolio in brief")}</div><span class="muted small">${t("по прочитанным выпискам", "from the statements read")}</span></div></div>
     ${body}
     <div class="qa" id="qa">${qa}</div>
     <form class="ask" id="ask" autocomplete="off"><input name="q" maxlength="600" placeholder="${t("Спросите про свой портфель: сколько в облигациях, что погашается в этом году…", "Ask about your portfolio: how much is in bonds, what matures this year…")}" aria-label="${t("Вопрос по отчёту", "Question about the report")}">
@@ -146,7 +146,7 @@ function alertsBlock(){
   return `<section class="sec" id="alerts"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span></div>
     <div class="alerts">${all.map((a, i) => {
       const hide = lock && i > 0;
-      return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}"><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}Claude</span>`}</div>
+      return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}"><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ-анализ", "AI analysis")}</span>`}</div>
         <h3>${esc(a.title)}</h3>${hide ? `<p class="muted lockline">${ICON.lock}${t("Подробности — в полном отчёте", "Details are in the full report")}</p>` : `<p>${esc(a.text)}</p>`}
         ${!hide && (a.refs || []).some(id => pos(id)) ? `<button class="link" type="button" data-show="${esc((a.refs || []).filter(id => pos(id)).slice(0, 40).join(","))}">${t("Показать позиции", "Show positions")}</button>` : ""}</article>`; }).join("")}</div>
   </section>`;
@@ -277,7 +277,7 @@ function method(){
   const m = M(), src = new Set(m.positions.map(p => p.fxSrc));
   const rates = [src.has("statement") ? t("курсы из самих выписок", "rates from the statements themselves") : "", src.has("ecb") ? t("курсы ЕЦБ на дату выписки", "ECB rates on the statement date") : "",
     src.has("alt") || src.has("peg") ? t("для валют, которых нет у ЕЦБ, — открытый набор курсов currency-api и привязка к доллару", "for currencies the ECB doesn't publish — the open currency-api rates and dollar pegs") : ""].filter(Boolean);
-  return `<footer class="method"><p>${t("Позиции и итоги прочитал Claude (Anthropic) прямо из страниц выписок; числа не пересчитывались, кроме перевода в валюту отчёта", "Positions and totals were read by Claude (Anthropic) straight from the statement pages; numbers are as printed, except the conversion to the report currency")}${rates.length ? ": " + esc(rates.join("; ")) : ""}.
+  return `<footer class="method"><p>${t("Позиции и итоги прочитаны прямо со страниц выписок; числа не пересчитывались, кроме перевода в валюту отчёта", "Positions and totals were read straight from the statement pages; numbers are as printed, except the conversion to the report currency")}${rates.length ? ": " + esc(rates.join("; ")) : ""}.
     ${t("Итог включает накопленный купон, если банк его показывает. Отчёт показывает факты из выписок и не является инвестиционной рекомендацией.", "The total includes accrued interest where the bank shows it. The report states facts from the statements and is not investment advice.")}</p>
     <p class="muted">WealthLens · ${esc(fmt.date(WL.today()))}${S().rid && !S().demo ? ` · ${t("отчёт", "report")} ${esc(S().rid)}` : ""}</p></footer>`;
 }
@@ -294,7 +294,7 @@ function report(){
   const printHead = `<div class="print-head"><div class="brandline">WealthLens</div><h1>${esc(S().client || t("Портфель", "Portfolio"))}</h1>
     <p>${t("Отчёт по портфелю", "Portfolio report")} · ${esc(fmt.date(WL.today()))}</p></div>`;
   if(!m.positions.length) return printHead + demoBar() + readingPanel() + (WL.reading ? "" : `<section class="card empty"><h2>${t("Позиций не нашлось", "No positions found")}</h2>
-    <p class="muted">${t("В этих файлах Claude не нашёл ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "Claude found no balances or securities in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
+    <p class="muted">${t("В этих файлах не нашлось ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "No balances or securities were found in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
   return printHead + demoBar() + readingPanel() + hero() + paywall() + claude() + alertsBlock() + questions() + holdings() + currenciesAndDates() + files() + method();
 }
 
@@ -373,7 +373,7 @@ WL.excel = async () => {
     [t("Категория", "Category"), base, t("Доля, %", "Share, %"), t("Позиций", "Positions")], ...m.byCat.map(c => [c.label, round(c.value), round(c.share * 100), c.count]), [],
     [t("Банк", "Institution"), base, t("Доля, %", "Share, %"), t("Дата", "As of")], ...m.byInst.map(i => [i.name, round(i.value), round(i.share * 100), i.as_of.join(", ")]), [],
     [t("Валюта", "Currency"), base, t("Доля, %", "Share, %")], ...m.byCcy.map(c => [c.ccy, round(c.value), round(c.share * 100)])];
-  if(r.summary) sum.push([], [t("Коротко (Claude)", "In brief (Claude)")], [r.summary]);
+  if(r.summary) sum.push([], [t("Коротко о портфеле", "The portfolio in brief")], [r.summary]);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sum), t("Сводка", "Summary"));
   const head = [t("Категория", "Category"), t("Бумага", "Security"), "ISIN", t("Тикер", "Ticker"), t("Банк", "Institution"), t("Счёт", "Account"), t("Количество", "Quantity"),
     t("Цена", "Price"), t("Цена в % номинала", "Price in % of nominal"), t("Стоимость", "Value"), t("Валюта", "Currency"), t("Накопленный купон", "Accrued interest"),
@@ -392,8 +392,8 @@ WL.excel = async () => {
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(docs), t("Выписки", "Statements"));
   const al = [[t("Уровень", "Level"), t("Что", "What"), t("Подробно", "Details"), t("Источник", "Source")]];
   for(const a of m.alerts) al.push([LVL[a.level], a.title, a.text, t("расчёт", "calculation")]);
-  for(const a of (r.alerts || [])) al.push([LVL[a.level], a.title, a.text, "Claude"]);
-  for(const q of (r.questions || [])) al.push([t("Уточнить", "Check"), q.text, "", "Claude"]);
+  for(const a of (r.alerts || [])) al.push([LVL[a.level], a.title, a.text, t("ИИ-анализ", "AI analysis")]);
+  for(const q of (r.questions || [])) al.push([t("Уточнить", "Check"), q.text, "", t("ИИ-анализ", "AI analysis")]);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(al), t("Внимание", "Attention"));
   const name = `${(s.client || "WealthLens").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim()} ${WL.today()}.xlsx`;
   X.writeFile(wb, name);

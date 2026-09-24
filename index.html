@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E %3Cdefs%3E %3ClinearGradient id=%22fl%22 x1=%2224%22 y1=%2217%22 x2=%2240%22 y2=%2247%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFF3D1%22/%3E%3Cstop offset=%22.48%22 stop-color=%22%23F3BD58%22/%3E%3Cstop offset=%221%22 stop-color=%22%23B27A26%22/%3E%3C/linearGradient%3E %3ClinearGradient id=%22fr%22 x1=%224%22 y1=%2210%22 x2=%2260%22 y2=%2254%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFE2A3%22/%3E%3Cstop offset=%221%22 stop-color=%22%23C8913A%22/%3E%3C/linearGradient%3E %3C/defs%3E %3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%230B111A%22/%3E %3Ccircle cx=%2223.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Ccircle cx=%2240.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Cpath d=%22M32 20.25A14.5 14.5 0 0 1 32 43.75A14.5 14.5 0 0 1 32 20.25Z%22 fill=%22url(%23fl)%22/%3E %3C/svg%3E">
 <title>WealthLens · отчёт по портфелю</title>
-<meta name="description" content="Положите выписки из банков и от брокеров — Claude прочитает их и соберёт один понятный отчёт по портфелю.">
+<meta name="description" content="Положите выписки из банков и от брокеров — мы прочитаем их и соберём один понятный отчёт по портфелю.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=swap">
@@ -164,7 +164,7 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .paywall h2{margin:6px 0 4px; font-size:18px} .paywall p{margin:0; font-size:13.5px; max-width:62ch}
 .pa{display:flex; flex-direction:column; align-items:flex-end; gap:8px}
 
-/* Claude */
+/* Сводка */
 .claude{margin-top:18px; padding:20px 22px}
 .ch{display:flex; gap:12px; align-items:center; margin-bottom:10px}
 .summary{font-size:16px; line-height:1.62; margin:4px 0 0; max-width:88ch; color:var(--ink)}
@@ -326,7 +326,7 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 }
 </style>
 </head>
-<body data-drop="Отпустите файлы — Claude их прочитает">
+<body data-drop="Отпустите файлы — мы их прочитаем">
 <header class="bar" id="bar" hidden>
   <div class="wrap">
     <a class="brand" href="./">WealthLens</a>
@@ -360,7 +360,7 @@ WL.t = (ru, en) => WL.lang === "en" ? en : ru;
 document.documentElement.lang = WL.lang;
 if(WL.lang === "en"){
   document.title = "WealthLens · portfolio report";
-  document.body.dataset.drop = "Drop the files — Claude will read them";
+  document.body.dataset.drop = "Drop the files — we will read them";
   const tx = {langBtn: ["RU", "Русский"], addBtn: ["Add files"], newBtn: ["New report"], dlBtn: ["Download"]};
   for(const [id, [text, title]] of Object.entries(tx)){ const b = document.getElementById(id); b.textContent = text; if(title) b.title = title; }
   document.getElementById("langBtn").lang = "ru";
@@ -378,12 +378,12 @@ WL.apiReady = (async () => {
 </script>
 <script>window.WL_PIXEL_ID = ""; window.WL_SUPPORT_EMAIL = ""; window.WL_ACCESS_KEY = null;   /* подставляет site/inject.py: пиксель и почта — из site/config.json, открытый ключ разрешений на доступ — с api.euroaff.eu */</script>
 <script src="wealth/track.js?v=28c9c9c48152"></script>
-<script src="wealth/core.js?v=b228552c41a3"></script>
-<script src="wealth/read.js?v=72291767e4d2"></script>
-<script src="wealth/report.js?v=e13e07375c66"></script>
-<script src="wealth/pay.js?v=200cc3de8f45"></script>
-<script src="wealth/view.js?v=36676862d8cb"></script>
-<script src="wealth/demo.js?v=a82ea026d271"></script>
-<script src="wealth/app.js?v=afd825127b84"></script>
+<script src="wealth/core.js?v=98e5e09d3f90"></script>
+<script src="wealth/read.js?v=060f346364c4"></script>
+<script src="wealth/report.js?v=0b332a75e49f"></script>
+<script src="wealth/pay.js?v=57f94cccba8f"></script>
+<script src="wealth/view.js?v=68122adc6ba1"></script>
+<script src="wealth/demo.js?v=9791bfca64cb"></script>
+<script src="wealth/app.js?v=2943478884f2"></script>
 </body>
 </html>

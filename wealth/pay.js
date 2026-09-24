@@ -159,7 +159,7 @@ let busy = false;
 pay.open = async source => {
   const s = S();
   if(!WL.model || !WL.model.positions.length){ WL.toast(t("В отчёте пока нет позиций — оплачивать нечего.", "The report has no positions yet, so there is nothing to pay for.")); return; }
-  if(WL.reading){ WL.toast(t("Дождитесь, пока Claude дочитает файлы: оплачивается отчёт со всеми выписками.", "Wait until Claude finishes reading: you pay for the report with all statements.")); return; }
+  if(WL.reading){ WL.toast(t("Дождитесь, пока файлы дочитаются: оплачивается отчёт со всеми выписками.", "Wait until the files finish reading: you pay for the report with all statements.")); return; }
   if(!pay.locked()){ WL.toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked")); return WL.render(); }
   if(busy) return;
   const u0 = unlockOf(s.rid);

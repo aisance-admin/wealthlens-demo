@@ -1,8 +1,8 @@
-/* WealthLens · управление: файлы → Claude → отчёт. Отчёт и прочитанное хранятся в этом браузере; файлы выписок — в
+/* WealthLens · управление: файлы → чтение → отчёт. Отчёт и прочитанное хранятся в этом браузере; файлы выписок — в
    IndexedDB, чтобы после перезагрузки или возврата с оплаты показать страницу-источник и дочитать непрочитанное. */
 (function(){
 const WL = window.WL, t = WL.t, $ = WL.$, esc = WL.esc;
-const STORE = "wl_report_v2", CONSENT = "wl_claude_ok_v1";
+const STORE = "wl_report_v2";
 const FILE_PARALLEL = 3, PART_PARALLEL = 4;
 WL.blobs = {};
 
@@ -34,19 +34,7 @@ WL.rebuild = async () => {
   WL.save(); WL.render();
 };
 
-/* ── Согласие и пароль ──────────────────────────────────────────────── */
-async function consent(){
-  if(WL.store.get(CONSENT)) return true;
-  const {choice} = await WL.dialog({eyebrow: "Claude", title: t("Выписки прочитает Claude", "Claude will read your statements"),
-    body: `<p>${t("Страницы файлов — изображение и текст — уйдут через наш сервер в модель Claude компании Anthropic. Claude вернёт позиции, остатки и итоги, из них соберётся отчёт.",
-      "The file pages — image and text — go through our server to Anthropic's Claude model. Claude returns holdings, balances and totals, and the report is built from them.")}</p>
-      <p class="muted">${t("Мы не храним ни файлы, ни ответ. Отчёт остаётся только в этом браузере, кнопка «Новый отчёт» его удаляет.",
-      "We store neither the files nor the answer. The report stays only in this browser; “New report” deletes it.")}</p>`,
-    buttons: [{id: "ok", label: t("Продолжить", "Continue"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}]});
-  if(choice !== "ok") return false;
-  WL.store.set(CONSENT, 1);
-  return true;
-}
+/* ── Пароль к защищённому файлу ─────────────────────────────────────── */
 async function askPassword(name, wrong){
   const {choice, value} = await WL.dialog({eyebrow: t("Файл защищён паролем", "Password-protected file"), title: esc(name),
     body: `<p>${wrong ? t("Пароль не подошёл. Попробуйте ещё раз.", "The password didn't work. Try again.") : t("Введите пароль от файла — его знает только этот браузер, на сервер он не уходит.", "Enter the file's password — it stays in this browser and is not sent to the server.")}</p>`,
@@ -68,7 +56,6 @@ async function addFiles(list){
   files = (await Promise.all(files.map(async f => { const m = await inMemory(f); if(m) m.relPath = paths.get(f); return m; }))).filter(Boolean);
   if(!files.length){ WL.toast(t("Файлы не удалось открыть — выберите их ещё раз.", "The files could not be opened — select them again.")); return; }
   if(WL.state.demo) leaveDemo(false);
-  if(!await consent()) return;
   const s = WL.state;
   let dup = 0;
   for(const f of files){
@@ -137,7 +124,7 @@ async function readOne(f, pool, only){
     if(i >= 0) s.docs[i] = merged; else s.docs.push(merged);
     const quota = merged.failed.some(x => x.error === "quota"), readAny = merged.pages.length || merged.rows.length;
     f.status = readAny ? "done" : "error";
-    if(!readAny) f.reason = quota ? t("лимит бесплатного чтения на сегодня исчерпан", "today's free reading limit is used up") : t("Claude не смог прочитать файл — попробуйте ещё раз", "Claude could not read the file — try again");
+    if(!readAny) f.reason = quota ? t("лимит бесплатного чтения на сегодня исчерпан", "today's free reading limit is used up") : t("файл не удалось прочитать — попробуйте ещё раз", "the file could not be read — try again");
     WL.pay.extendPaid();
   }catch(e){
     if(WL.state.rid !== gen) return;
@@ -158,8 +145,8 @@ async function reread(id){
 function quotaMessage(){
   const paid = !WL.pay.locked();
   WL.dialog({eyebrow: t("Лимит чтения", "Reading limit"), title: t("На сегодня страницы закончились", "No more pages for today"),
-    body: `<p>${WL.quotaHit === "free" && !paid ? t("Бесплатно Claude читает ограниченное число страниц в сутки. Прочитанное сохранено — откройте полный отчёт (лимит станет больше) или дочитайте файлы завтра кнопкой «Дочитать».",
-      "Claude reads a limited number of pages per day for free. What was read is saved — unlock the full report for a higher limit, or finish tomorrow with “Read again”.")
+    body: `<p>${WL.quotaHit === "free" && !paid ? t("Бесплатно мы читаем ограниченное число страниц в сутки. Прочитанное сохранено — откройте полный отчёт (лимит станет больше) или дочитайте файлы завтра кнопкой «Дочитать».",
+      "We read a limited number of pages per day for free. What was read is saved — unlock the full report for a higher limit, or finish tomorrow with “Read again”.")
       : t("Сервис сегодня перегружен. Прочитанное сохранено — дочитайте файлы позже кнопкой «Дочитать».", "The service is at capacity today. What was read is saved — finish later with “Read again”.")}</p>`,
     buttons: WL.quotaHit === "free" && !paid && WL.pay.PAYWALL ? [{id: "buy", label: t("Открыть полный отчёт", "Unlock the full report"), primary: true}, {id: "cancel", label: t("Позже", "Later")}] : [{id: "cancel", label: "OK", primary: true}]})
     .then(({choice}) => { if(choice === "buy") WL.pay.open("quota"); });
