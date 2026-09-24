@@ -162,8 +162,8 @@ function historySec(){
   if(liveMode(m)) pts.push({date: WL.today(), value: m.mkt.nowTotal, src: "live"});
   const rows = lines.flatMap(L => L.snaps.map((s, i) => {
     const link = L.links.find(k => k.snap === s.id), f = s.flows || {};
-    const mark = !link ? "" : link.gap ? `<span class="badge none">${esc(t(`пробел ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`, `gap ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`))}</span>`
-      : link.ok === true ? `<span class="badge ok" title="${esc(t("Стоимость на начало совпала с концом предыдущей выписки", "The opening value matches the previous statement's closing value"))}">${ICON.check}${t("стык сошёлся", "continuous")}</span>`
+    const mark = !link ? "" : link.gap ? `<span class="badge none">${esc(t(`нет выписок ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`, `no statements ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`))}</span>`
+      : link.ok === true ? `<span class="badge ok" title="${esc(t("Стоимость на начало совпала с концом предыдущей выписки", "The opening value matches the previous statement's closing value"))}">${ICON.check}${t("сходится", "continuous")}</span>`
       : link.ok === false ? `<span class="badge bad">${ICON.warn}${esc(t(`на начало ${money(link.opening)}, в прошлой ${money(link.closing)}`, `opening ${money(link.opening)}, previous ${money(link.closing)}`))}</span>` : "";
     const mv = [f.deposits ? t(`пополнения ${money(f.deposits)}`, `deposits ${money(f.deposits)}`) : "", f.withdrawals ? t(`снятия ${money(f.withdrawals)}`, `withdrawals ${money(f.withdrawals)}`) : "",
       f.income ? t(`доходы ${money(f.income)}`, `income ${money(f.income)}`) : "", f.fees ? t(`комиссии ${money(f.fees)}`, `fees ${money(f.fees)}`) : ""].filter(Boolean).join(" · ");
@@ -211,9 +211,9 @@ function valuation(m, dates){
   const live = liveMode(m), at = new Date(m.mkt.at), when = at.toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
   const d = m.mkt.delta, dp = m.total ? d / m.total : 0;
   return `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" data-val="now" aria-pressed="${live}">${t("Сейчас", "Now")}</button><button type="button" data-val="stmt" aria-pressed="${!live}">${t("По выписке", "Per statement")}</button></div>
-    <div class="tv">${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
+    <div class="tv" title="${esc(live ? t(`По текущим ценам пересчитаны бумаги с биржевой ценой — ${fmt.pct(m.mkt.coverage, 0)} портфеля, остальное — по выпискам.`, `Holdings with a market price (${fmt.pct(m.mkt.coverage, 0)} of the portfolio) are repriced at current prices, the rest stays at statement values.`) : "")}">${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
     ${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")} · ${t("цены на", "prices at")} ${esc(when)}${WL.marketLoading ? " · " + t("обновляю…", "refreshing…") : ""}</div>
-      <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))} · по рыночной цене ${esc(fmt.pct(m.mkt.coverage, 0))} портфеля, остальное — по выпискам`, `per statement ${esc(dates)}: ${esc(money(m.total))} · ${esc(fmt.pct(m.mkt.coverage, 0))} of the portfolio at market prices, the rest at statement values`)}</div>`
+      <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))}`, `per statement ${esc(dates)}: ${esc(money(m.total))}`)}</div>`
       : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
 }
 /* Насколько итог полный — прямо под ним: сколько выписок учтено, что не вошло и почему, что не прочитано и не сошлось с
@@ -242,24 +242,26 @@ function coverageOf(m){
   if(reading) out.push(n(reading, "файл ещё читается", "файла ещё читаются", "файлов ещё читаются", "file is still being read", "files are still being read"));
   if(pages) out.push(t(`не прочитано ${pages} стр.`, `${pages} ${pages === 1 ? "page" : "pages"} not read`));
   if(cut) out.push(n(cut, "файл прочитан не полностью", "файла прочитаны не полностью", "файлов прочитаны не полностью", "file was read only in part", "files were read only in part"));
-  if(bad) out.push(n(bad, "выписка не сошлась с итогом банка", "выписки не сошлись с итогом банка", "выписок не сошлись с итогом банка", "statement doesn't match the bank's total", "statements don't match the bank's total"));
-  if(open) out.push(t(`в ${open} ${WL.pl(open, ["выписке", "выписках", "выписках"], ["", ""])} общий итог сошёлся, а частичные итоги — нет`,
-    `${open} ${open === 1 ? "statement matches" : "statements match"} in total but not in the subtotals`));
+  if(bad) out.push(t(`в ${bad} ${WL.pl(bad, ["выписке", "выписках", "выписках"], ["", ""])} сумма не совпала с итогом`, `${bad} ${bad === 1 ? "statement doesn't" : "statements don't"} add up to the printed total`));
+  if(open) out.push(t(`в ${open} ${WL.pl(open, ["выписке", "выписках", "выписках"], ["", ""])} не совпали итоги по валютам или счетам`,
+    `${open} ${open === 1 ? "statement doesn't" : "statements don't"} match the subtotals by currency or account`));
   if(twice) out.push(t("возможен двойной учёт счёта", "an account may be counted twice"));
   const warn = out.length > 0 || !!(why.unread || why.no_positions);
-  if(histBad) out.push(n(histBad, "выписка из истории не сошлась с итогом банка", "выписки из истории не сошлись с итогом банка", "выписок из истории не сошлись с итогом банка",
-    "history statement doesn't match the bank's total", "history statements don't match the bank's total"));
+  if(histBad) out.push(t(`в ${histBad} ${WL.pl(histBad, ["старой выписке", "старых выписках", "старых выписках"], ["", ""])} сумма не совпала с итогом`,
+    `${histBad} older ${histBad === 1 ? "statement doesn't" : "statements don't"} add up to the printed total`));
   const all = docs.length && used.length + hist.length === docs.length && !broken;
   const since = hist.map(d => d.as_of).filter(Boolean).sort()[0];
-  const head = hist.length ? (all ? t(`В отчёте все ${n(used.length + hist.length, "выписка", "выписки", "выписок", "", "")}: ${used.length === 1 ? "текущая" : `${used.length} текущих`} и ${hist.length} из истории с ${fmt.date(since)}`,
-        `All ${used.length + hist.length} statements are included: ${used.length} current and ${hist.length} from the history since ${fmt.date(since)}`)
+  const years = (a, b) => a && b ? (a.slice(0, 4) === b.slice(0, 4) ? a.slice(0, 4) : `${a.slice(0, 4)}–${b.slice(0, 4)}`) : "";
+  const span = years(since, m.dates[m.dates.length - 1]);
+  const head = hist.length ? (all ? t(`В отчёте ${n(used.length + hist.length, "выписка", "выписки", "выписок", "", "")}${span ? ` за ${span}` : ""}`,
+        `${used.length + hist.length} statements${span ? ` for ${span}` : ""} are included`)
       : t(`В отчёте ${n(used.length, "выписка", "выписки", "выписок", "", "")} и ${hist.length} из истории — из ${files.length} ${WL.pl(files.length, ["файла", "файлов", "файлов"], ["", ""])}`,
         `${used.length} current and ${hist.length} history statements of ${files.length} files are included`))
     : all && used.length === 1 ? t("Выписка в отчёте", "The statement is included")
     : all ? t(`В отчёте все ${n(used.length, "выписка", "выписки", "выписок", "statement", "statements")}`, `All ${used.length} statements are included`)
     : t(`В отчёте ${n(used.length, "выписка", "выписки", "выписок", "", "")} из ${files.length} ${WL.pl(files.length, ["файла", "файлов", "файлов"], ["", ""])}`,
         `${used.length} of ${files.length} ${files.length === 1 ? "file is" : "files are"} included`);
-  const ok = !warn && used.length && bad === 0 && checked > 0 ? t("итоги сверены с банком", "totals match the bank's") : "";
+  const ok = !warn && used.length && bad === 0 && checked > 0 ? t("суммы совпали с итогами в выписках", "the sums match the totals in the statements") : "";
   const parts = [head + (note.length ? ` (${note.join(", ")})` : ""), ...out, ok].filter(Boolean);
   return {text: files.length ? parts.join(" · ") : "", warn};
 }
@@ -279,11 +281,11 @@ function checkLine(c){
   return `<li class="bad">${ICON.warn}<span>${what} — ${got}: ${esc(fmt.money(c.shown ?? c.sum, c.ccy, 2))}</span></li>`;
 }
 function recBadge(st, open){
-  if(st === "ok" && open) return `<span class="badge part" title="${t(`Общий итог совпал с итогом банка, но ${open} ${WL.pl(open, ["частичный итог", "частичных итога", "частичных итогов"], ["", ""])} (по валютам или счетам) — нет`,
-    `The grand total matches the bank's, but ${open} ${open === 1 ? "subtotal" : "subtotals"} (by currency or account) ${open === 1 ? "doesn't" : "don't"}`)}">${ICON.warn}${t(`итог сверен · ${open} уточнить`, `total matches · ${open} to check`)}</span>`;
-  if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом банка", "Positions add up to the bank's total")}">${ICON.check}${t("сверено", "reconciled")}</span>`;
-  if(st === "mismatch" || st === "partial") return `<span class="badge bad" title="${t("Сумма позиций не совпала с итогом банка", "Positions don't add up to the bank's total")}">${ICON.warn}${t("не сошлось", "mismatch")}</span>`;
-  return `<span class="badge none" title="${t("В выписке нет итога для сверки", "The statement prints no total to check against")}">${t("без итога", "no total")}</span>`;
+  if(st === "ok" && open) return `<span class="badge part" title="${t(`Общий итог совпал с итогом в выписке, но ${open} ${WL.pl(open, ["частичный итог", "частичных итога", "частичных итогов"], ["", ""])} (по валютам или счетам) — нет`,
+    `The grand total matches the statement, but ${open} ${open === 1 ? "subtotal" : "subtotals"} (by currency or account) ${open === 1 ? "doesn't" : "don't"}`)}">${ICON.warn}${t(`сошлось · ${open} уточнить`, `matches · ${open} to check`)}</span>`;
+  if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом, напечатанным в выписке", "The positions add up to the total printed in the statement")}">${ICON.check}${t("сошлось", "matches")}</span>`;
+  if(st === "mismatch" || st === "partial") return `<span class="badge bad" title="${t("Сумма позиций не совпала с итогом, напечатанным в выписке", "The positions don't add up to the total printed in the statement")}">${ICON.warn}${t("не сошлось", "mismatch")}</span>`;
+  return `<span class="badge none" title="${t("В выписке нет итога, с которым можно сравнить", "The statement prints no total to compare with")}">${t("без итога", "no total")}</span>`;
 }
 /* Состав — доли от активов. Если есть обязательства (проданные опционы, овердрафт), доли от чистого итога дали бы больше
    100%, поэтому полоса строится по активам, а обязательства названы отдельно суммой. */
@@ -671,7 +673,7 @@ WL.excel = async () => {
   const REC = {ok: t("сошлось", "matches"), partial: t("частично", "partly"), mismatch: t("не сошлось", "mismatch"), none: t("нет итога", "no total")};
   const files = [[t("Файл", "File"), t("Чтение", "Reading"), t("В отчёте", "Included"), t("Причина", "Reason"), t("Банк", "Institution"), t("Документ", "Document"), t("Дата", "As of"),
     t("Страниц", "Pages"), t("Не прочитаны страницы", "Pages not read"), t("Позиций", "Positions"), t(`Стоимость, ${base}`, `Value, ${base}`),
-    t("Сверка с итогом банка", "Check against the bank total"), t("Итог банка", "Bank total"), t("Валюта итога", "Total currency"), t("Сумма позиций", "Positions sum"), t("Частичные итоги", "Subtotals")]];
+    t("Совпадение с итогом в выписке", "Matches the statement total"), t("Итог в выписке", "Statement total"), t("Валюта итога", "Total currency"), t("Сумма позиций", "Positions sum"), t("Частичные итоги", "Subtotals")]];
   for(const f of s.files){
     const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), rc = d && d.use && d.recon;
     const c = rc && (rc.checks.find(x => x.scope === "total" && !x.unchecked) || rc.checks.find(x => !x.unchecked));

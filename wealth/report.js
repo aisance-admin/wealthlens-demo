@@ -417,7 +417,7 @@ function alerts(M, S){
     if(d.recon.status === "mismatch" || d.recon.status === "partial"){
       const c = d.recon.checks.filter(x => !x.ok).sort((a, b) => (a.scope === "total" ? -1 : 0) - (b.scope === "total" ? -1 : 0))[0];
       if(c) add(d.recon.status === "mismatch" ? "high" : "watch", "recon-" + d.id,
-        t(`«${d.institution || d.file}»: сумма позиций не совпала с итогом банка`, `“${d.institution || d.file}”: positions don't add up to the bank's total`),
+        t(`«${d.institution || d.file}»: сумма позиций не совпала с итогом в выписке`, `“${d.institution || d.file}”: the positions don't add up to the statement total`),
         t(`Итог в выписке «${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, сумма прочитанных позиций${c.shownAcc ? " с НКД" : ""} — ${fmt.money(c.shown, c.ccy, 2)}${c.approx ? " (через курс)" : ""}, разница ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`,
           `The statement total “${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions read add up to ${fmt.money(c.shown, c.ccy, 2)}${c.shownAcc ? " incl. accrued interest" : ""}${c.approx ? " (via FX)" : ""}, a difference of ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`), [d.id]);
     } else if(d.recon.status === "ok" && d.recon.open){
