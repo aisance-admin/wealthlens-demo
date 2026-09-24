@@ -6,7 +6,11 @@
    сразу, а внизу один раз появляется короткое уведомление с отказом (см. ниже). */
 (function(){
 const WL = window.WL = window.WL || {};
-const PIXEL = String(window.WL_PIXEL_ID || "");
+/* Настройки: у приложения — из wealth/config.js, у лендингов — атрибутами тега этого скрипта (встроенные скрипты
+   политика безопасности страницы не разрешает). */
+const TAG = document.currentScript, D = (TAG && TAG.dataset) || {};
+if(!window.WL_AUDIENCE && D.audience) window.WL_AUDIENCE = D.audience;
+const PIXEL = String(window.WL_PIXEL_ID || D.pixel || "");
 const CONSENT = "wl_consent_v1", SEEN = "wl_consent_seen", ATTR = "wl_attr_v1";
 const get = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const set = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };

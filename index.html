@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://www.facebook.com https://*.facebook.com; connect-src 'self' https://api.euroaff.eu https://www.facebook.com https://*.facebook.com https://connect.facebook.net; worker-src 'self' blob:; frame-src https://www.facebook.com; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E %3Cdefs%3E %3ClinearGradient id=%22fl%22 x1=%2224%22 y1=%2217%22 x2=%2240%22 y2=%2247%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFF3D1%22/%3E%3Cstop offset=%22.48%22 stop-color=%22%23F3BD58%22/%3E%3Cstop offset=%221%22 stop-color=%22%23B27A26%22/%3E%3C/linearGradient%3E %3ClinearGradient id=%22fr%22 x1=%224%22 y1=%2210%22 x2=%2260%22 y2=%2254%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFE2A3%22/%3E%3Cstop offset=%221%22 stop-color=%22%23C8913A%22/%3E%3C/linearGradient%3E %3C/defs%3E %3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%230B111A%22/%3E %3Ccircle cx=%2223.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Ccircle cx=%2240.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Cpath d=%22M32 20.25A14.5 14.5 0 0 1 32 43.75A14.5 14.5 0 0 1 32 20.25Z%22 fill=%22url(%23fl)%22/%3E %3C/svg%3E">
 <title>WealthLens · отчёт по портфелю</title>
@@ -9,13 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Onest:wght@400;500;600;700&display=swap">
-<script type="module">
-/* PDF.js 4 (legacy-сборка) со своего адреса. Модуль грузится после обычных скриптов — чтение ждёт события pdfjs-ready. */
-import * as pdfjsLib from "./wealth/vendor/pdfjs/pdf.min.mjs";
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./wealth/vendor/pdfjs/pdf.worker.min.mjs", document.baseURI).href;
-window.pdfjsLib = pdfjsLib;
-window.dispatchEvent(new Event("pdfjs-ready"));
-</script>
+<script type="module" src="wealth/pdfboot.js?v=3553b1cf9aa8"></script>
 <style>
 :root{
   /* Фирменная тёмная палитра wealth.euroaff.eu: чернила, золото; статусы — отдельно от цветов категорий */
@@ -491,41 +486,9 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Позиция"></aside>
 <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.csv,.tsv,.txt,.xlsx,.xlsm,.xls,.ods,.htm,.html,application/pdf,image/*">
 <input type="file" id="folderInput" multiple hidden webkitdirectory directory>
-<script>
-/* Язык интерфейса: ?lang=en|ru запоминается в браузере; по умолчанию русский. */
-window.WL = window.WL || {};
-WL.lang = (() => {
-  const q = new URLSearchParams(location.search).get("lang");
-  let l = q === "en" || q === "ru" ? q : null;
-  try{ if(l) localStorage.setItem("wl_lang", l); else l = localStorage.getItem("wl_lang"); }catch(e){}
-  return l === "en" ? "en" : "ru";
-})();
-WL.t = (ru, en) => WL.lang === "en" ? en : ru;
-document.documentElement.lang = WL.lang;
-if(WL.lang === "en"){
-  document.title = "WealthLens · portfolio report";
-  document.body.dataset.drop = "Drop the files — we will read them";
-  const tx = {langBtn: ["RU", "Русский"], addBtn: ["Add files"], newBtn: ["New report"], dlBtn: ["Download"]};
-  for(const [id, [text, title]] of Object.entries(tx)){ const b = document.getElementById(id); b.textContent = text; if(title) b.title = title; }
-  document.getElementById("langBtn").lang = "ru";
-  const m = document.querySelectorAll("#dlMenu small"); m[0].textContent = "To print and send"; m[1].textContent = "All positions and reconciliation";
-  document.getElementById("client").setAttribute("aria-label", "Report name");
-}
-/* Адрес сервера: страница с нашего домена и копия на GitHub Pages берут его из wealth/api.json; локальный стенд — боевой сервер. */
-WL.apiReady = (async () => {
-  let api = "";
-  if(!/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)){
-    try{ const r = await fetch("wealth/api.json?t=" + Date.now(), {cache: "no-store"}); if(r.ok) api = (await r.json()).api || ""; }catch(e){}
-  } else {
-    /* Локальный стенд может ходить в локальный сервер: ?api=http://127.0.0.1:8790 */
-    const o = new URLSearchParams(location.search).get("api");
-    if(o && /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(o)) api = o;
-  }
-  return WL.API_BASE = String(api || "https://api.euroaff.eu").replace(/\/+$/, "");
-})();
-</script>
-<script>window.WL_PIXEL_ID = ""; window.WL_SUPPORT_EMAIL = ""; window.WL_ACCESS_KEY = null;   /* подставляет site/inject.py: пиксель и почта — из site/config.json, открытый ключ разрешений на доступ — с api.euroaff.eu */</script>
-<script src="wealth/track.js?v=28c9c9c48152"></script>
+<script src="wealth/boot.js?v=85ca2c787c9a"></script>
+<script src="wealth/config.js?v=b54925549ce3"></script>
+<script src="wealth/track.js?v=689876582aab"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=060f346364c4"></script>
 <script src="wealth/report.js?v=a63b27eb6784"></script>
