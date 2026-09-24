@@ -102,7 +102,7 @@ function docRows(d){
 const fxKey = (base, date) => `${base}|${date || "latest"}`;
 WL.ensureFx = async (S, base) => {
   S.fx = S.fx || {};
-  const dates = [...new Set(S.docs.map(d => d.as_of && d.as_of <= WL.today() ? d.as_of : ""))];
+  const dates = [...new Set([""].concat(S.docs.map(d => d.as_of && d.as_of <= WL.today() ? d.as_of : "")))];   // «» — курсы сейчас, для оценки по текущим ценам
   await Promise.all(dates.map(async date => {
     const k = fxKey(base, date);
     if(S.fx[k] && S.fx[k].rates) return;
@@ -333,9 +333,15 @@ WL.compact = (M, S) => {
     positions: top.map(p => ({id: p.id, doc: p.doc, class: p.cls, name: p.name, isin: p.isin || undefined, ticker: p.ticker || undefined, qty: p.qty ?? undefined,
       price: p.price ?? undefined, price_in_percent: p.unit === "%" || undefined, value: r2(p.value), currency: p.ccy, value_report_ccy: r2(p.vb),
       accrued_report_ccy: p.ab ? r2(p.ab) : undefined, weight_pct: r2(p.w * 100), date: p.date || undefined, coupon: p.coupon ?? undefined,
-      option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, account: p.acct || undefined, institution: p.inst})),
+      option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, cost: p.cost ?? undefined, account: p.acct || undefined, institution: p.inst})),
     positions_not_listed: rest.length ? {count: rest.length, value: r2(rest.reduce((s, p) => s + (p.vb || 0), 0))} : undefined,
     automatic_alerts_already_shown: M.alerts.map(a => ({level: a.level, title: a.title})),
+    market: M.mkt ? {as_of: M.mkt.at, value_now: r2(M.mkt.nowTotal), repriced_share_pct: r2(M.mkt.coverage * 100),
+      portfolio_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.pct != null).map(([k, v]) => [k, r2(v.pct * 100)])),
+      benchmarks: M.mkt.benchmarks.filter(b => b.perf).map(b => ({name: b.label, change_pct: {"1m": b.perf["1m"], "ytd": b.perf.ytd, "1y": b.perf["1y"], "5y": b.perf["5y"]}})),
+      positions: M.positions.filter(p => p.mk || p.underQ).slice(0, 300).map(p => ({id: p.id, price_now: p.mk ? p.mk.price : undefined, value_now_report_ccy: p.nowB != null ? r2(p.nowB) : undefined,
+        change_1d_pct: p.mk ? p.mk.change : undefined, change_1m_pct: p.mk && p.mk.perf ? p.mk.perf["1m"] : undefined, change_1y_pct: p.mk && p.mk.perf ? p.mk.perf["1y"] : undefined,
+        underlying: p.underQ ? {name: p.underQ.name, level: p.underQ.price, change_1m_pct: p.underQ.perf["1m"], change_1y_pct: p.underQ.perf["1y"]} : p.mk && p.mk.underlying ? {price: p.mk.underlying} : undefined}))} : undefined,
   };
 };
 })();

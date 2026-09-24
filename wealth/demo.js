@@ -63,7 +63,7 @@ WL.demoState = () => {
     {label: "Deposit principal", scope: "account", account: "...0925", currency: "AED", amount: 2000000, accrued: "excl", page: 2}];
   void sum;
   const files = [docA, docB, docC].map(d => ({id: d.id, name: d.file, size: 0, kind: "pdf", status: "done", done: d.pageCount, total: d.pageCount, hash: d.id}));
-  return {v: 2, demo: true, rid: "", client: t("Пример: семья Ивановых", "Sample: the Smith family"), base: "USD", files, docs: [docA, docB, docC], include: {}, review: null, qa: [], fx: {}};
+  return {v: 2, demo: true, rid: "", client: t("Пример: семья Ивановых", "Sample: the Smith family"), base: "USD", files, docs: [docA, docB, docC], include: {}, review: null, chats: {}, fx: {}};
 };
 
 /* Сводка и пояснения к примеру: числа берутся из самой модели, чтобы текст всегда совпадал с таблицами. */

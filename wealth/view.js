@@ -92,8 +92,8 @@ function hero(){
     <div class="card total">
       <div class="th"><span class="eyebrow">${t("Всего", "Total")} ${esc(baseName)}</span>
         <div class="seg" role="group" aria-label="${t("Валюта отчёта", "Report currency")}">${WL.BASES.map(b => `<button type="button" data-base="${b}" aria-pressed="${b === m.base}">${b}</button>`).join("")}</div></div>
-      <div class="tv">${esc(money(m.total))}</div>
-      <div class="ts">${esc([dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
+      ${valuation(m, dates)}
+      <div class="ts">${esc([m.mkt && WL.ui.val !== "stmt" ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
         `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
       ${mix(m)}
@@ -105,6 +105,18 @@ function hero(){
           <div class="iv"><b>${esc(money(i.value))}</b>${recBadge(worst)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
     </div>
   </section>`;
+}
+/* Итог: по текущим ценам (если есть котировки) или по выпискам. Переключатель и время обновления — рядом. */
+const liveMode = m => !!(m.mkt && m.mkt.coverage > 0 && WL.ui.val !== "stmt");
+function valuation(m, dates){
+  if(!m.mkt || !(m.mkt.coverage > 0)) return `<div class="tv">${esc(money(m.total))}</div>${WL.marketLoading ? `<div class="ts muted">${t("загружаю текущие котировки…", "loading current prices…")}</div>` : ""}`;
+  const live = liveMode(m), at = new Date(m.mkt.at), when = at.toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
+  const d = m.mkt.delta, dp = m.total ? d / m.total : 0;
+  return `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" data-val="now" aria-pressed="${live}">${t("Сейчас", "Now")}</button><button type="button" data-val="stmt" aria-pressed="${!live}">${t("По выписке", "Per statement")}</button></div>
+    <div class="tv">${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
+    ${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")} · ${t("цены на", "prices at")} ${esc(when)}${WL.marketLoading ? " · " + t("обновляю…", "refreshing…") : ""}</div>
+      <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))} · по рыночной цене ${esc(fmt.pct(m.mkt.coverage, 0))} портфеля`, `per statement ${esc(dates)}: ${esc(money(m.total))} · ${esc(fmt.pct(m.mkt.coverage, 0))} of the portfolio at market prices`)}</div>`
+      : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
 }
 function recBadge(st){
   if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом банка", "Positions add up to the bank's total")}">${ICON.check}${t("сверено", "reconciled")}</span>`;
@@ -118,7 +130,7 @@ function mix(m){
     <ul class="mix-legend">${cats.map(c => `<li><span class="k c-${c.key}"></span>${esc(c.label)} <b>${fmt.pct(c.share, c.share < 0.1 ? 1 : 0)}</b></li>`).join("")}</ul></div>`;
 }
 
-function claude(){
+function brief(){
   const s = S(), r = s.review, m = M();
   let body;
   if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
@@ -126,37 +138,64 @@ function claude(){
   else if(r && r.summary) body = `<p class="summary">${esc(r.summary)}</p>${r.base && r.base !== m.base ? `<p class="fine">${t(`Суммы в сводке — в ${r.base}.`, `Amounts in the summary are in ${r.base}.`)}</p>` : ""}`;
   else if(r && r.error) body = `<p class="muted">${t("Сводку получить не удалось.", "Could not get the summary.")} <button class="link" type="button" data-review>${t("Повторить", "Try again")}</button></p>`;
   else body = `<p class="muted"><button class="link" type="button" data-review>${t("Получить сводку", "Get the summary")}</button></p>`;
-  const qa = (s.qa || []).map(x => `<div class="q">${esc(x.q)}</div><div class="a">${x.a == null ? '<div class="skel"><i></i><i style="width:48%"></i></div>' : esc(x.a)}</div>`).join("");
-  return `<section class="card claude" id="claude">
+  const starters = [t("Что в портфеле главное сейчас?", "What matters most in the portfolio now?"), t("Где основные риски?", "Where are the main risks?"),
+    t("Что погашается или истекает скоро?", "What matures or expires soon?")];
+  return `<section class="card brief" id="brief">
     <div class="ch"><span class="orb">${ICON.spark}</span><div><div class="eyebrow">${t("Коротко о портфеле", "The portfolio in brief")}</div><span class="muted small">${t("по прочитанным выпискам", "from the statements read")}</span></div></div>
     ${body}
-    <div class="qa" id="qa">${qa}</div>
-    <form class="ask" id="ask" autocomplete="off"><input name="q" maxlength="600" placeholder="${t("Спросите про свой портфель: сколько в облигациях, что погашается в этом году…", "Ask about your portfolio: how much is in bonds, what matures this year…")}" aria-label="${t("Вопрос по отчёту", "Question about the report")}">
-      <button class="btn" type="submit">${t("Спросить", "Ask")}</button></form>
+    <form class="ask no-print" id="ask" autocomplete="off"><input name="q" maxlength="1500" placeholder="${t("Спросите о портфеле: что делать с облигациями, чем рискует валютная часть…", "Ask about the portfolio: what to do with the bonds, what the currency part risks…")}" aria-label="${t("Вопрос о портфеле", "Question about the portfolio")}">
+      <button class="btn" type="submit">${ICON.spark}${t("Обсудить", "Discuss")}</button></form>
+    <div class="starters no-print">${starters.map(q => `<button type="button" class="sug" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
   </section>`;
 }
 
-function alertsBlock(){
+/* Все выводы в порядке важности: свои проверки, рынок и ИИ-анализ. */
+function alertList(){
   const m = M(), r = S().review;
-  const extra = r && Array.isArray(r.alerts) ? r.alerts.map((a, i) => Object.assign({id: "claude-" + i, auto: false}, a)) : [];
+  const extra = r && Array.isArray(r.alerts) ? r.alerts.map((a, i) => Object.assign({id: "ai-" + i, auto: false}, a)) : [];
   const rank = {high: 0, watch: 1, info: 2};
-  const all = m.alerts.concat(extra).filter(a => a && a.title).map((a, i) => [a, i]).sort((x, y) => ((rank[x[0].level] ?? 3) - (rank[y[0].level] ?? 3)) || x[1] - y[1]).map(x => x[0]);
+  return m.alerts.concat(extra).filter(a => a && a.title).map((a, i) => [a, i]).sort((x, y) => ((rank[x[0].level] ?? 3) - (rank[y[0].level] ?? 3)) || x[1] - y[1]).map(x => x[0]);
+}
+WL.alertList = alertList;
+const topicOf = a => WL.topicId ? WL.topicId(a) : "";
+function alertsBlock(){
+  const all = alertList();
   if(!all.length) return "";
   const lock = locked();
-  return `<section class="sec" id="alerts"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span></div>
+  return `<section class="sec" id="alerts"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span>
+      ${WL.topicId && !WL.printing ? `<span class="muted small no-print sh-hint">${t("нажмите на карточку, чтобы обсудить, что делать", "tap a card to discuss what to do")}</span>` : ""}</div>
     <div class="alerts">${all.map((a, i) => {
-      const hide = lock && i > 0;
-      return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}"><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ-анализ", "AI analysis")}</span>`}</div>
-        <h3>${esc(a.title)}</h3>${hide ? `<p class="muted lockline">${ICON.lock}${t("Подробности — в полном отчёте", "Details are in the full report")}</p>` : `<p>${esc(a.text)}</p>`}
-        ${!hide && (a.refs || []).some(id => pos(id)) ? `<button class="link" type="button" data-show="${esc((a.refs || []).filter(id => pos(id)).slice(0, 40).join(","))}">${t("Показать позиции", "Show positions")}</button>` : ""}</article>`; }).join("")}</div>
+      const hide = lock && i > 0, tid = hide ? "" : topicOf(a);
+      const shown = !hide && (a.refs || []).some(id => pos(id));
+      return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}${tid ? " talk" : ""}"${tid ? ` data-topic="${esc(tid)}"` : ""}><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ-анализ", "AI analysis")}</span>`}</div>
+        <h3>${esc(a.title)}</h3>${hide ? `<p class="muted lockline">${ICON.lock}${t("Подробности — в полном отчёте", "Details are in the full report")}</p><button class="link" type="button" data-buy="alert">${t("Открыть", "Unlock")}</button>` : `<p>${esc(a.text)}</p><p class="basis">${esc(basisOf(a))}</p>`}
+        ${tid || shown ? `<div class="aa no-print">${tid ? `<button class="talkbtn" type="button" data-topic="${esc(tid)}">${ICON.spark}${t("Обсудить, что делать", "Discuss what to do")}</button>` : ""}
+          ${shown ? `<button class="link" type="button" data-show="${esc((a.refs || []).filter(id => pos(id)).slice(0, 40).join(","))}">${t("Показать позиции", "Show positions")}</button>` : ""}</div>` : ""}</article>`; }).join("")}</div>
   </section>`;
 }
 
+/* Основание вывода: из чего он сделан. */
+function basisOf(a){
+  if(a.basis) return a.basis;
+  if(!a.auto) return t("Основа: ИИ-анализ выписок" + (M().mkt ? " и котировок" : ""), "Source: AI analysis of the statements" + (M().mkt ? " and quotes" : ""));
+  const d = (a.refs || []).map(id => docOf(id) || (pos(id) && docOf(pos(id).doc))).filter(Boolean)[0];
+  const src = d ? (d.institution || d.file) : "";
+  const map = {unread: t("Основа: чтение файла", "Source: file reading"), recon: t(`Основа: итог в выписке ${src}`, `Source: the total in the ${src} statement`),
+    ccy: t("Основа: выписка без указания валюты", "Source: a statement without a currency"), fx: t("Основа: курсы валют", "Source: exchange rates"),
+    neg: t("Основа: остатки на счетах в выписках", "Source: account balances in the statements"), conc: t("Основа: все выписки, курсы валют", "Source: all statements, exchange rates"),
+    cash: t("Основа: остатки и депозиты в выписках", "Source: balances and deposits in the statements"), puts: t("Основа: опционы в выписке, страйк и множитель контракта", "Source: options in the statement, strike and contract size"),
+    expiry: t("Основа: даты экспирации в выписках", "Source: expiry dates in the statements"), maturity: t("Основа: даты погашения в выписках", "Source: maturity dates in the statements"),
+    zero: t("Основа: стоимость в выписках", "Source: values in the statements"), stale: t("Основа: даты выписок", "Source: statement dates"), dates: t("Основа: даты выписок", "Source: statement dates"),
+    "ccy-guess": t("Основа: валюта выписки", "Source: the statement currency"), summary: t("Основа: таблицы в файле", "Source: the tables in the file"), trunc: t("Основа: число страниц файла", "Source: the file's page count")};
+  const key = Object.keys(map).find(k => a.id === k || a.id.startsWith(k + "-"));
+  return key ? map[key] : t("Основа: выписки", "Source: the statements");
+}
 function questions(){
   const r = S().review;
   if(!r || !Array.isArray(r.questions) || !r.questions.length) return "";
   return `<section class="sec" id="questions"><div class="sh"><h2>${t("Что стоит уточнить", "Worth checking")}</h2></div>
-    <ul class="qlist card">${r.questions.map(q => `<li>${ICON.spark}<span>${esc(q.text)}</span></li>`).join("")}</ul></section>`;
+    <ul class="qlist card">${r.questions.map(q => { const tid = WL.topicId ? WL.topicId({question: q.text}) : "";
+      return `<li>${tid ? `<button type="button" class="qbtn" data-topic="${esc(tid)}">${ICON.spark}<span>${esc(q.text)}</span><em class="no-print">${t("Обсудить", "Discuss")} →</em></button>` : `${ICON.spark}<span>${esc(q.text)}</span>`}</li>`; }).join("")}</ul></section>`;
 }
 
 function paywall(){
@@ -185,6 +224,23 @@ function detailOf(p){
   if(id) bits.push(id);
   return bits.join(" · ");
 }
+function nowCell(p){
+  if(p.cls === "cash" || p.cls === "deposit") return "";
+  if(p.underQ) return `<span class="sub">${esc(p.underQ.name || p.under || "")}</span>${esc(fmt.num(p.underQ.price, p.underQ.price >= 1000 ? 0 : 2))}<span class="sub ${(p.underQ.change || 0) < 0 ? "dn" : "up"}">${p.underQ.change > 0 ? "+" : ""}${esc(fmt.num(p.underQ.change || 0, 1))}% ${t("день", "day")}</span>`;
+  if(!p.mk) return `<span class="unk" title="${t("нет биржевой котировки — цена из выписки", "no listed price — the statement price is used")}">—</span>`;
+  if(p.mk.suspect) return `<span class="unk" title="${t("котировка не совпадает с выпиской — не используется", "the quote doesn't match the statement — not used")}">?</span>`;
+  const d = p.mk.change;
+  return `${esc(fmt.money(p.mk.price, p.mk.ccy || "", p.mk.price >= 1000 ? 0 : 2))}${d != null ? `<span class="sub ${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(fmt.num(d, 1))}% ${t("день", "day")}</span>` : ""}${p.mk.underlying ? `<span class="sub">${t("акция", "stock")} ${esc(fmt.money(p.mk.underlying, "USD", 2))}</span>` : ""}`;
+}
+function chgCell(p){
+  if(p.cls === "cash" || p.cls === "deposit") return "";
+  const per = WL.ui.per || "1d", src = p.underQ || p.mk;
+  if(!src || (p.mk && p.mk.suspect)) return `<span class="nb">—</span>`;
+  const pc = per === "1d" ? src.change : (src.perf || {})[per];
+  if(pc == null) return `<span class="nb">—</span>`;
+  const v = p.underQ ? null : p.nowB != null ? p.nowB * pc / (100 + pc) : null;
+  return `<b class="${pc < 0 ? "dn" : "up"}">${pc > 0 ? "+" : ""}${esc(fmt.num(pc, 1))}%</b>${v != null ? `<span class="sub">${v > 0 ? "+" : ""}${esc(money(v))}</span>` : p.underQ ? `<span class="sub">${t("базовый актив", "underlying")}</span>` : ""}`;
+}
 function row(p){
   const w = p.w, price = p.price != null ? (p.unit === "%" ? fmt.num(p.price, 2) + "%" : fmt.num(p.price, p.price >= 1000 ? 0 : 2)) : "—";
   return `<tr class="pr" data-pos="${esc(p.id)}" tabindex="0">
@@ -193,7 +249,9 @@ function row(p){
     <td class="n">${p.cls === "cash" || (p.cls === "deposit" && p.qty == null) ? "" : esc(fmt.qty(p.qty))}</td>
     <td class="n">${p.cls === "cash" || (p.cls === "deposit" && p.price == null) ? "" : esc(price)}</td>
     <td class="n">${esc(p.value != null ? fmt.money(p.value, p.ccy || "", p.cls === "cash" ? 2 : 0) : "—")}${p.accrued ? `<span class="sub">+ ${t("НКД", "acc.")} ${esc(fmt.money(p.accrued, p.ccy || "", 0))}</span>` : ""}</td>
-    <td class="n strong">${p.vb == null ? `<span class="unk" title="${t("нет курса", "no FX rate")}">—</span>` : esc(money(p.vb + (p.ab || 0)))}</td>
+    <td class="n mk">${nowCell(p)}</td>
+    <td class="n mk">${chgCell(p)}</td>
+    <td class="n strong">${p.vb == null ? `<span class="unk" title="${t("нет курса", "no FX rate")}">—</span>` : esc(money((liveMode(M()) && p.nowB != null ? p.nowB : p.vb) + (p.ab || 0)))}</td>
     <td class="n w">${esc(fmt.pct(w, Math.abs(w) < 0.1 ? 1 : 0))}</td></tr>`;
 }
 function holdings(){
@@ -208,22 +266,27 @@ function holdings(){
     const ps = list.filter(p => p.cat === c.key).sort((a, b) => ((b.vb || 0) + (b.ab || 0)) - ((a.vb || 0) + (a.ab || 0)));
     if(!ps.length) return "";
     const shown = vis ? ps.filter(p => vis.has(p.id)) : ps, hidden = ps.length - shown.length;
-    return `<tbody class="grp"><tr class="gh"><td colspan="5"><span class="k c-${c.key}"></span>${esc(c.label)} <span class="muted">· ${ps.length}</span></td>
-        <td class="n strong">${esc(money(c.value))}</td><td class="n w">${esc(fmt.pct(c.share, 0))}</td></tr>
+    const cval = liveMode(m) ? ps.reduce((s, p) => s + (p.nowB != null ? p.nowB : (p.vb || 0)) + (p.ab || 0), 0) : c.value;
+    return `<tbody class="grp"><tr class="gh"><td colspan="7"><span class="k c-${c.key}"></span>${esc(c.label)} <span class="muted">· ${ps.length}</span></td>
+        <td class="n strong">${esc(money(cval))}</td><td class="n w">${esc(fmt.pct(c.share, 0))}</td></tr>
       ${shown.map(row).join("")}
-      ${hidden ? `<tr class="lockrow"><td colspan="7">${ICON.lock}${t(`Ещё ${hidden} ${WL.pl(hidden, ["позиция", "позиции", "позиций"], ["position", "positions"])} — в полном отчёте`, `${hidden} more ${WL.pl(hidden, ["position", "positions"], ["position", "positions"])} in the full report`)}
+      ${hidden ? `<tr class="lockrow"><td colspan="9">${ICON.lock}${t(`Ещё ${hidden} ${WL.pl(hidden, ["позиция", "позиции", "позиций"], ["position", "positions"])} — в полном отчёте`, `${hidden} more ${WL.pl(hidden, ["position", "positions"], ["position", "positions"])} in the full report`)}
         <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td></tr>` : ""}</tbody>`;
   }).join("");
   return `<section class="sec" id="holdings"><div class="sh"><h2>${t("Все позиции", "All positions")}</h2><span class="muted">${m.positions.length}</span></div>
+    ${m.mkt ? `<div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.PERIODS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "1d") === id}">${esc(l)}</button>`).join("")}</div></div>` : ""}
     <div class="tools no-print">
       <div class="chips" role="group">${[{key: "all", label: t("Все", "All")}].concat(m.byCat).map(c => `<button type="button" data-cat="${c.key}" aria-pressed="${f === c.key}">${esc(c.label)}</button>`).join("")}</div>
       <input class="search" id="search" type="search" value="${esc(WL.ui.search || "")}" placeholder="${t("Найти бумагу, ISIN, банк", "Find a security, ISIN, bank")}" aria-label="${t("Поиск по позициям", "Search positions")}">
     </div>
     ${WL.ui.only ? `<p class="only no-print">${t("Показаны позиции из предупреждения.", "Showing the positions from a finding.")} <button class="link" type="button" data-clear-only>${t("Показать все", "Show all")}</button></p>` : ""}
     <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l">${t("Где", "Where")}</th><th>${t("Кол-во", "Qty")}</th><th>${t("Цена", "Price")}</th>
-      <th>${t("Стоимость", "Value")}</th><th>${esc(m.base)}</th><th>${t("Доля", "Share")}</th></tr></thead>
-      ${groups || `<tbody><tr><td colspan="7" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
-      <tfoot><tr><td colspan="5">${t("Итого", "Total")}</td><td class="n strong">${esc(money(m.total))}</td><td class="n w">100%</td></tr></tfoot></table></div>
+      <th>${t("Стоимость", "Value")}</th><th>${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.periodLabel(WL.ui.per || "1d").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
+      ${groups || `<tbody><tr><td colspan="9" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
+      <tfoot><tr><td colspan="6">${t("Итого", "Total")}</td><td class="n">${m.mkt && m.mkt.perf[WL.ui.per || "1d"] && m.mkt.perf[WL.ui.per || "1d"].pct != null ? `<b class="${m.mkt.perf[WL.ui.per || "1d"].pct < 0 ? "dn" : "up"}">${m.mkt.perf[WL.ui.per || "1d"].pct > 0 ? "+" : ""}${esc(fmt.pct(m.mkt.perf[WL.ui.per || "1d"].pct, 1))}</b>` : ""}</td>
+        <td class="n strong">${esc(money(liveMode(m) ? m.mkt.nowTotal : m.total))}</td><td class="n w">100%</td></tr></tfoot></table></div>
+    ${m.mkt ? `<p class="fine">${t(`«Сейчас» — биржевые цены на ${new Date(m.mkt.at).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}, акции с задержкой до 15 минут. Облигации, ноты и деньги без биржевой котировки — по выписке; у нот показан базовый актив.`,
+      `“Now” — market prices at ${new Date(m.mkt.at).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"})}, stocks delayed up to 15 minutes. Bonds, notes and cash without a listed price stay at statement values; notes show their underlying.`)}</p>` : ""}
   </section>`;
 }
 
@@ -295,7 +358,7 @@ function report(){
     <p>${t("Отчёт по портфелю", "Portfolio report")} · ${esc(fmt.date(WL.today()))}</p></div>`;
   if(!m.positions.length) return printHead + demoBar() + readingPanel() + (WL.reading ? "" : `<section class="card empty"><h2>${t("Позиций не нашлось", "No positions found")}</h2>
     <p class="muted">${t("В этих файлах не нашлось ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "No balances or securities were found in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
-  return printHead + demoBar() + readingPanel() + hero() + paywall() + claude() + alertsBlock() + questions() + holdings() + currenciesAndDates() + files() + method();
+  return printHead + demoBar() + readingPanel() + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
 }
 
 WL.ui = WL.ui || {filter: "all", search: "", only: null};
@@ -310,6 +373,8 @@ WL.render = () => {
   app.innerHTML = has ? report() : upload();
   if(keep != null && $("#search")){ $("#search").focus(); $("#search").setSelectionRange(keep, keep); }
   WL.renderBar && WL.renderBar();
+  WL.renderChatLauncher && WL.renderChatLauncher();
+  if(WL.chat && WL.chat.open && !WL.chat.topic && WL.renderChat) WL.renderChat();
 };
 
 /* ── Карточка позиции и страница-источник ───────────────────────────── */
@@ -332,11 +397,18 @@ WL.openPos = async id => {
     [t("Купон", "Coupon"), p.coupon != null ? fmt.num(p.coupon, 3).replace(/([,.]\d*?)0+$/, "$1").replace(/[,.]$/, "") + "%" : ""],
     [t("Опцион", "Option"), p.right ? `${p.right === "C" ? t("колл", "call") : t("пут", "put")} ${p.strike ?? ""} ${p.under || ""}` : ""],
     ["ISIN", p.isin], [t("Тикер", "Ticker"), p.ticker],
+    [t("Биржа", "Listing"), p.mk && p.mk.symbol ? p.mk.symbol : p.underQ ? p.underQ.symbol : ""],
+    [t("Цена сейчас", "Price now"), p.mk && !p.mk.suspect ? fmt.money(p.mk.price, p.mk.ccy || "", 2) + (p.mk.delayed ? t(" (задержка до 15 мин)", " (delayed up to 15 min)") : "") : ""],
+    [t(`Сейчас в ${M().base}`, `Now in ${M().base}`), p.nowB != null ? money(p.nowB + (p.ab || 0), 2) : ""],
+    [t("Изменение: день / месяц / год", "Change: day / month / year"), p.mk && !p.mk.suspect && p.mk.perf ? [p.mk.change, p.mk.perf["1m"], p.mk.perf["1y"]].map(v => v == null ? "—" : (v > 0 ? "+" : "") + fmt.num(v, 1) + "%").join(" / ") : ""],
+    [t("Базовый актив", "Underlying"), p.underQ ? `${p.underQ.name || p.under}: ${fmt.num(p.underQ.price, 2)} · ${t("месяц", "month")} ${p.underQ.perf["1m"] > 0 ? "+" : ""}${fmt.num(p.underQ.perf["1m"] || 0, 1)}% · ${t("год", "year")} ${p.underQ.perf["1y"] > 0 ? "+" : ""}${fmt.num(p.underQ.perf["1y"] || 0, 1)}%` : ""],
+    [t("Базовая акция сейчас", "Underlying stock now"), p.mk && p.mk.underlying ? fmt.money(p.mk.underlying, "USD", 2) + (p.strike ? t(` · до страйка ${fmt.pct((p.mk.underlying - p.strike) / p.mk.underlying, 1)}`, ` · ${fmt.pct((p.mk.underlying - p.strike) / p.mk.underlying, 1)} from the strike`) : "") : ""],
     [t("Курс", "FX"), {statement: t("из выписки", "from the statement"), ecb: t("ЕЦБ на дату выписки", "ECB on the statement date"), alt: "currency-api", peg: t("привязка к доллару", "dollar peg"), same: ""}[p.fxSrc] || ""],
   ].filter(r => r[1] !== "" && r[1] != null);
   const dr = $("#drawer");
   dr.innerHTML = `<button class="x" type="button" data-close aria-label="${t("Закрыть", "Close")}">×</button>
     <div class="eyebrow">${esc(WL.catOf(p.cls).label)}</div><h3>${esc(p.name || p.isin)}</h3>
+    ${WL.topicId ? `<button class="btn small talk-pos" type="button" data-topic="pos:${esc(p.id)}">${ICON.spark}${t("Обсудить эту позицию", "Discuss this position")}</button>` : ""}
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     <div class="src"><div class="eyebrow">${t("Откуда цифры", "Where the numbers come from")}</div>
       <p>${esc(p.docFile)}${p.page ? t(`, страница ${p.page}`, `, page ${p.page}`) : ""}</p><div class="page" id="srcPage"><div class="skel tall"></div></div></div>`;
@@ -378,10 +450,15 @@ WL.excel = async () => {
   const head = [t("Категория", "Category"), t("Бумага", "Security"), "ISIN", t("Тикер", "Ticker"), t("Банк", "Institution"), t("Счёт", "Account"), t("Количество", "Quantity"),
     t("Цена", "Price"), t("Цена в % номинала", "Price in % of nominal"), t("Стоимость", "Value"), t("Валюта", "Currency"), t("Накопленный купон", "Accrued interest"),
     t(`Стоимость, ${base}`, `Value, ${base}`), t("Доля, %", "Share, %"), t("Погашение / экспирация", "Maturity / expiry"), t("Купон, %", "Coupon, %"), t("Опцион", "Option"),
-    t("Себестоимость", "Cost"), t("Файл", "File"), t("Страница", "Page"), t("Дата выписки", "Statement date")];
+    t("Себестоимость", "Cost"), t("Файл", "File"), t("Страница", "Page"), t("Дата выписки", "Statement date"),
+    t("Биржевой символ", "Listing"), t("Цена сейчас", "Price now"), t("Валюта котировки", "Quote currency"), t("Изм. день, %", "Chg. day, %"), t("Изм. месяц, %", "Chg. month, %"),
+    t("Изм. год, %", "Chg. year, %"), t(`Сейчас, ${base}`, `Now, ${base}`), t("Базовый актив", "Underlying"), t("Базовый актив сейчас", "Underlying now")];
   const rows = m.positions.slice().sort((a, b) => a.cat.localeCompare(b.cat) || ((b.vb || 0) - (a.vb || 0))).map(p => [WL.catOf(p.cls).label, p.name, p.isin, p.ticker, p.inst, p.acct,
     p.qty, p.price, p.unit === "%" ? t("да", "yes") : "", p.value, p.ccy, p.accrued, round((p.vb || 0) + (p.ab || 0)), round(p.w * 100, 3), p.date, p.coupon,
-    p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : "", p.cost, p.docFile, p.page || null, p.as_of]);
+    p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : "", p.cost, p.docFile, p.page || null, p.as_of,
+    p.mk && !p.mk.suspect ? p.mk.symbol || "Cboe" : "", p.mk && !p.mk.suspect ? p.mk.price : null, p.mk && !p.mk.suspect ? p.mk.ccy : "", p.mk && !p.mk.suspect ? p.mk.change : null,
+    p.mk && !p.mk.suspect && p.mk.perf ? p.mk.perf["1m"] : null, p.mk && !p.mk.suspect && p.mk.perf ? p.mk.perf["1y"] : null, p.nowB != null ? round(p.nowB + (p.ab || 0)) : null,
+    p.underQ ? (p.underQ.name || p.under) : (p.mk && p.mk.underlying ? p.under : ""), p.underQ ? p.underQ.price : (p.mk && p.mk.underlying) || null]);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([head, ...rows]), t("Позиции", "Positions"));
   const docs = [[t("Файл", "File"), t("Банк", "Institution"), t("Документ", "Document"), t("Дата", "As of"), t("Страниц", "Pages"), t("В отчёте", "Included"), t("Причина", "Reason"),
     t("Сверка", "Reconciliation"), t("Итог банка", "Bank total"), t("Валюта итога", "Total currency"), t("Сумма позиций", "Positions sum")]];
@@ -390,8 +467,17 @@ WL.excel = async () => {
       d.recon ? {ok: t("сошлось", "matches"), partial: t("частично", "partly"), mismatch: t("не сошлось", "mismatch"), none: t("нет итога", "no total")}[d.recon.status] : "",
       c ? c.amount : null, c ? c.ccy : "", c ? round(c.sum) : null]); }
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(docs), t("Выписки", "Statements"));
+  if(m.mkt){
+    const mk = m.mkt, P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
+    const sheet = [[t("Рынок", "Market"), new Date(mk.at).toLocaleString()], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],
+      [t("Доля по рыночной цене, %", "Share at market prices, %"), round(mk.coverage * 100)], [],
+      [t("Изменение, %", "Change, %"), t("Портфель", "Portfolio"), ...mk.benchmarks.map(b => b.label)],
+      ...P.map(([id, l]) => [l, mk.perf[id] && mk.perf[id].pct != null ? round(mk.perf[id].pct * 100) : null, ...mk.benchmarks.map(b => b.perf ? b.perf[id] : null)]), [],
+      [t("Котировка", "Quote"), t("Цена", "Price"), t("Изм. день, %", "Chg. day, %")], ...mk.overview.map(x => [x.label, x.price, x.change])];
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sheet), t("Рынок", "Market"));
+  }
   const al = [[t("Уровень", "Level"), t("Что", "What"), t("Подробно", "Details"), t("Источник", "Source")]];
-  for(const a of m.alerts) al.push([LVL[a.level], a.title, a.text, t("расчёт", "calculation")]);
+  for(const a of m.alerts) al.push([LVL[a.level], a.title, a.text, basisOf(a)]);
   for(const a of (r.alerts || [])) al.push([LVL[a.level], a.title, a.text, t("ИИ-анализ", "AI analysis")]);
   for(const q of (r.questions || [])) al.push([t("Уточнить", "Check"), q.text, "", t("ИИ-анализ", "AI analysis")]);
   X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(al), t("Внимание", "Attention"));

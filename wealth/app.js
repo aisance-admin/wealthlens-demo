@@ -6,11 +6,12 @@ const STORE = "wl_report_v2";
 const FILE_PARALLEL = 3, PART_PARALLEL = 4;
 WL.blobs = {};
 
-const fresh = () => ({v: 2, rid: WL.uid(), client: t("Мой портфель", "My portfolio"), base: "USD", files: [], docs: [], include: {}, review: null, qa: [], fx: {}, created: Date.now()});
+const fresh = () => ({v: 2, rid: WL.uid(), client: t("Мой портфель", "My portfolio"), base: "USD", files: [], docs: [], include: {}, review: null, chats: {}, fx: {}, created: Date.now()});
 function load(){
   const s = WL.store.get(STORE);
   if(!s || s.v !== 2 || !Array.isArray(s.files) || !Array.isArray(s.docs)) return fresh();
   // Чтение, прерванное закрытием вкладки, не продолжается само: файл помечается, его можно повторить.
+  delete s.qa;
   s.files.forEach(f => { if(/queued|reading/.test(f.status)){ f.status = "error"; f.reason = t("чтение прервалось — нажмите «Повторить»", "reading was interrupted — use “Try again”"); } });
   return Object.assign(fresh(), s);
 }
@@ -30,8 +31,23 @@ WL.rebuild = async () => {
   if(!s.docs.length){ WL.model = null; WL.render(); return; }
   await WL.ensureFx(s, s.base);
   WL.model = WL.build(s);
+  if(WL.market && WL.market.apply) WL.market.apply(WL.model, s);
   if(s.demo && WL.demoReview) s.review = WL.demoReview(WL.model);
   WL.save(); WL.render();
+};
+/* Свежие котировки — при каждом открытии отчёта, после чтения и по кнопке «Обновить». */
+let marketBusy = null;
+WL.refreshMarket = () => {
+  if(marketBusy) return marketBusy;
+  if(!WL.model || !WL.model.positions.length) return Promise.resolve(false);
+  WL.marketLoading = true; WL.render();
+  marketBusy = WL.market.refresh(WL.state, WL.model).then(ok => ok).catch(() => false).then(async ok => {
+    WL.marketLoading = false; marketBusy = null;
+    if(!ok) WL.toast(t("Котировки не загрузились — показаны данные выписок. Попробуйте «Обновить» позже.", "Market data did not load — statement values are shown. Try “Refresh” later."));
+    await WL.rebuild();
+    return ok;
+  });
+  return marketBusy;
 };
 
 /* ── Пароль к защищённому файлу ─────────────────────────────────────── */
@@ -93,6 +109,7 @@ async function runQueue(){
     WL.reading = false;
     await WL.rebuild();
     if(WL.quotaHit) quotaMessage();
+    await WL.refreshMarket();
     requestReview();
   }
 }
@@ -170,19 +187,6 @@ async function requestReview(force){
   WL.save(); WL.render();
 }
 const reviewSoon = () => { clearTimeout(reviewTimer); reviewTimer = setTimeout(() => requestReview(), 1500); };
-async function ask(q){
-  const s = WL.state, m = WL.model;
-  if(!q || !m) return;
-  s.qa = s.qa || [];
-  const item = {q, a: null};
-  s.qa.push(item); WL.render();
-  const box = $("#qa"); if(box) box.lastElementChild && box.lastElementChild.scrollIntoView({block: "nearest", behavior: "smooth"});
-  const r = await WL.api("/ask", Object.assign({lang: WL.lang, question: q, history: s.qa.filter(x => x !== item && x.a).slice(-6), report: WL.compact(m, s)}, WL.pay.auth()), {timeout: 150000});
-  item.a = r && r.answer ? r.answer : r && r.error === "quota" ? t("На этот час вопросы закончились — попробуйте позже.", "No more questions this hour — try again later.") : t("Не удалось получить ответ. Попробуйте ещё раз.", "Could not get an answer. Please try again.");
-  WL.save(); WL.render();
-  const f = $("#ask input"); if(f) f.focus();
-}
-
 /* ── Отчёт целиком ──────────────────────────────────────────────────── */
 async function newReport(){
   const s = WL.state;
@@ -195,9 +199,10 @@ async function newReport(){
   abort.abort(); abort = new AbortController();
   await WL.files.clear();
   WL.store.del(STORE); WL.blobs = {}; WL.state = fresh(); WL.model = null; WL.reviewing = false; WL.ui = {filter: "all", search: "", only: null};
-  WL.closeDrawer(); WL.render(); scrollTo(0, 0);
+  WL.closeDrawer(); if(WL.closeChat) WL.closeChat(); WL.render(); scrollTo(0, 0);
 }
 function leaveDemo(render = true){
+  if(WL.closeChat) WL.closeChat();
   const u = new URL(location.href); u.searchParams.delete("demo"); history.replaceState(null, "", u.pathname + u.search + u.hash);
   WL.state = load(); WL.model = null;
   if(WL.state.docs.length) WL.rebuild(); else if(render) WL.render();
@@ -254,12 +259,6 @@ document.addEventListener("input", e => {
   if(e.target.id === "search"){ clearTimeout(searchTimer); const v = e.target.value; searchTimer = setTimeout(() => { WL.ui.search = v; WL.ui.only = null; WL.render(); }, 140); }
   if(e.target.id === "client"){ clearTimeout(clientTimer); const v = e.target.value; clientTimer = setTimeout(() => { WL.state.client = v.slice(0, 80); WL.save(); }, 250); }
 });
-document.addEventListener("submit", e => {
-  if(e.target.id !== "ask") return;
-  e.preventDefault();
-  const q = (e.target.q.value || "").trim(); if(!q) return;
-  e.target.q.value = ""; ask(q);
-});
 document.addEventListener("keydown", e => {
   if(e.key === "Escape" && $("#drawer").classList.contains("open")) WL.closeDrawer();
   if(e.key === "Enter" && e.target.matches && e.target.matches("tr.pr")) WL.openPos(e.target.dataset.pos);
@@ -276,6 +275,10 @@ document.addEventListener("click", async e => {
   if(d.dl){ $("#dlMenu").hidden = true; return d.dl === "pdf" ? WL.printReport() : WL.excel(); }
   const menu = $("#dlMenu"); if(menu && !menu.hidden && !el.closest("#dlMenu")) menu.hidden = true;
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
+  if(d.per){ WL.ui.per = d.per; return WL.render(); }
+  if(d.val){ WL.ui.val = d.val; return WL.render(); }
+  if(d.bench){ WL.ui.bench = d.bench; return WL.render(); }
+  if(d.refreshMarket !== undefined) return WL.refreshMarket();
   if(d.cat){ WL.ui.filter = d.cat; WL.ui.only = null; return WL.render(); }
   if(d.show){ WL.ui.only = d.show.split(","); WL.ui.filter = "all"; WL.ui.search = ""; WL.render(); const h = $("#holdings"); if(h) h.scrollIntoView({behavior: "smooth", block: "start"}); return; }
   if(d.clearOnly !== undefined){ WL.ui.only = null; return WL.render(); }
@@ -284,7 +287,7 @@ document.addEventListener("click", async e => {
   if(d.restore !== undefined) return WL.pay.restore(el);
   if(d.review !== undefined) return requestReview(true);
   if(d.reread) return reread(d.reread);
-  if(d.include){ WL.state.include[d.include] = true; await WL.rebuild(); return reviewSoon(); }
+  if(d.include){ WL.state.include[d.include] = true; await WL.rebuild(); WL.refreshMarket(); return reviewSoon(); }
   if(d.exclude){ WL.state.include[d.exclude] = false; await WL.rebuild(); return reviewSoon(); }
   if(d.remove) return removeFile(d.remove);
   if(d.setccy){
@@ -304,9 +307,10 @@ window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.
 (async () => {
   if(WL.state.docs.length){ try{ WL.model = WL.build(WL.state); }catch(e){ console.error(e); WL.model = null; } }
   WL.render();
-  if(WL.state.docs.length) await WL.rebuild();
+  if(WL.state.docs.length){ await WL.rebuild(); WL.refreshMarket(); }
   await WL.pay.returnFromStripe();
   await WL.pay.check();
+  if(WL.chatReturn) await WL.chatReturn();
   if(WL.model && !WL.state.demo && (!WL.state.review || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
   if(WL.track) WL.track("ViewContent", {content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"});
 })();
