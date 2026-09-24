@@ -87,7 +87,7 @@ function creditsPill(){
   const n = c.left, free = !(c.paid || c.bought || c.test);
   const txt = free ? t(`${n} ${WL.pl(n, ["бесплатное сообщение", "бесплатных сообщения", "бесплатных сообщений"], ["", ""])}`, `${n} free ${n === 1 ? "message" : "messages"}`)
     : t(`${n} ${WL.pl(n, ["сообщение", "сообщения", "сообщений"], ["", ""])}`, `${n} ${n === 1 ? "message" : "messages"} left`);
-  return `<span class="credits${n <= 0 ? " out" : n <= 2 ? " low" : ""}" title="${t("Сообщения считаются на этот отчёт. Вступление ассистента по теме — бесплатно.", "Messages are counted per report. The assistant's opening on a topic is free.")}">${esc(txt)}</span>`;
+  return `<span class="credits${n <= 0 ? " out" : n <= 2 ? " low" : ""}" title="${esc(t(`Сообщения считаются на этот отчёт. Вступление ассистента по новой теме бесплатно — ещё ${c.opens_left} из ${c.opens_limit}.`, `Messages are counted per report. The assistant's opening on a new topic is free — ${c.opens_left} of ${c.opens_limit} left.`))}">${esc(txt)}</span>`;
 }
 
 function topicButton(x){
@@ -129,6 +129,8 @@ function noCredits(){
   if(S().demo) return `<div class="nocred"><b>${t("В примере бесплатные сообщения закончились", "The free messages in the sample are used up")}</b>
     <p>${t("Загрузите свои выписки — по вашему портфелю ассистент разберёт каждую тему так же.", "Upload your statements — the assistant will go through every topic of your own portfolio the same way.")}</p>
     <div class="nb-a"><button type="button" class="btn primary small" data-new>${t("Загрузить свои выписки", "Upload your statements")}</button></div></div>`;
+  if(c.test) return `<div class="nocred"><b>${t("Сообщения на тестовой копии закончились", "The messages on the test copy are used up")}</b>
+    <p>${t(`Здесь ${c.free} бесплатных сообщений на отчёт. Начните новый отчёт или напишите нам, если нужно больше.`, `There are ${c.free} free messages per report here. Start a new report or write to us if you need more.`)}</p></div>`;
   const lockedReport = WL.pay.PAYWALL && WL.pay.locked() && !S().demo;
   const packs = (c.packs || []).map(p => `<button type="button" class="btn small" data-pack="${esc(p.id)}">${t(`${p.messages} сообщений`, `${p.messages} messages`)}${p.label ? " · " + esc(p.label) : ""}</button>`).join("");
   return `<div class="nocred"><b>${c.paid || c.bought ? t("Сообщения закончились", "You are out of messages") : t("Бесплатные сообщения закончились", "The free messages are used up")}</b>
