@@ -195,13 +195,26 @@ async function loadCredits(){
 }
 
 /* Отчёт для ассистента: данные портфеля и то, что пользователь уже видит в выводах. */
-function reportFor(){
-  const rep = WL.compact(M(), S()), r = S().review || {};
+/* Отчёт для ассистента: данные портфеля и то, что пользователь уже видит в выводах. Позиций — не больше 150 крупнейших
+   (остальные — одной суммой) плюс позиции темы разговора: так ответ по большому портфелю стоит как по среднему. */
+const CHAT_POSITIONS = 150;
+function reportFor(refs){
+  const rep = WL.compact(M(), S(), {keep: refs}), r = S().review || {};
   const all = WL.alertList ? WL.alertList() : [], vis = WL.pay.locked() ? all.slice(0, 1) : all;
   rep.findings_shown_to_user = {summary: r.summary || undefined, alerts: vis.map(a => ({level: a.level, title: a.title, text: a.text, source: a.auto ? "checks" : "ai_analysis"})),
     more_in_full_report: all.length - vis.length || undefined, questions_to_check: (r.questions || []).map(q => q.text)};
+  if(rep.positions.length > CHAT_POSITIONS){
+    const want = new Set(refs || []);
+    const keep = rep.positions.filter((p, i) => i < CHAT_POSITIONS || want.has(p.id)), cut = rep.positions.filter(p => !keep.includes(p));
+    const prev = rep.positions_not_listed || {count: 0, value: 0};
+    rep.positions = keep;
+    rep.positions_not_listed = {count: prev.count + cut.length, value: Math.round((prev.value + cut.reduce((s, p) => s + (p.value_report_ccy || 0), 0)) * 100) / 100,
+      note: "smallest positions, summed; ask the user to open the position card for details"};
+    if(rep.market && rep.market.positions){ const ids = new Set(keep.map(p => p.id)); rep.market.positions = rep.market.positions.filter(p => ids.has(p.id)); }
+  }
   return rep;
 }
+WL.chatReport = reportFor;
 
 async function turn(topic, text){
   const id = topic.id;
@@ -212,7 +225,7 @@ async function turn(topic, text){
   C.pending.add(id); delete C.errors[id];
   dismissNudge(); WL.save(); renderPanel(); launcher();
   const body = Object.assign({lang: WL.lang, rid: rid(), topic: {kind: topic.kind, title: topic.title, text: topic.text, level: topic.level, positions: topic.refs || []},
-    messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(), preview: !S().demo && WL.pay.locked(),
+    messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(topic.refs), preview: !S().demo && WL.pay.locked(),
     tally: tally() || undefined, packs: packs()}, auth());
   const r = await WL.api("/chat", body, {timeout: 285000});
   C.pending.delete(id);

@@ -316,10 +316,11 @@ function alerts(M, S){
 }
 
 /* Данные отчёта для сводки ИИ: сводка, выписки со сверкой, позиции (до 700 крупнейших), автоматические предупреждения. */
-WL.compact = (M, S) => {
+WL.compact = (M, S, opts = {}) => {
   const r2 = v => v == null ? null : Math.round(v * 100) / 100;
   const ps = M.positions.slice().sort((a, b) => Math.abs((b.vb || 0)) - Math.abs((a.vb || 0)));
-  const top = ps.slice(0, 700), rest = ps.slice(700);
+  const keep = new Set(opts.keep || []);                     // позиции, которые нужны всегда (тема разговора)
+  const top = ps.filter((p, i) => i < 700 || keep.has(p.id)), rest = ps.filter((p, i) => i >= 700 && !keep.has(p.id));
   return {
     report_currency: M.base, total: r2(M.total), accrued_interest_included: r2(M.accrued), today: WL.today(),
     categories: M.byCat.map(c => ({category: c.label, value: r2(c.value), share: r2(c.share * 100)})),
