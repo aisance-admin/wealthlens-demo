@@ -7,7 +7,7 @@ const LVL = {high: t("Важно", "Important"), watch: t("Внимание", "W
 const TYPE = {portfolio: t("портфельная выписка", "portfolio statement"), bank: t("банковская выписка", "bank statement"), brokerage: t("брокерская выписка", "brokerage statement"),
   transactions: t("список операций", "transaction list"), other_financial: t("финансовый документ", "financial document"), not_financial: t("не выписка", "not a statement")};
 const WHY = {not_financial: t("это не выписка — в отчёт не входит", "not a statement — not included"), no_positions: t("позиций и остатков в файле нет", "no holdings or balances in the file"),
-  unread: t("файл не прочитан", "the file was not read"), older: t("более старая выписка того же счёта — учтена свежая", "an older statement of the same account — the newer one is used"),
+  unread: t("файл не прочитан", "the file was not read"), older: t("выписка из истории — состав берётся из свежей, эта — в динамике за период", "a statement from the history — holdings come from the newer one, this one feeds the period changes"),
   duplicate: t("та же выписка ещё раз — учтена одна", "the same statement again — counted once"), removed: t("вы убрали его из отчёта", "you removed it from the report")};
 const ICON = {
   check: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.4l2.9 2.8 6.1-6.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -83,6 +83,98 @@ WL.renderReading = () => { const el = $("#reading"); if(!el){ if(WL.reading) WL.
   const tmp = document.createElement("div"); tmp.innerHTML = html; el.replaceWith(tmp.firstElementChild); };
 
 /* ── Отчёт ──────────────────────────────────────────────────────────── */
+/* Результат выбранного периода (модель Саши): один расчёт на отрисовку — им пользуются итог, таблица и Excel. */
+let perCache = null;
+function per(){
+  const m = M(); if(!m) return null;
+  const id = WL.ui.per || "all", live = liveMode(m), key = [id, live, m.mkt && m.mkt.at, WL.fxsVer || 0].join("|");
+  if(!perCache || perCache.m !== m || perCache.key !== key) perCache = {m, key, r: WL.period(m, id, live)};
+  return perCache.r;
+}
+WL.perNow = per;
+const sgn = v => v > 0 ? "+" : v < 0 ? "−" : "";
+/* Динамика за период — сразу под итогом: переключатель окна и два числа — «заработано» и «изменение стоимости». */
+function dynamics(m){
+  const r = per();
+  if(!r) return "";
+  const id = r.id, abs = v => money(Math.abs(v)), stmtEnd = m.dates[m.dates.length - 1];
+  const since = id === "all" ? r.start : r.change != null ? r.startDate : r.start;
+  const chips = `<div class="chips per no-print" role="group" aria-label="${t("Период", "Period")}">${WL.WINDOWS.map(([k, l]) => `<button type="button" data-per="${k}" aria-pressed="${id === k}">${esc(l)}</button>`).join("")}</div>`;
+  const has = r.exact || r.coverage > 0;
+  const earned = `<div class="dv"><span class="dl">${t("Заработано", "Earned")}</span>${has
+    ? `<b class="${r.earned < 0 ? "dn" : "up"}">${r.exact ? "" : "≈ "}${sgn(r.earned)}${esc(abs(r.earned))}</b>${r.earnedPct != null && isFinite(r.earnedPct) ? `<span class="${r.earned < 0 ? "dn" : "up"}">${sgn(r.earnedPct)}${esc(fmt.pct(Math.abs(r.earnedPct), 1))}</span>` : ""}`
+    : `<span class="muted">${t("нет точки отсчёта", "no starting point")}</span>`}</div>`;
+  const change = r.change != null ? `<div class="dv"><span class="dl">${t("Изменение стоимости", "Change in value")}${r.startDate !== since ? ` · ${t("с", "since")} ${esc(fmt.date(r.startDate))}` : ""}</span><b>${sgn(r.change)}${esc(abs(r.change))}</b>
+      ${r.flows != null && Math.abs(r.flows) >= 1 ? `<span class="muted">${t(`в т.ч. пополнения и снятия ${sgn(r.flows)}${abs(r.flows)}`, `incl. deposits and withdrawals ${sgn(r.flows)}${abs(r.flows)}`)}</span>` : ""}</div>`
+    : id === "1d" || id === "1w" ? "" : `<div class="dv"><span class="dl">${t("Изменение стоимости", "Change in value")}</span><span class="muted">${id === "all" || !r.start
+      ? t("нужны выписки за прошлые периоды", "needs statements for past periods") : t(`нужна выписка на ${fmt.date(r.start)}`, `needs a statement as of ${fmt.date(r.start)}`)}</span></div>`;
+  const n = r.srcCount, src = [n.buy ? t(`цена покупки — ${n.buy}`, `purchase price — ${n.buy}`) : "", n.stmt ? t(`выписка — ${n.stmt}`, `statement — ${n.stmt}`) : "",
+    n.mkt ? t(`биржевая цена — ${n.mkt}`, `market price — ${n.mkt}`) : ""].filter(Boolean).join(", ");
+  const basis = r.exact ? t(`Основа: выписки на ${fmt.date(r.startDate)} и ${fmt.date(stmtEnd)}${r.live ? ", после выписки — текущие цены" : ""}; пополнения и снятия — из сводок выписок.`,
+      `Source: statements as of ${fmt.date(r.startDate)} and ${fmt.date(stmtEnd)}${r.live ? ", current prices after the statement" : ""}; deposits and withdrawals from the statement summaries.`)
+    : has ? t(`Оценка по позициям. Точка отсчёта: ${src}${r.coverage < 0.995 ? `; без неё — ${fmt.pct(1 - r.coverage, 0)} вложений` : ""}. Деньги на счетах в «заработано» не входят.`,
+      `Estimate from positions. Starting point: ${src}${r.coverage < 0.995 ? `; none for ${fmt.pct(1 - r.coverage, 0)} of holdings` : ""}. Cash balances are not counted as earnings.`)
+    : t("Ни у одной бумаги нет точки отсчёта для этого периода: нет выписки на его начало, дат покупки внутри периода и биржевых цен.", "No holding has a starting point for this period: no statement at its start, no purchases inside it and no market prices.");
+  const gaps = r.gaps.length ? t(`Нет выписок за ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}: пополнения и снятия за это время неизвестны.`,
+    `No statements for ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}: deposits and withdrawals for that time are unknown.`) : "";
+  const breaks = r.breaks.length ? t(`Стоимость на конец выписки на ${r.breaks.map(b => fmt.date(b.date)).join(", ")} не совпала со стоимостью на начало следующей — сверьте выписки.`,
+    `The closing value of the statement as of ${r.breaks.map(b => fmt.date(b.date)).join(", ")} doesn't match the opening value of the next one — check the statements.`) : "";
+  return `<div class="dyn">${chips}<div class="eyebrow dyh">${esc(r.label)} · ${since ? `${t("с", "since")} ${esc(fmt.date(since))}` : t("с покупки", "since purchase")}${r.live ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>
+    <div class="dvs">${earned}${change}</div><p class="fine">${esc([basis, gaps, breaks].filter(Boolean).join(" "))}</p></div>`;
+}
+/* История портфеля: стоимость по датам выписок (и на начало периода первой), график и цепочка выписок с проверкой стыков. */
+function historyPoints(lines){
+  if(lines.length === 1) return lines[0].points.map(p => ({date: p.date, value: p.value, src: p.src}));
+  const dates = [...new Set(lines.flatMap(L => L.points.map(p => p.date)))].sort(), out = [];
+  for(const d of dates){
+    let sum = 0, ok = true;
+    for(const L of lines){ const p = L.points.find(x => Math.abs(WL.dms(x.date) - WL.dms(d)) <= 5 * 864e5); if(!p){ ok = false; break; } sum += p.value; }
+    if(ok && !out.some(x => Math.abs(WL.dms(x.date) - WL.dms(d)) <= 5 * 864e5)) out.push({date: d, value: sum, src: "sum"});
+  }
+  return out;
+}
+function historyChart(pts, W = 1100, Hh = 230, cls = ""){
+  if(pts.length < 2) return "";
+  const L0 = 10, R0 = 10, T0 = 18, B0 = 30;
+  const x0 = WL.dms(pts[0].date), x1 = WL.dms(pts[pts.length - 1].date) || x0 + 1;
+  const vs = pts.map(p => p.value), lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 1;
+  const X = d => L0 + (WL.dms(d) - x0) / (x1 - x0 || 1) * (W - L0 - R0), Y = v => T0 + (1 - (v - (lo - pad)) / ((hi + pad) - (lo - pad))) * (Hh - T0 - B0);
+  const stmt = pts.filter(p => p.src !== "live"), live = pts.find(p => p.src === "live");
+  const path = stmt.map((p, i) => `${i ? "L" : "M"}${X(p.date).toFixed(1)},${Y(p.value).toFixed(1)}`).join(" ");
+  const area = `${path} L${X(stmt[stmt.length - 1].date).toFixed(1)},${Hh - B0} L${X(stmt[0].date).toFixed(1)},${Hh - B0} Z`;
+  const last = stmt[stmt.length - 1];
+  // подписи дат: первая, последняя и средняя — только если она не налезает на крайние
+  const mid = pts.slice(1, -1).map(p => [p, Math.abs(X(p.date) - W / 2)]).sort((a, b) => a[1] - b[1])[0];
+  const ticks = [pts[0], ...(mid && X(mid[0].date) > W * 0.28 && X(mid[0].date) < W * 0.72 ? [mid[0]] : []), pts[pts.length - 1]];
+  return `<svg class="hchart ${cls}" viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${t("Стоимость портфеля по датам выписок", "Portfolio value by statement date")}">
+    <line class="hg" x1="${L0}" x2="${W - R0}" y1="${Y(hi).toFixed(1)}" y2="${Y(hi).toFixed(1)}"/><line class="hg" x1="${L0}" x2="${W - R0}" y1="${Y(lo).toFixed(1)}" y2="${Y(lo).toFixed(1)}"/>
+    <text class="hv" x="${W - R0}" y="${(Y(hi) - 4).toFixed(1)}" text-anchor="end">${esc(money(hi))}</text><text class="hv" x="${W - R0}" y="${(Y(lo) + 12).toFixed(1)}" text-anchor="end">${esc(money(lo))}</text>
+    <path class="ha" d="${area}"/><path class="hl" d="${path}"/>
+    ${live ? `<path class="hl live" d="M${X(last.date).toFixed(1)},${Y(last.value).toFixed(1)} L${X(live.date).toFixed(1)},${Y(live.value).toFixed(1)}"/>` : ""}
+    ${pts.map(p => `<circle class="hp${p.src === "live" ? " live" : p.src === "opening" ? " open" : ""}" cx="${X(p.date).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="4"><title>${esc(fmt.date(p.date))} · ${esc(money(p.value))}${p.src === "opening" ? t(" · на начало периода выписки", " · opening value of a statement") : p.src === "live" ? t(" · сейчас", " · now") : ""}</title></circle>`).join("")}
+    ${ticks.map((p, i) => `<text class="hx" x="${X(p.date).toFixed(1)}" y="${Hh - 8}" text-anchor="${i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle"}">${esc(fmt.date(p.date))}</text>`).join("")}
+  </svg>`;
+}
+function historySec(){
+  const m = M(), H = m.hist, lines = H ? H.lines.filter(L => L.current) : [];
+  if(!lines.some(L => L.points.length > 1)) return "";
+  const pts = historyPoints(lines);
+  if(liveMode(m)) pts.push({date: WL.today(), value: m.mkt.nowTotal, src: "live"});
+  const rows = lines.flatMap(L => L.snaps.map((s, i) => {
+    const link = L.links.find(k => k.snap === s.id), f = s.flows || {};
+    const mark = !link ? "" : link.gap ? `<span class="badge none">${esc(t(`пробел ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`, `gap ${fmt.date(link.gapFrom)} – ${fmt.date(link.gapTo)}`))}</span>`
+      : link.ok === true ? `<span class="badge ok" title="${esc(t("Стоимость на начало совпала с концом предыдущей выписки", "The opening value matches the previous statement's closing value"))}">${ICON.check}${t("стык сошёлся", "continuous")}</span>`
+      : link.ok === false ? `<span class="badge bad">${ICON.warn}${esc(t(`на начало ${money(link.opening)}, в прошлой ${money(link.closing)}`, `opening ${money(link.opening)}, previous ${money(link.closing)}`))}</span>` : "";
+    const mv = [f.deposits ? t(`пополнения ${money(f.deposits)}`, `deposits ${money(f.deposits)}`) : "", f.withdrawals ? t(`снятия ${money(f.withdrawals)}`, `withdrawals ${money(f.withdrawals)}`) : "",
+      f.income ? t(`доходы ${money(f.income)}`, `income ${money(f.income)}`) : "", f.fees ? t(`комиссии ${money(f.fees)}`, `fees ${money(f.fees)}`) : ""].filter(Boolean).join(" · ");
+    return `<li><span class="hd">${esc(fmt.date(s.as_of))}</span><span class="hn">${esc(s.from ? `${fmt.date(s.from)} – ${fmt.date(s.to || s.as_of)}` : t("на дату", "as of date"))}${lines.length > 1 ? ` · ${esc(L.name)}` : ""}${mv ? `<span class="sub">${esc(mv)}</span>` : ""}</span>
+      <b>${esc(money(s.value))}</b>${mark}</li>`;
+  })).reverse();
+  return `<section class="sec" id="history"><div class="sh"><h2>${t("История", "History")}</h2><span class="muted">${t(`${rows.length} ${WL.pl(rows.length, ["выписка", "выписки", "выписок"], ["", ""])}`, `${rows.length} ${rows.length === 1 ? "statement" : "statements"}`)}</span></div>
+    <div class="card pad">${historyChart(pts, 1100, 230, "hc-wide")}${historyChart(pts, 560, 300, "hc-narrow")}<ul class="hlist">${rows.join("")}</ul>
+    <p class="fine">${t("Стоимость — по выпискам на их даты; кружок без заливки — стоимость на начало периода выписки из её сводки. Стык — проверка, что стоимость на конец одной выписки совпадает с началом следующей.",
+      "Values are taken from the statements as of their dates; an open circle is a statement's opening value from its summary. A link check confirms that one statement's closing value matches the next one's opening value.")}</p></div></section>`;
+}
 function hero(){
   const m = M(), s = S();
   const accts = new Set(m.docs.filter(d => d.use).flatMap(d => d.accounts.map(a => (d.institution || d.file) + "|" + a.id)));
@@ -94,6 +186,7 @@ function hero(){
       <div class="th"><span class="eyebrow">${t("Всего", "Total")} ${esc(baseName)}</span>
         <div class="seg" role="group" aria-label="${t("Валюта отчёта", "Report currency")}">${WL.BASES.map(b => `<button type="button" data-base="${b}" aria-pressed="${b === m.base}">${b}</button>`).join("")}</div></div>
       ${valuation(m, dates)}
+      ${dynamics(m)}
       <div class="ts">${esc([m.mkt && WL.ui.val !== "stmt" ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
         `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
@@ -130,7 +223,8 @@ function coverageOf(m){
   const files = S().files, docs = m.docs, used = docs.filter(d => d.use);
   const n = (k, one, few, many, en1, enN) => t(`${k} ${WL.pl(k, [one, few, many], ["", ""])}`, `${k} ${k === 1 ? en1 : enN}`);
   const why = {};
-  docs.filter(d => !d.use).forEach(d => { why[d.why] = (why[d.why] || 0) + 1; });
+  docs.filter(d => !d.use && !d.history).forEach(d => { why[d.why] = (why[d.why] || 0) + 1; });
+  const hist = docs.filter(d => d.history), histBad = hist.filter(d => d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
   const reading = files.filter(f => /queued|reading/.test(f.status)).length;
   const broken = files.filter(f => (f.status === "error" || f.status === "skipped") && !docs.some(d => d.id === f.id)).length;
   const pages = used.reduce((k, d) => k + (d.failed || []).reduce((q, x) => q + x.to - x.from + 1, 0), 0);
@@ -140,7 +234,7 @@ function coverageOf(m){
   const open = used.filter(d => d.recon && d.recon.status === "ok" && d.recon.open).length;
   const twice = used.filter(d => d.conflict && d.conflict.length).length;
   const out = [], note = [];
-  const WHY = {older: [t("более старая выписка того же счёта", "an older statement of the same account"), t("более старые выписки тех же счетов", "older statements of the same accounts")],
+  const WHY = {older: [t("выписка из истории", "a statement from the history"), t("выписки из истории", "statements from the history")],
     duplicate: [t("повтор", "a duplicate"), t("повторы", "duplicates")], not_financial: [t("не выписка", "not a statement"), t("не выписки", "not statements")],
     no_positions: [t("без позиций", "no positions"), t("без позиций", "no positions")], unread: [t("не прочитан", "not read"), t("не прочитаны", "not read")],
     removed: [t("убран вами", "removed by you"), t("убраны вами", "removed by you")]};
@@ -154,8 +248,15 @@ function coverageOf(m){
     `${open} ${open === 1 ? "statement matches" : "statements match"} in total but not in the subtotals`));
   if(twice) out.push(t("возможен двойной учёт счёта", "an account may be counted twice"));
   const warn = out.length > 0 || !!(why.unread || why.no_positions);
-  const all = docs.length && used.length === docs.length && !broken;
-  const head = all && used.length === 1 ? t("Выписка в отчёте", "The statement is included")
+  if(histBad) out.push(n(histBad, "выписка из истории не сошлась с итогом банка", "выписки из истории не сошлись с итогом банка", "выписок из истории не сошлись с итогом банка",
+    "history statement doesn't match the bank's total", "history statements don't match the bank's total"));
+  const all = docs.length && used.length + hist.length === docs.length && !broken;
+  const since = hist.map(d => d.as_of).filter(Boolean).sort()[0];
+  const head = hist.length ? (all ? t(`В отчёте все ${n(used.length + hist.length, "выписка", "выписки", "выписок", "", "")}: ${used.length === 1 ? "текущая" : `${used.length} текущих`} и ${hist.length} из истории с ${fmt.date(since)}`,
+        `All ${used.length + hist.length} statements are included: ${used.length} current and ${hist.length} from the history since ${fmt.date(since)}`)
+      : t(`В отчёте ${n(used.length, "выписка", "выписки", "выписок", "", "")} и ${hist.length} из истории — из ${files.length} ${WL.pl(files.length, ["файла", "файлов", "файлов"], ["", ""])}`,
+        `${used.length} current and ${hist.length} history statements of ${files.length} files are included`))
+    : all && used.length === 1 ? t("Выписка в отчёте", "The statement is included")
     : all ? t(`В отчёте все ${n(used.length, "выписка", "выписки", "выписок", "statement", "statements")}`, `All ${used.length} statements are included`)
     : t(`В отчёте ${n(used.length, "выписка", "выписки", "выписок", "", "")} из ${files.length} ${WL.pl(files.length, ["файла", "файлов", "файлов"], ["", ""])}`,
         `${used.length} of ${files.length} ${files.length === 1 ? "file is" : "files are"} included`);
@@ -308,14 +409,14 @@ function nowCell(p){
   const d = p.mk.change;
   return `${esc(fmt.money(p.mk.price, p.mk.ccy || "", p.mk.price >= 1000 ? 0 : 2))}${d != null ? `<span class="sub ${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(fmt.num(d, 1))}% ${t("день", "day")}</span>` : ""}${p.mk.underlying ? `<span class="sub">${t("акция", "stock")} ${esc(fmt.money(p.mk.underlying, "USD", 2))}</span>` : ""}`;
 }
+/* Изменение позиции за выбранный период — от её точки отсчёта (выписка на начало, цена покупки, биржевая цена). */
 function chgCell(p){
   if(p.cls === "cash" || p.cls === "deposit") return "";
-  const per = WL.ui.per || "1d", src = p.underQ || p.mk;
-  if(!src || (p.mk && p.mk.suspect)) return `<span class="nb">—</span>`;
-  const pc = per === "1d" ? src.change : (src.perf || {})[per];
-  if(pc == null) return `<span class="nb">—</span>`;
-  const v = p.underQ ? null : p.nowB != null ? p.nowB * pc / (100 + pc) : null;
-  return `<b class="${pc < 0 ? "dn" : "up"}">${pc > 0 ? "+" : ""}${esc(fmt.num(pc, 1))}%</b>${v != null ? `<span class="sub">${v > 0 ? "+" : ""}${esc(money(v))}</span>` : p.underQ ? `<span class="sub">${t("базовый актив", "underlying")}</span>` : ""}`;
+  const r = per(), x = r && r.pos[p.id];
+  if(!x || x.start == null) return `<span class="nb" title="${esc(t("Для этого периода нет точки отсчёта: нет выписки на его начало, покупки внутри него и биржевой цены", "No starting point for this period: no statement at its start, no purchase inside it and no market price"))}">—</span>`;
+  const tip = {buy: t(`от цены покупки${x.when ? " " + fmt.date(x.when) : ""}`, `from the purchase price${x.when ? " on " + fmt.date(x.when) : ""}`),
+    stmt: t(`от выписки на ${fmt.date(x.when)}`, `from the statement as of ${fmt.date(x.when)}`), mkt: t("по биржевой цене", "from the market price")}[x.src] || "";
+  return `<b class="${x.chg < 0 ? "dn" : "up"}" title="${esc(tip)}">${x.pct != null && isFinite(x.pct) ? sgn(x.pct) + esc(fmt.pct(Math.abs(x.pct), 1)) : ""}</b><span class="sub">${sgn(x.chg)}${esc(money(Math.abs(x.chg)))}${x.src === "buy" ? t(" с покупки", " since purchase") : ""}</span>`;
 }
 function row(p){
   const w = wOf(p), price = p.price != null ? (p.unit === "%" ? fmt.num(p.price, 2) + "%" : fmt.num(p.price, p.price >= 1000 ? 0 : 2)) : "—";
@@ -355,16 +456,16 @@ function holdings(){
         <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td>${PH}<td></td><td></td><td></td></tr>` : ""}</tbody>`;
   }).join("");
   return `<section class="sec" id="holdings"><div class="sh"><h2>${t("Все позиции", "All positions")}</h2><span class="muted">${m.positions.length}</span></div>
-    ${m.mkt ? `<div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.PERIODS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "1d") === id}">${esc(l)}</button>`).join("")}</div></div>` : ""}
+    <div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.WINDOWS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "all") === id}">${esc(l)}</button>`).join("")}</div></div>
     <div class="tools no-print">
       <div class="chips" role="group">${[{key: "all", label: t("Все", "All")}].concat(m.byCat).map(c => `<button type="button" data-cat="${c.key}" aria-pressed="${f === c.key}">${esc(c.label)}</button>`).join("")}</div>
       <input class="search" id="search" type="search" value="${esc(WL.ui.search || "")}" placeholder="${t("Найти бумагу, ISIN, банк", "Find a security, ISIN, bank")}" aria-label="${t("Поиск по позициям", "Search positions")}">
     </div>
     ${WL.ui.only ? `<p class="only no-print">${t("Показаны позиции из предупреждения.", "Showing the positions from a finding.")} <button class="link" type="button" data-clear-only>${t("Показать все", "Show all")}</button></p>` : ""}
     <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l mh">${t("Где", "Where")}</th><th class="mh mt">${t("Кол-во", "Qty")}</th><th class="mh mt">${t("Цена", "Price")}</th>
-      <th class="mh">${t("Стоимость", "Value")}</th><th class="mh mt">${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.periodLabel(WL.ui.per || "1d").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
+      <th class="mh">${t("Стоимость", "Value")}</th><th class="mh mt">${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.windowLabel(WL.ui.per || "all").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
       ${groups || `<tbody><tr><td colspan="9" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
-      <tfoot><tr><td>${t("Итого", "Total")}</td>${PH}<td class="n">${(pf => pf && pf.whole != null ? `<b class="${pf.whole < 0 ? "dn" : "up"}" title="${t("Изменение всего портфеля: деньги и бумаги без котировки считаются неизменными", "Change of the whole portfolio: cash and holdings without a listed price are treated as unchanged")}">${pf.whole > 0 ? "+" : ""}${esc(fmt.pct(pf.whole, 1))}</b><span class="sub">${t("весь портфель", "whole portfolio")}</span>` : "")(m.mkt && m.mkt.perf[WL.ui.per || "1d"])}</td>
+      <tfoot><tr><td>${t("Итого", "Total")}</td>${PH}<td class="n">${(r => r && (r.exact || r.coverage > 0) ? `<b class="${r.earned < 0 ? "dn" : "up"}" title="${esc(r.exact ? t("Заработано за период без учёта пополнений и снятий — по выпискам", "Earned in the period net of deposits and withdrawals — from the statements") : t("Заработано за период — оценка по позициям с точкой отсчёта", "Earned in the period — estimate from positions with a starting point"))}">${r.earnedPct != null && isFinite(r.earnedPct) ? sgn(r.earnedPct) + esc(fmt.pct(Math.abs(r.earnedPct), 1)) : ""}</b><span class="sub">${r.exact ? "" : "≈ "}${sgn(r.earned)}${esc(money(Math.abs(r.earned)))}</span>` : "")(per())}</td>
         <td class="n strong">${esc(money(liveMode(m) ? m.mkt.nowTotal : m.total))}</td><td class="n w">100%</td></tr></tfoot></table></div>
     ${m.mkt ? `<p class="fine">${t(`«Сейчас» — биржевые цены на ${new Date(m.mkt.at).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}, акции с задержкой до 15 минут. Облигации, ноты и деньги без биржевой котировки — по выписке; у нот показан базовый актив.`,
       `“Now” — market prices at ${new Date(m.mkt.at).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"})}, stocks delayed up to 15 minutes. Bonds, notes and cash without a listed price stay at statement values; notes show their underlying.`)}</p>` : ""}
@@ -397,14 +498,14 @@ function fileCard(f, s, m, notes){
   const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), note = notes.find(n => n.id === f.id);
   const status = f.status !== "done" ? (f.status === "reading" || f.status === "queued" ? t("читается…", "reading…") : f.reason || t("не прочитан", "not read"))
     : d && !d.use ? WHY[d.why] || "" : "";
-  return `<article class="card doc${d && !d.use ? " off" : ""}">
+  return `<article class="card doc${d && !d.use && !d.history ? " off" : ""}">
     <div class="dh"><span class="di">${ICON.file}</span><div class="dn"><b>${esc(f.name)}</b>
       <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
-      ${d && d.use && d.recon ? recBadge(d.recon.status, d.recon.open) : ""}</div>
+      ${d && (d.use || d.history) && d.recon ? recBadge(d.recon.status, d.recon.open) : ""}</div>
     ${status ? `<p class="dst">${esc(status)}</p>` : ""}
     ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
       `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
-    ${d && d.use && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
+    ${d && (d.use || d.history) && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
       ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
         "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
     ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
@@ -447,7 +548,7 @@ function report(){
     <p>${t("Отчёт по портфелю", "Portfolio report")} · ${esc(fmt.date(WL.today()))}</p></div>`;
   if(!m.positions.length) return printHead + demoBar() + readingPanel() + (WL.reading ? "" : `<section class="card empty"><h2>${t("Позиций не нашлось", "No positions found")}</h2>
     <p class="muted">${t("В этих файлах не нашлось ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "No balances or securities were found in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
-  return printHead + demoBar() + readingPanel() + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
+  return printHead + demoBar() + readingPanel() + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + historySec() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
 }
 
 WL.ui = WL.ui || {filter: "all", search: "", only: null};
@@ -586,6 +687,27 @@ WL.excel = async () => {
       rc && rc.checks.length > 1 ? [bad ? t(`не сошлись: ${bad}`, `not matching: ${bad}`) : t("все сошлись", "all match"), na ? t(`не проверено: ${na}`, `not checked: ${na}`) : ""].filter(Boolean).join(", ") : ""]);
   }
   sheet(files, t("Файлы", "Files"), [34, 16, 9, 44, 24, 20, 11, 8, 12, 9, 14, 14, 14, 9, 14, 20]);
+  // Динамика: все периоды сразу — как они посчитаны (по выпискам или оценка по позициям), и история стоимости по датам выписок
+  const liveNow = liveMode(m), dyn = [[t(`Динамика — ${liveNow ? "по текущим ценам" : "по выпискам"}`, `Changes — ${liveNow ? "at current prices" : "per statements"}`)], [],
+    [t("Период", "Period"), t("С даты", "Since"), t(`Стоимость на начало, ${base}`, `Value at start, ${base}`), t(`Изменение стоимости, ${base}`, `Change in value, ${base}`),
+      t(`Пополнения и снятия, ${base}`, `Deposits and withdrawals, ${base}`), t(`Доходы, ${base}`, `Income, ${base}`), t(`Комиссии, ${base}`, `Fees, ${base}`),
+      t(`Заработано, ${base}`, `Earned, ${base}`), t("Заработано, %", "Earned, %"), t("Как посчитано", "Basis"), t("Доля вложений с точкой отсчёта, %", "Holdings with a starting point, %")]];
+  for(const [id] of WL.WINDOWS){
+    const r = WL.period(m, id, liveNow); if(!r) continue;
+    dyn.push([r.label, (d => d ? fmt.date(d) : t("с покупки", "since purchase"))(r.change != null && id !== "all" ? r.startDate : r.start), round(r.startValue), round(r.change), round(r.flows), round(r.income), round(r.fees),
+      r.exact || r.coverage > 0 ? round(r.earned) : null, r.earnedPct != null && isFinite(r.earnedPct) ? round(r.earnedPct * 100) : null,
+      r.exact ? t("по выпискам", "statements") : r.coverage > 0 ? t("оценка по позициям", "estimate from positions") : t("нет точки отсчёта", "no starting point"), round(r.coverage * 100)]);
+  }
+  const hl = m.hist ? m.hist.lines.filter(L => L.current) : [];
+  if(hl.some(L => L.points.length > 1)){
+    dyn.push([], [t("История стоимости", "Value history")], [t("Дата", "Date"), t(`Стоимость, ${base}`, `Value, ${base}`), t("Откуда", "Source"), t("Банк", "Institution"), t("Стык с прошлой выпиской", "Link to the previous statement")]);
+    for(const L of hl) for(const pt of L.points){
+      const k = L.links.find(x => x.snap === pt.snap && pt.src === "snap");
+      dyn.push([fmt.date(pt.date), round(pt.value), pt.src === "opening" ? t("начало периода выписки", "statement opening value") : t("выписка", "statement"), L.name,
+        !k ? "" : k.gap ? t(`пробел ${fmt.date(k.gapFrom)} – ${fmt.date(k.gapTo)}`, `gap ${fmt.date(k.gapFrom)} – ${fmt.date(k.gapTo)}`) : k.ok === true ? t("сошёлся", "matches") : k.ok === false ? t("не сошёлся", "mismatch") : ""]);
+    }
+  }
+  sheet(dyn, t("Динамика", "Changes"), [22, 12, 18, 18, 18, 14, 14, 16, 12, 22, 16]);
   if(mk){
     const P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
     sheet([[t("Рынок", "Market"), when], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],

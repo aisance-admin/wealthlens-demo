@@ -240,6 +240,11 @@ WL.build = S => {
       accounts: d.accounts, notes: d.notes, failed: d.failed, truncated: d.truncated, fullPages: d.fullPages, use: x.use, why: x.why, by: x.by, forced: !!x.forced,
       rowsRead: d.rows.length, pages: d.pages};
     docs.push(info);
+    if(!x.use && x.why === "older" && d.rows.length){            // выписка из истории: своя сверка и стоимость на свою дату
+      const hr = docRows(d);
+      info.recon = reconcile(d, hr.rows, S); info.positions = hr.rows.length; info.history = true;
+      info.value = hr.rows.reduce((sum, r) => { const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0}; return sum + (a.v || 0) + (b.v || 0); }, 0);
+    }
     if(!x.use) continue;
     const all = docRows(d), pr = x.drop.length ? docRows(d, x.drop) : all;
     info.summaryDropped = pr.summaryDropped; info.dupDropped = pr.dupDropped; info.summaryOnly = pr.summaryOnly;
@@ -287,9 +292,78 @@ WL.build = S => {
     .map(p => ({p, days: fmt.days(p.date)})).filter(x => x.days != null && x.days >= -3 && x.days <= 366).sort((a, b) => a.days - b.days);
 
   const M = {base, total, accrued, gross, positions, docs, byCat, byCcy, byInst, dates, timeline, missingFx: [...missingFx]};
+  M.hist = historyOf(chosen, conv);
   M.alerts = alerts(M, S);
   return M;
 };
+
+/* История портфеля из старых выписок (модель Саши, 24.09.2026): каждая выписка с датой — точка на своей линии (банк и его
+   счета), текущая выписка линии — последняя точка. У выписки за период есть ещё точка на начало периода — стоимость на
+   начало из её сводки. Между соседними выписками — проверка непрерывности (стоимость на конец одной = на начало
+   следующей); пропущенные месяцы — пробел, его отчёт показывает, а не заполняет догадкой. */
+const DAY = 864e5, dms = s => Date.parse(s + "T00:00:00Z"), dISO = v => new Date(v).toISOString().slice(0, 10);
+WL.dms = dms; WL.dISO = dISO;
+const FLOW_KINDS = ["opening", "closing", "deposits", "withdrawals", "transfers_in", "transfers_out", "income", "fees", "result", "performance"];
+function flowsOf(d, conv){
+  const items = (d.flows || []).filter(f => FLOW_KINDS.includes(f.kind) && isFinite(f.amount));
+  if(!items.length) return null;
+  const whole = items.filter(f => !f.account), use = whole.length ? whole : items;   // сводка по портфелю, иначе сумма по счетам
+  const out = {from: "", to: "", results: []};
+  for(const f of use){
+    if(f.from && !out.from) out.from = f.from;
+    if(f.to && !out.to) out.to = f.to;
+    if(f.kind === "performance"){ if(out.performance == null) out.performance = f.amount; continue; }
+    const v = conv(d, {value: f.amount, ccy: String(f.currency || d.ref_ccy || "").toUpperCase()}).v;
+    if(v == null) continue;
+    const k = f.kind, x = ["deposits", "withdrawals", "transfers_in", "transfers_out", "fees"].includes(k) ? Math.abs(v) : v;
+    if(k === "result"){ out.results.push(x); continue; }
+    if(whole.length){ if(out[k] == null) out[k] = x; } else out[k] = (out[k] || 0) + x;
+  }
+  return out;
+}
+const posKey = (r, d) => ident(r) + "|" + (r.ccy || d.ref_ccy || "");
+WL.posKey = p => ident(p) + "|" + (p.ccy || "");
+function historyOf(chosen, conv){
+  const lines = [];
+  for(const x of chosen){
+    const d = x.d;
+    if(!d.as_of || !d.rows.length || d.type === "not_financial" || !(x.use || x.why === "older")) continue;
+    const pos = [];
+    let value = 0, missing = 0;
+    for(const r of docRows(d).rows){
+      const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0};
+      if(a.v == null){ missing++; continue; }
+      const v = a.v + (b.v || 0); value += v;
+      pos.push({key: posKey(r, d), cls: r.cls, qty: r.qty, price: r.price, unit: r.unit, vb: v});
+    }
+    const snap = {id: d.id, file: d.file, as_of: d.as_of, from: d.period_from || "", to: d.period_to || "", value, missing, pos, flows: flowsOf(d, conv), current: !!x.use};
+    const ia = accts(d), inst = normInst(d.institution);
+    let L = lines.find(l => l.inst === inst && ((!ia.length && !l.accts.length) || ia.some(a => l.accts.some(b => sameAcct(a, b)))));
+    if(!L) lines.push(L = {inst, name: d.institution || d.file, accts: [], snaps: []});
+    for(const a of ia) if(!L.accts.some(b => sameAcct(a, b))) L.accts.push(a);
+    L.snaps.push(snap);
+  }
+  for(const L of lines){
+    L.snaps.sort((a, b) => a.as_of.localeCompare(b.as_of));
+    L.points = []; L.links = [];
+    L.snaps.forEach((s, i) => {
+      const fl = s.flows, openDate = s.from ? dISO(dms(s.from) - DAY) : "";
+      if(fl && fl.opening != null && openDate && !L.points.some(p => p.date === openDate)) L.points.push({date: openDate, value: fl.opening, src: "opening", snap: s.id});
+      const at = L.points.find(p => p.date === s.as_of);
+      if(at) Object.assign(at, {value: s.value, src: "snap", snap: s.id}); else L.points.push({date: s.as_of, value: s.value, src: "snap", snap: s.id});
+      const prev = L.snaps[i - 1];
+      if(!prev) return;
+      const gap = s.from ? (dms(s.from) - dms(prev.as_of)) / DAY - 1 : null;
+      if(gap != null && gap <= 3){
+        const ok = fl && fl.opening != null ? Math.abs(fl.opening - prev.value) <= Math.max(1.01, Math.abs(prev.value) * 0.0005) : null;
+        L.links.push({from: prev.as_of, to: s.as_of, ok, opening: fl ? fl.opening : null, closing: prev.value, snap: s.id, prev: prev.id});
+      } else L.links.push({from: prev.as_of, to: s.as_of, gap: true, gapFrom: dISO(dms(prev.as_of) + DAY), gapTo: s.from ? dISO(dms(s.from) - DAY) : s.as_of, snap: s.id, prev: prev.id});
+    });
+    L.points.sort((a, b) => a.date.localeCompare(b.date));
+    L.current = L.snaps.filter(s => s.current).pop() || null;
+  }
+  return {lines};
+}
 
 /* Выводы о долях — крупная бумага и много денег — зависят от оценки: по выпискам или по текущим ценам. */
 function shareAlerts(M, w, v, byCat){
@@ -416,7 +490,7 @@ WL.compact = (M, S, opts = {}) => {
     categories: M.byCat.map(c => ({category: c.label, value: r2(c.value), share: r2(c.share * 100)})),
     currencies: M.byCcy.map(c => ({currency: c.ccy, value: r2(c.value), share: r2(c.share * 100)})),
     documents: M.docs.map(d => ({id: d.id, file: d.file, institution: d.institution, type: d.type, as_of: d.as_of, reference_currency: d.ref_ccy,
-      included: d.use, excluded_reason: d.use ? undefined : d.why, accounts: d.accounts.map(a => a.id + (a.label ? " " + a.label : "")),
+      included: d.use, history: d.history || undefined, excluded_reason: d.use || d.history ? undefined : d.why, accounts: d.accounts.map(a => a.id + (a.label ? " " + a.label : "")),
       positions: d.positions, value_in_report_currency: r2(d.value), pages: d.pageCount, unread_pages: (d.failed || []).map(f => `${f.from}-${f.to}`),
       summary_rows_ignored: d.summaryDropped || 0, reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
         checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
@@ -428,6 +502,11 @@ WL.compact = (M, S, opts = {}) => {
       option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, cost: p.cost ?? undefined, account: p.acct || undefined, institution: p.inst})),
     positions_not_listed: rest.length ? {count: rest.length, value: r2(rest.reduce((s, p) => s + (p.vb || 0), 0))} : undefined,
     automatic_alerts_already_shown: M.alerts.map(a => ({level: a.level, title: a.title})),
+    // динамика за периоды (модель Саши): «заработано» без пополнений и снятий, изменение стоимости, как посчитано
+    changes: WL.period ? ["all", "1y", "ytd", "3m", "1m"].map(id => { const r = WL.period(M, id, !!(M.mkt && M.mkt.coverage > 0)); return r && {period: id, since: r.change != null && id !== "all" ? r.startDate : r.start,
+      earned: r.exact || r.coverage > 0 ? r2(r.earned) : null, earned_pct: r.earnedPct != null && isFinite(r.earnedPct) ? r2(r.earnedPct * 100) : null, change_in_value: r2(r.change),
+      deposits_minus_withdrawals: r2(r.flows), basis: r.exact ? "statements" : r.coverage > 0 ? "estimate_from_positions" : "none", holdings_with_starting_point_pct: r2(r.coverage * 100),
+      statement_gaps: r.gaps.map(g => `${g.from}..${g.to}`)}; }).filter(Boolean) : undefined,
     market: M.mkt ? {as_of: M.mkt.at, value_now: r2(M.mkt.nowTotal), repriced_share_of_whole_portfolio_pct: r2(M.mkt.coverage * 100),
       listed_part_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.pct != null).map(([k, v]) => [k, r2(v.pct * 100)])),
       whole_portfolio_change_pct: Object.fromEntries(Object.entries(M.mkt.perf).filter(([, v]) => v && v.whole != null).map(([k, v]) => [k, r2(v.whole * 100)])),

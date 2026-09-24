@@ -256,15 +256,18 @@ async function openSource(file, kind, askPassword){
 const TYPE_RANK = {portfolio: 5, brokerage: 4, bank: 3, transactions: 2, other_financial: 1, not_financial: 0};
 function merge(file, src, results){
   const doc = {id: file.id, fileId: file.id, file: file.name, kind: src.kind, pageCount: src.total, fullPages: src.fullPages || src.total, truncated: !!src.truncated,
-    type: "", institution: "", as_of: "", period: "", ref_ccy: "", accounts: [], totals: [], fx: [], pages: [], notes: [], rows: [], failed: [], usage: {in: 0, out: 0, model: ""}};
+    type: "", institution: "", as_of: "", period: "", period_from: "", period_to: "", ref_ccy: "", accounts: [], totals: [], flows: [], fx: [], pages: [], notes: [], rows: [], failed: [],
+    usage: {in: 0, out: 0, model: ""}};
   const ok = results.filter(r => r.data).sort((a, b) => a.part.from - b.part.from);
   for(const {data: d} of ok){
     const m = d.doc || {};
     if(m.type && (!doc.type || (TYPE_RANK[m.type] || 0) > (TYPE_RANK[doc.type] || 0))) doc.type = m.type;
-    for(const k of ["institution", "as_of", "period", "ref_ccy"]) if(!doc[k] && m[k]) doc[k] = String(m[k]).trim();
+    for(const k of ["institution", "as_of", "period", "period_from", "period_to", "ref_ccy"]) if(!doc[k] && m[k]) doc[k] = String(m[k]).trim();
     for(const a of d.accounts || []) if(a.id && !doc.accounts.some(x => x.id === a.id)) doc.accounts.push({id: a.id, label: a.label || "", currency: (a.currency || "").toUpperCase()});
     for(const x of d.totals || []){ const key = [x.label, x.currency, x.amount, x.account].join("|");
       if(isFinite(x.amount) && !doc.totals.some(y => [y.label, y.currency, y.amount, y.account].join("|") === key)) doc.totals.push(Object.assign({}, x, {currency: (x.currency || "").toUpperCase()})); }
+    for(const x of d.flows || []){ const key = [x.kind, x.amount, x.from, x.to, x.account].join("|");
+      if(isFinite(x.amount) && !doc.flows.some(y => [y.kind, y.amount, y.from, y.to, y.account].join("|") === key)) doc.flows.push(Object.assign({}, x, {currency: (x.currency || "").toUpperCase()})); }
     for(const x of d.fx || []) if(x.currency && x.rate > 0 && !doc.fx.some(y => y.currency === x.currency.toUpperCase())) doc.fx.push({currency: x.currency.toUpperCase(), rate: x.rate, page: x.page});
     doc.pages.push(...(d.pages || []));
     for(const n of d.notes || []) if(n && !doc.notes.includes(n)) doc.notes.push(n);
@@ -272,7 +275,7 @@ function merge(file, src, results){
     if(d.usage){ doc.usage.in += d.usage.in || 0; doc.usage.out += d.usage.out || 0; doc.usage.model = d.usage.model || doc.usage.model; }
   }
   if(/^[a-z]{3}$/i.test(doc.ref_ccy)) doc.ref_ccy = doc.ref_ccy.toUpperCase(); else doc.ref_ccy = "";
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(doc.as_of)) doc.as_of = "";
+  for(const k of ["as_of", "period_from", "period_to"]) if(!/^\d{4}-\d{2}-\d{2}$/.test(doc[k])) doc[k] = "";
   doc.rows.forEach((r, i) => { r.id = `${doc.id}:${i + 1}`; r.doc = doc.id; });
   doc.failed = results.filter(r => r.error).map(r => ({from: r.part.from, to: r.part.to, error: r.error})).sort((a, b) => a.from - b.from);
   return doc;
@@ -281,7 +284,8 @@ function merge(file, src, results){
 /* Дочитанные страницы — в уже прочитанный документ. */
 WL.mergeDocs = (a, b) => {
   const out = Object.assign({}, a);
-  for(const k of ["type", "institution", "as_of", "period", "ref_ccy"]) if(!out[k] && b[k]) out[k] = b[k];
+  for(const k of ["type", "institution", "as_of", "period", "period_from", "period_to", "ref_ccy"]) if(!out[k] && b[k]) out[k] = b[k];
+  out.flows = (a.flows || []).concat((b.flows || []).filter(x => !(a.flows || []).some(y => y.kind === x.kind && y.amount === x.amount && y.from === x.from && y.to === x.to)));
   out.accounts = a.accounts.concat(b.accounts.filter(x => !a.accounts.some(y => y.id === x.id)));
   out.totals = a.totals.concat(b.totals.filter(x => !a.totals.some(y => y.label === x.label && y.amount === x.amount && y.currency === x.currency)));
   out.fx = a.fx.concat(b.fx.filter(x => !a.fx.some(y => y.currency === x.currency)));

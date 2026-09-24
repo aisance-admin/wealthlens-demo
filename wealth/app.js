@@ -34,6 +34,8 @@ WL.rebuild = async () => {
   if(WL.market && WL.market.apply) WL.market.apply(WL.model, s);
   if(s.demo && WL.demoReview) s.review = WL.demoReview(WL.model);
   WL.save(); WL.render();
+  // курсы ЕЦБ по дням — для динамики валютных бумаг (дата покупки, начало периода); пришли — пересчитать
+  if(WL.ensureFxSeries) WL.ensureFxSeries(WL.model).then(ch => { if(ch){ WL.fxsVer = (WL.fxsVer || 0) + 1; WL.render(); } }).catch(() => {});
 };
 /* Свежие котировки — при каждом открытии отчёта, после чтения и по кнопке «Обновить». */
 let marketBusy = null;
