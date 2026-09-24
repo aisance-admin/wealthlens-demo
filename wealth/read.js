@@ -272,7 +272,7 @@ function merge(file, src, results){
     doc.pages.push(...(d.pages || []));
     for(const n of d.notes || []) if(n && !doc.notes.includes(n)) doc.notes.push(n);
     doc.rows.push(...(d.rows || []));
-    if(d.usage){ doc.usage.in += d.usage.in || 0; doc.usage.out += d.usage.out || 0; doc.usage.model = d.usage.model || doc.usage.model; }
+    if(d.usage){ doc.usage.in += d.usage.in || 0; doc.usage.out += d.usage.out || 0; doc.usage.model = d.usage.model || doc.usage.model; doc.usage.key = d.usage.key || doc.usage.key; }
   }
   if(/^[a-z]{3}$/i.test(doc.ref_ccy)) doc.ref_ccy = doc.ref_ccy.toUpperCase(); else doc.ref_ccy = "";
   for(const k of ["as_of", "period_from", "period_to"]) if(!/^\d{4}-\d{2}-\d{2}$/.test(doc[k])) doc[k] = "";
