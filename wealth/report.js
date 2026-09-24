@@ -184,7 +184,16 @@ function groupCcy(tot, rows, doc, ccy){
   return other.length === 1 ? other[0] : named.length === 1 ? named[0] : ccy;
 }
 function reconcile(doc, rows, S){
-  const totals = doc.totals.filter(x => ["total", "account", "currency"].includes(x.scope) && isFinite(x.amount));
+  let totals = doc.totals.filter(x => ["total", "account", "currency"].includes(x.scope) && isFinite(x.amount));
+  // Итог на конец периода банк часто печатает только в сводке периода («Ending Account Value», «Closing balance») — это тот
+  // же итог: сверяем с ним, если отдельного итога в таблицах нет.
+  if(!totals.some(x => x.scope === "total" || x.scope === "account")){
+    const closing = (doc.flows || []).filter(f => f.kind === "closing" && isFinite(f.amount));
+    const acc = closing.filter(f => f.account), whole = closing.filter(f => !f.account);
+    for(const f of (whole.length ? whole.slice(0, 1) : acc))
+      totals = totals.concat({label: f.label || t("Стоимость на конец периода", "Closing value"), scope: f.account ? "account" : "total", account: f.account || "",
+        currency: String(f.currency || doc.ref_ccy || "").toUpperCase(), amount: f.amount, page: f.page, fromFlows: true});
+  }
   if(!totals.length) return {status: "none", checks: [], open: 0};
   const checks = [], nAcct = new Set(rows.map(r => r.acct).filter(Boolean)).size;
   for(const tot of totals){
