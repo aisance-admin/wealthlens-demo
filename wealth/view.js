@@ -103,8 +103,9 @@ function hero(){
     <div class="card where">
       <div class="eyebrow">${t("Где лежит", "Where it is")}${liveMode(m) ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>
       <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
+        const open = worst === "ok" ? i.docs.reduce((k, d) => k + ((d.recon && d.recon.open) || 0), 0) : 0;
         return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
-          <div class="iv"><b>${esc(money(i.value))}</b>${recBadge(worst)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
+          <div class="iv"><b>${esc(money(i.value))}</b>${recBadge(worst, open)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
     </div>
   </section>`;
 }
@@ -124,8 +125,8 @@ function valuation(m, dates){
       : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
 }
 /* Насколько итог полный — прямо под ним: сколько выписок учтено, что не вошло и почему, что не прочитано и не сошлось с
-   банком. Подробности — в разделе «Файлы» внизу. */
-function coverage(m){
+   банком. Подробности — в разделе «Файлы» внизу. Тот же текст — на первом листе Excel. */
+function coverageOf(m){
   const files = S().files, docs = m.docs, used = docs.filter(d => d.use);
   const n = (k, one, few, many, en1, enN) => t(`${k} ${WL.pl(k, [one, few, many], ["", ""])}`, `${k} ${k === 1 ? en1 : enN}`);
   const why = {};
@@ -136,6 +137,7 @@ function coverage(m){
   const cut = used.filter(d => d.truncated).length;
   const bad = used.filter(d => d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
   const checked = used.filter(d => d.recon && d.recon.status === "ok").length;
+  const open = used.filter(d => d.recon && d.recon.status === "ok" && d.recon.open).length;
   const twice = used.filter(d => d.conflict && d.conflict.length).length;
   const out = [], note = [];
   const WHY = {older: [t("более старая выписка того же счёта", "an older statement of the same account"), t("более старые выписки тех же счетов", "older statements of the same accounts")],
@@ -148,6 +150,8 @@ function coverage(m){
   if(pages) out.push(t(`не прочитано ${pages} стр.`, `${pages} ${pages === 1 ? "page" : "pages"} not read`));
   if(cut) out.push(n(cut, "файл прочитан не полностью", "файла прочитаны не полностью", "файлов прочитаны не полностью", "file was read only in part", "files were read only in part"));
   if(bad) out.push(n(bad, "выписка не сошлась с итогом банка", "выписки не сошлись с итогом банка", "выписок не сошлись с итогом банка", "statement doesn't match the bank's total", "statements don't match the bank's total"));
+  if(open) out.push(t(`в ${open} ${WL.pl(open, ["выписке", "выписках", "выписках"], ["", ""])} общий итог сошёлся, а частичные итоги — нет`,
+    `${open} ${open === 1 ? "statement matches" : "statements match"} in total but not in the subtotals`));
   if(twice) out.push(t("возможен двойной учёт счёта", "an account may be counted twice"));
   const warn = out.length > 0 || !!(why.unread || why.no_positions);
   const all = docs.length && used.length === docs.length && !broken;
@@ -157,28 +161,49 @@ function coverage(m){
         `${used.length} of ${files.length} ${files.length === 1 ? "file is" : "files are"} included`);
   const ok = !warn && used.length && bad === 0 && checked > 0 ? t("итоги сверены с банком", "totals match the bank's") : "";
   const parts = [head + (note.length ? ` (${note.join(", ")})` : ""), ...out, ok].filter(Boolean);
-  if(!parts.length || !files.length) return "";
-  return `<div class="cover ${warn ? "warn" : "ok"}">${warn ? ICON.warn : ICON.check}<span>${esc(parts.join(" · "))}
+  return {text: files.length ? parts.join(" · ") : "", warn};
+}
+function coverage(m){
+  const c = coverageOf(m);
+  if(!c.text) return "";
+  return `<div class="cover ${c.warn ? "warn" : "ok"}">${c.warn ? ICON.warn : ICON.check}<span>${esc(c.text)}
     <button class="link" type="button" data-goto="files">${t("Подробнее", "Details")}</button></span></div>`;
 }
-function recBadge(st){
+/* Строка сверки в карточке файла: что напечатал банк и что дала сумма позиций; итог, который не с чем сравнить, — «не проверено». */
+function checkLine(c){
+  const what = `${esc(c.label)}: ${esc(fmt.money(c.amount, c.ccy, 2))}`;
+  if(c.unchecked) return `<li class="na">${ICON.dash}<span>${what} — ${c.unchecked === "fx" ? t("не проверено: нет курса валюты", "not checked: no exchange rate")
+    : t("не проверено: позиции не разнесены по этому счёту", "not checked: the positions aren't split by this account")}</span></li>`;
+  if(c.ok) return `<li class="ok">${ICON.check}<span>${what}${c.withAccrued ? t(" — сошлось с учётом НКД", " — matches incl. accrued interest") : t(" — сошлось", " — matches")}</span></li>`;
+  const got = c.group && c.group !== c.ccy ? t(`по позициям в ${c.group}`, `positions in ${c.group}`) : t("прочитано", "read");
+  return `<li class="bad">${ICON.warn}<span>${what} — ${got}: ${esc(fmt.money(c.sum, c.ccy, 2))}</span></li>`;
+}
+function recBadge(st, open){
+  if(st === "ok" && open) return `<span class="badge part" title="${t(`Общий итог совпал с итогом банка, но ${open} ${WL.pl(open, ["частичный итог", "частичных итога", "частичных итогов"], ["", ""])} (по валютам или счетам) — нет`,
+    `The grand total matches the bank's, but ${open} ${open === 1 ? "subtotal" : "subtotals"} (by currency or account) ${open === 1 ? "doesn't" : "don't"}`)}">${ICON.warn}${t(`итог сверен · ${open} уточнить`, `total matches · ${open} to check`)}</span>`;
   if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом банка", "Positions add up to the bank's total")}">${ICON.check}${t("сверено", "reconciled")}</span>`;
   if(st === "mismatch" || st === "partial") return `<span class="badge bad" title="${t("Сумма позиций не совпала с итогом банка", "Positions don't add up to the bank's total")}">${ICON.warn}${t("не сошлось", "mismatch")}</span>`;
   return `<span class="badge none" title="${t("В выписке нет итога для сверки", "The statement prints no total to check against")}">${t("без итога", "no total")}</span>`;
 }
+/* Состав — доли от активов. Если есть обязательства (проданные опционы, овердрафт), доли от чистого итога дали бы больше
+   100%, поэтому полоса строится по активам, а обязательства названы отдельно суммой. */
 function mix(m){
-  const cats = m.byCat.filter(c => c.value > 0);
+  const cats = m.byCat.filter(c => c.value > 0), neg = m.byCat.filter(c => c.value < -0.5);
   if(!cats.length) return "";
-  return `<div class="mix"><div class="mix-bar">${cats.map(c => `<i class="c-${c.key}" style="flex-grow:${Math.max(0.004, c.share)}" title="${esc(c.label)} ${fmt.pct(c.share)}"></i>`).join("")}</div>
-    <ul class="mix-legend">${cats.map(c => `<li><span class="k c-${c.key}"></span>${esc(c.label)} <b>${fmt.pct(c.share, c.share < 0.1 ? 1 : 0)}</b></li>`).join("")}</ul></div>`;
+  const gross = cats.reduce((s, c) => s + c.value, 0), sh = c => gross ? c.value / gross : 0;
+  return `<div class="mix"><div class="mix-bar">${cats.map(c => `<i class="c-${c.key}" style="flex-grow:${Math.max(0.004, sh(c))}" title="${esc(c.label)} ${fmt.pct(sh(c))}"></i>`).join("")}</div>
+    <ul class="mix-legend">${cats.map(c => `<li><span class="k c-${c.key}"></span>${esc(c.label)} <b>${fmt.pct(sh(c), sh(c) < 0.1 ? 1 : 0)}</b></li>`).join("")}</ul>
+    ${neg.length ? `<p class="fine">${esc(t(`Доли — от активов ${money(gross)}. Обязательства — отдельно: ${neg.map(c => `${c.label.toLowerCase()} ${money(c.value)}`).join(", ")}; итог — за их вычетом.`,
+      `Shares are of assets of ${money(gross)}. Liabilities are shown separately: ${neg.map(c => `${c.label.toLowerCase()} ${money(c.value)}`).join(", ")}; the total is net of them.`))}</p>` : ""}</div>`;
 }
 
 function brief(){
-  const s = S(), r = s.review, m = M();
+  const s = S(), r = WL.reviewNow(), old = !r && s.review && s.review.summary, m = M();
   let body;
   if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
-  else if(WL.reviewing) body = `<div class="skel"><i></i><i></i><i style="width:62%"></i></div>`;
+  else if(WL.reviewing) body = `${old ? `<p class="muted small">${t("Состав отчёта изменился — обновляю сводку и выводы…", "The report has changed — updating the summary and findings…")}</p>` : ""}<div class="skel"><i></i><i></i><i style="width:62%"></i></div>`;
   else if(r && r.summary) body = `<p class="summary">${esc(r.summary)}</p>${r.base && r.base !== m.base ? `<p class="fine">${t(`Суммы в сводке — в ${r.base}.`, `Amounts in the summary are in ${r.base}.`)}</p>` : ""}`;
+  else if(old) body = `<p class="muted">${t("Состав отчёта изменился — прежняя сводка к нему не относится.", "The report has changed — the previous summary no longer applies.")} <button class="link" type="button" data-review>${t("Обновить сводку", "Update the summary")}</button></p>`;
   else if(r && r.error) body = `<p class="muted">${t("Сводку получить не удалось.", "Could not get the summary.")} <button class="link" type="button" data-review>${t("Повторить", "Try again")}</button></p>`;
   else body = `<p class="muted"><button class="link" type="button" data-review>${t("Получить сводку", "Get the summary")}</button></p>`;
   const starters = [t("Что в портфеле главное сейчас?", "What matters most in the portfolio now?"), t("Где основные риски?", "Where are the main risks?"),
@@ -194,10 +219,10 @@ function brief(){
 
 /* Все выводы в порядке важности: свои проверки, рынок и ИИ-анализ. */
 function alertList(){
-  const m = M(), r = S().review;
+  const m = M(), r = WL.reviewNow();
   const extra = r && Array.isArray(r.alerts) ? r.alerts.map((a, i) => Object.assign({id: "ai-" + i, auto: false}, a)) : [];
   const rank = {high: 0, watch: 1, info: 2};
-  return m.alerts.concat(extra).filter(a => a && a.title).map((a, i) => [a, i]).sort((x, y) => ((rank[x[0].level] ?? 3) - (rank[y[0].level] ?? 3)) || x[1] - y[1]).map(x => x[0]);
+  return (liveMode(m) ? WL.alertsNow(m) : m.alerts).concat(extra).filter(a => a && a.title).map((a, i) => [a, i]).sort((x, y) => ((rank[x[0].level] ?? 3) - (rank[y[0].level] ?? 3)) || x[1] - y[1]).map(x => x[0]);
 }
 WL.alertList = alertList;
 const topicOf = a => WL.topicId ? WL.topicId(a) : "";
@@ -205,16 +230,22 @@ function alertsBlock(){
   const all = alertList();
   if(!all.length) return "";
   const lock = locked();
-  return `<section class="sec" id="alerts"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span>
-      ${WL.topicId && !WL.printing ? `<span class="muted small no-print sh-hint">${t("нажмите на карточку, чтобы обсудить, что делать", "tap a card to discuss what to do")}</span>` : ""}</div>
-    <div class="alerts">${all.map((a, i) => {
-      const hide = lock && i > 0, tid = hide ? "" : topicOf(a);
-      const shown = !hide && (a.refs || []).some(id => pos(id));
-      return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}${tid ? " talk" : ""}"${tid ? ` data-topic="${esc(tid)}"` : ""}><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ-анализ", "AI analysis")}</span>`}</div>
+  const updating = WL.reviewing && !WL.reviewNow();
+  const cards = all.map((a, i) => alertCard(a, i, lock));
+  return `<section class="sec" id="alerts"><div class="keep"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span>
+      ${updating ? `<span class="muted small no-print">${t("выводы ИИ обновляются…", "AI findings are updating…")}</span>`
+        : WL.topicId && !WL.printing ? `<span class="muted small no-print sh-hint">${t("нажмите на карточку, чтобы обсудить, что делать", "tap a card to discuss what to do")}</span>` : ""}</div>
+    <div class="alerts">${cards.slice(0, 2).join("")}</div></div>${cards.length > 2 ? `<div class="alerts more">${cards.slice(2).join("")}</div>` : ""}
+  </section>`;
+}
+/* Карточка вывода. Первые две вместе с заголовком раздела — в блоке «keep»: при печати заголовок не остаётся внизу страницы один. */
+function alertCard(a, i, lock){
+  const hide = lock && i > 0, tid = hide ? "" : topicOf(a);
+  const shown = !hide && (a.refs || []).some(id => pos(id));
+  return `<article class="card alert lv-${esc(a.level)}${hide ? " locked" : ""}${tid ? " talk" : ""}"${tid ? ` data-topic="${esc(tid)}"` : ""}><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ-анализ", "AI analysis")}</span>`}</div>
         <h3>${esc(a.title)}</h3>${hide ? `<p class="muted lockline">${ICON.lock}${t("Подробности — в полном отчёте", "Details are in the full report")}</p><button class="link" type="button" data-buy="alert">${t("Открыть", "Unlock")}</button>` : `<p>${esc(a.text)}</p><p class="basis">${esc(basisOf(a))}</p>`}
         ${tid || shown ? `<div class="aa no-print">${tid ? `<button class="talkbtn" type="button" data-topic="${esc(tid)}">${ICON.spark}${t("Обсудить, что делать", "Discuss what to do")}</button>` : ""}
-          ${shown ? `<button class="link" type="button" data-show="${esc((a.refs || []).filter(id => pos(id)).slice(0, 40).join(","))}">${t("Показать позиции", "Show positions")}</button>` : ""}</div>` : ""}</article>`; }).join("")}</div>
-  </section>`;
+          ${shown ? `<button class="link" type="button" data-show="${esc((a.refs || []).filter(id => pos(id)).slice(0, 40).join(","))}">${t("Показать позиции", "Show positions")}</button>` : ""}</div>` : ""}</article>`;
 }
 
 /* Основание вывода: из чего он сделан. */
@@ -234,7 +265,7 @@ function basisOf(a){
   return key ? map[key] : t("Основа: выписки", "Source: the statements");
 }
 function questions(){
-  const r = S().review;
+  const r = WL.reviewNow();
   if(!r || !Array.isArray(r.questions) || !r.questions.length) return "";
   return `<section class="sec" id="questions"><div class="sh"><h2>${t("Что стоит уточнить", "Worth checking")}</h2></div>
     <ul class="qlist card">${r.questions.map(q => { const tid = WL.topicId ? WL.topicId({question: q.text}) : "";
@@ -244,6 +275,8 @@ function questions(){
 function paywall(){
   if(!locked()) return "";
   const pay = WL.pay, gift = pay.promo();
+  if(pay.pending()) return `<section class="card paywall checking" id="paywall" aria-live="polite"><div><div class="eyebrow gold">${t("Полный отчёт", "Full report")}</div>
+    <h2><i class="spin"></i>${t("Проверяем доступ…", "Checking access…")}</h2><p class="muted">${t("Этот отчёт оплачен в этом браузере — сверяем оплату, это пара секунд.", "This report was paid for in this browser — verifying the payment, it takes a couple of seconds.")}</p></div></section>`;
   return `<section class="card paywall" id="paywall">
     <div><div class="eyebrow gold">${t("Полный отчёт", "Full report")}</div>
       <h2>${gift ? t("Откройте полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Все позиции, выводы, PDF и Excel — ${pay.PRICE.label}`, `Every position, all findings, PDF and Excel — ${pay.PRICE.label}`)}</h2>
@@ -352,38 +385,44 @@ function currenciesAndDates(){
 }
 
 function files(){
-  const s = S(), m = M(), notes = (S().review && S().review.documents) || [];
-  return `<section class="sec" id="files"><div class="sh"><h2>${t("Файлы", "Files")}</h2><span class="muted">${s.files.length}</span>
+  const s = S(), m = M(), notes = (WL.reviewNow() && WL.reviewNow().documents) || [];
+  const cards = s.files.map(f => fileCard(f, s, m, notes));
+  return `<section class="sec" id="files"><div class="keep"><div class="sh"><h2>${t("Файлы", "Files")}</h2><span class="muted">${s.files.length}</span>
       <button class="btn small no-print" type="button" data-pick="files">${t("Добавить", "Add")}</button></div>
-    <div class="docs">${s.files.map(f => {
-      const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), note = notes.find(n => n.id === f.id);
-      const status = f.status !== "done" ? (f.status === "reading" || f.status === "queued" ? t("читается…", "reading…") : f.reason || t("не прочитан", "not read"))
-        : d && !d.use ? WHY[d.why] || "" : "";
-      return `<article class="card doc${d && !d.use ? " off" : ""}">
-        <div class="dh"><span class="di">${ICON.file}</span><div class="dn"><b>${esc(f.name)}</b>
-          <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
-          ${d && d.use && d.recon ? recBadge(d.recon.status) : ""}</div>
-        ${status ? `<p class="dst">${esc(status)}</p>` : ""}
-        ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
-          `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
-        ${d && d.use && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 6).map(c => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? ICON.check : ICON.warn}<span>${esc(c.label)}: ${esc(fmt.money(c.amount, c.ccy, 2))}${c.ok ? (c.withAccrued ? t(" — сошлось с учётом НКД", " — matches incl. accrued interest") : t(" — сошлось", " — matches")) : t(` — прочитано ${fmt.money(c.sum, c.ccy, 2)}`, ` — read ${fmt.money(c.sum, c.ccy, 2)}`)}</span></li>`).join("")}</ul>` : ""}
-        ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
-        ${raw && raw.notes && raw.notes.length ? (note
-          ? `<details class="rn no-print"><summary>${t(`Заметки при чтении страниц · ${raw.notes.length}`, `Notes made while reading pages · ${raw.notes.length}`)}</summary><ul class="rnotes">${raw.notes.slice(0, 8).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`
-          : `<ul class="rnotes">${raw.notes.slice(0, 5).map(n => `<li>${esc(n)}</li>`).join("")}</ul>`) : ""}
-        ${d && (d.summaryDropped || d.dupDropped) ? `<p class="fine">${[d.summaryDropped ? t(`Сводные таблицы (${d.summaryDropped} строк) не учтены — позиции взяты из полного списка.`, `Summary tables (${d.summaryDropped} rows) were ignored — positions come from the complete list.`) : "",
-          d.dupDropped ? t(`${d.dupDropped} ${WL.pl(d.dupDropped, ["позиция повторялась", "позиции повторялись", "позиций повторялись"], ["", "", ""])} в другой таблице файла — учтены один раз.`, `${d.dupDropped} ${d.dupDropped === 1 ? "position was" : "positions were"} repeated in another table of the file — counted once.`) : ""].filter(Boolean).join(" ")}</p>` : ""}
-        ${d && d.noCcy && !S().demo ? `<div class="ccy-pick no-print"><span>${t("Валюта выписки не указана. Выберите:", "The statement shows no currency. Choose:")}</span>
-          ${["USD", "EUR", "GBP", "CHF", "AED", "RUB"].map(c => `<button class="btn small" type="button" data-setccy="${esc(f.id)}|${c}">${c}</button>`).join("")}
-          <button class="link" type="button" data-setccy="${esc(f.id)}|?">${t("другая…", "other…")}</button></div>` : ""}
-        <div class="da no-print"${S().demo ? " hidden" : ""}>
-          ${raw && raw.failed && raw.failed.length && !WL.reading ? `<button class="btn small" type="button" data-reread="${esc(f.id)}">${t("Дочитать", "Read again")}</button>` : ""}
-          ${f.status === "error" && !WL.reading ? `<button class="btn small" type="button" data-reread="${esc(f.id)}">${t("Повторить", "Try again")}</button>` : ""}
-          ${d && !d.use && raw && raw.rows.length && d.why !== "not_financial" ? `<button class="link" type="button" data-include="${esc(f.id)}">${t("Всё равно учесть", "Include anyway")}</button>` : ""}
-          ${d && d.use && !WL.reading ? `<button class="link" type="button" data-exclude="${esc(f.id)}">${t("Не учитывать", "Exclude")}</button>` : ""}
-          ${!WL.reading ? `<button class="link danger" type="button" data-remove="${esc(f.id)}">${t("Убрать файл", "Remove file")}</button>` : ""}
-        </div></article>`; }).join("")}</div>
+    <div class="docs">${cards.slice(0, 2).join("")}</div></div>${cards.length > 2 ? `<div class="docs more">${cards.slice(2).join("")}</div>` : ""}
   </section>`;
+}
+/* Карточка файла: что это за документ, вошёл ли он в отчёт и почему, сверка с итогом банка. */
+function fileCard(f, s, m, notes){
+  const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), note = notes.find(n => n.id === f.id);
+  const status = f.status !== "done" ? (f.status === "reading" || f.status === "queued" ? t("читается…", "reading…") : f.reason || t("не прочитан", "not read"))
+    : d && !d.use ? WHY[d.why] || "" : "";
+  return `<article class="card doc${d && !d.use ? " off" : ""}">
+    <div class="dh"><span class="di">${ICON.file}</span><div class="dn"><b>${esc(f.name)}</b>
+      <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
+      ${d && d.use && d.recon ? recBadge(d.recon.status, d.recon.open) : ""}</div>
+    ${status ? `<p class="dst">${esc(status)}</p>` : ""}
+    ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
+      `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
+    ${d && d.use && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
+      ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
+        "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
+    ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
+    ${raw && raw.notes && raw.notes.length ? (note
+      ? `<details class="rn no-print"><summary>${t(`Заметки при чтении страниц · ${raw.notes.length}`, `Notes made while reading pages · ${raw.notes.length}`)}</summary><ul class="rnotes">${raw.notes.slice(0, 8).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`
+      : `<ul class="rnotes">${raw.notes.slice(0, 5).map(n => `<li>${esc(n)}</li>`).join("")}</ul>`) : ""}
+    ${d && (d.summaryDropped || d.dupDropped) ? `<p class="fine">${[d.summaryDropped ? t(`Сводные таблицы (${d.summaryDropped} строк) не учтены — позиции взяты из полного списка.`, `Summary tables (${d.summaryDropped} rows) were ignored — positions come from the complete list.`) : "",
+      d.dupDropped ? t(`${d.dupDropped} ${WL.pl(d.dupDropped, ["позиция повторялась", "позиции повторялись", "позиций повторялись"], ["", "", ""])} в другой таблице файла — учтены один раз.`, `${d.dupDropped} ${d.dupDropped === 1 ? "position was" : "positions were"} repeated in another table of the file — counted once.`) : ""].filter(Boolean).join(" ")}</p>` : ""}
+    ${d && d.noCcy && !S().demo ? `<div class="ccy-pick no-print"><span>${t("Валюта выписки не указана. Выберите:", "The statement shows no currency. Choose:")}</span>
+      ${["USD", "EUR", "GBP", "CHF", "AED", "RUB"].map(c => `<button class="btn small" type="button" data-setccy="${esc(f.id)}|${c}">${c}</button>`).join("")}
+      <button class="link" type="button" data-setccy="${esc(f.id)}|?">${t("другая…", "other…")}</button></div>` : ""}
+    <div class="da no-print"${S().demo ? " hidden" : ""}>
+      ${raw && raw.failed && raw.failed.length && !WL.reading ? `<button class="btn small" type="button" data-reread="${esc(f.id)}">${t("Дочитать", "Read again")}</button>` : ""}
+      ${f.status === "error" && !WL.reading ? `<button class="btn small" type="button" data-reread="${esc(f.id)}">${t("Повторить", "Try again")}</button>` : ""}
+      ${d && !d.use && raw && raw.rows.length && d.why !== "not_financial" ? `<button class="link" type="button" data-include="${esc(f.id)}">${t("Всё равно учесть", "Include anyway")}</button>` : ""}
+      ${d && d.use && !WL.reading ? `<button class="link" type="button" data-exclude="${esc(f.id)}">${t("Не учитывать", "Exclude")}</button>` : ""}
+      ${!WL.reading ? `<button class="link danger" type="button" data-remove="${esc(f.id)}">${t("Убрать файл", "Remove file")}</button>` : ""}
+    </div></article>`;
 }
 
 function method(){
@@ -487,51 +526,80 @@ WL.excel = async () => {
   if(locked()) return WL.pay.open("excel");
   let X;
   try{ X = await WL.loadXLSX(); }catch(e){ WL.toast(t("Не удалось загрузить модуль Excel. Проверьте связь и попробуйте ещё раз.", "Could not load the Excel module. Check the connection and try again.")); return; }
-  const m = M(), s = S(), r = s.review || {}, base = m.base;
+  const m = M(), s = S(), r = WL.reviewNow() || {}, base = m.base, mk = m.mkt && m.mkt.coverage > 0 ? m.mkt : null;
   const round = (v, d = 2) => v == null || !isFinite(v) ? null : Math.round(v * Math.pow(10, d)) / Math.pow(10, d);
+  const sheet = (rows, name, cols) => { const ws = X.utils.aoa_to_sheet(rows); if(cols) ws["!cols"] = cols.map(wch => ({wch})); X.utils.book_append_sheet(wb, ws, name); };
   const wb = X.utils.book_new();
-  const sum = [[s.client || "WealthLens"], [t("Отчёт по портфелю", "Portfolio report"), WL.today()], [],
-    [t(`Всего, ${base}`, `Total, ${base}`), round(m.total)], [t("в т.ч. накопленный купон", "incl. accrued interest"), round(m.accrued)], [],
-    [t("Категория", "Category"), base, t("Доля, %", "Share, %"), t("Позиций", "Positions")], ...m.byCat.map(c => [c.label, round(c.value), round(c.share * 100), c.count]), [],
-    [t("Банк", "Institution"), base, t("Доля, %", "Share, %"), t("Дата", "As of")], ...m.byInst.map(i => [i.name, round(i.value), round(i.share * 100), i.as_of.join(", ")]), [],
-    [t("Валюта", "Currency"), base, t("Доля, %", "Share, %")], ...m.byCcy.map(c => [c.ccy, round(c.value), round(c.share * 100)])];
-  if(r.summary) sum.push([], [t("Коротко о портфеле", "The portfolio in brief")], [r.summary]);
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sum), t("Сводка", "Summary"));
+  // Сводка: две явные основы — по выпискам (на даты выписок) и текущая оценка (на время котировок), и полнота отчёта
+  const on = m.dates.length ? (m.dates.length === 1 ? fmt.date(m.dates[0]) : `${fmt.date(m.dates[0])} – ${fmt.date(m.dates[m.dates.length - 1])}`) : "";
+  const when = mk ? new Date(mk.at).toLocaleString(WL.EN ? "en-GB" : "ru-RU", {day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"}) : "";
+  const block = (g, withCount) => [
+    [t("Категория", "Category"), base, t("Доля, %", "Share, %"), ...(withCount ? [t("Позиций", "Positions")] : [])], ...g.byCat.map(c => [c.label, round(c.value), round(c.share * 100), ...(withCount ? [c.count] : [])]), [],
+    [t("Банк", "Institution"), base, t("Доля, %", "Share, %"), t("Дата выписки", "Statement date")], ...g.byInst.map(i => [i.name, round(i.value), round(i.share * 100), i.as_of.map(fmt.date).join(", ")]), [],
+    [t("Валюта", "Currency"), base, t("Доля, %", "Share, %")], ...g.byCcy.map(c => [c.ccy, round(c.value), round(c.share * 100)])];
+  const sum = [[s.client || "WealthLens"], [t("Отчёт по портфелю", "Portfolio report"), fmt.date(WL.today())], [],
+    [t("Полнота отчёта", "Completeness"), coverageOf(m).text], [],
+    [t(`ПО ВЫПИСКАМ${on ? " — на " + on : ""}`, `PER STATEMENTS${on ? " — as of " + on : ""}`)],
+    [t(`Всего, ${base}`, `Total, ${base}`), round(m.total)], [t("в т.ч. накопленный купон", "incl. accrued interest"), round(m.accrued)], [], ...block(m, true)];
+  if(mk) sum.push([], [t(`ТЕКУЩАЯ ОЦЕНКА — цены на ${when}`, `CURRENT VALUE — prices at ${when}`)],
+    [t(`Всего сейчас, ${base}`, `Total now, ${base}`), round(mk.nowTotal)],
+    [t("По рыночной цене, % портфеля", "At market prices, % of the portfolio"), round(mk.coverage * 100), t("остальное — по выпискам; по строкам — лист «Позиции», колонка «Основа оценки сейчас»", "the rest at statement values; per line — sheet “Positions”, column “Basis now”")], [],
+    ...block(mk, true));
+  if(r.summary) sum.push([], [t("Коротко о портфеле — ИИ-анализ по выпискам", "The portfolio in brief — AI analysis of the statements")], [r.summary]);
+  sheet(sum, t("Сводка", "Summary"), [46, 18, 12, 14]);
+  // Позиции: стоимость по выписке и сейчас — в каждой строке; колонки складываются в итоги сводки
   const head = [t("Категория", "Category"), t("Бумага", "Security"), "ISIN", t("Тикер", "Ticker"), t("Банк", "Institution"), t("Счёт", "Account"), t("Количество", "Quantity"),
     t("Цена", "Price"), t("Цена в % номинала", "Price in % of nominal"), t("Стоимость", "Value"), t("Валюта", "Currency"), t("Накопленный купон", "Accrued interest"),
-    t(`Стоимость, ${base}`, `Value, ${base}`), t("Доля, %", "Share, %"), t("Погашение / экспирация", "Maturity / expiry"), t("Купон, %", "Coupon, %"), t("Опцион", "Option"),
+    t(`Стоимость по выписке, ${base}`, `Statement value, ${base}`), t("Доля по выписке, %", "Share per statement, %"), t("Погашение / экспирация", "Maturity / expiry"), t("Купон, %", "Coupon, %"), t("Опцион", "Option"),
     t("Себестоимость", "Cost"), t("Файл", "File"), t("Страница", "Page"), t("Дата выписки", "Statement date"),
     t("Биржевой символ", "Listing"), t("Цена сейчас", "Price now"), t("Валюта котировки", "Quote currency"), t("Изм. день, %", "Chg. day, %"), t("Изм. месяц, %", "Chg. month, %"),
-    t("Изм. год, %", "Chg. year, %"), t(`Сейчас, ${base}`, `Now, ${base}`), t("Базовый актив", "Underlying"), t("Базовый актив сейчас", "Underlying now")];
+    t("Изм. год, %", "Chg. year, %"), t(`Сейчас, ${base}`, `Now, ${base}`), t("Доля сейчас, %", "Share now, %"), t("Основа оценки сейчас", "Basis now"), t("Базовый актив", "Underlying"), t("Базовый актив сейчас", "Underlying now")];
+  const live = p => p.mk && !p.mk.suspect;
   const rows = m.positions.slice().sort((a, b) => a.cat.localeCompare(b.cat) || ((b.vb || 0) - (a.vb || 0))).map(p => [WL.catOf(p.cls).label, p.name, p.isin, p.ticker, p.inst, p.acct,
     p.qty, p.price, p.unit === "%" ? t("да", "yes") : "", p.value, p.ccy, p.accrued, round((p.vb || 0) + (p.ab || 0)), round(p.w * 100, 3), p.date, p.coupon,
     p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : "", p.cost, p.docFile, p.page || null, p.as_of,
-    p.mk && !p.mk.suspect ? p.mk.symbol || "Cboe" : "", p.mk && !p.mk.suspect ? p.mk.price : null, p.mk && !p.mk.suspect ? p.mk.ccy : "", p.mk && !p.mk.suspect ? p.mk.change : null,
-    p.mk && !p.mk.suspect && p.mk.perf ? p.mk.perf["1m"] : null, p.mk && !p.mk.suspect && p.mk.perf ? p.mk.perf["1y"] : null, p.nowB != null ? round(p.nowB + (p.ab || 0)) : null,
+    live(p) ? p.mk.symbol || "Cboe" : "", live(p) ? p.mk.price : null, live(p) ? p.mk.ccy : "", live(p) ? p.mk.change : null,
+    live(p) && p.mk.perf ? p.mk.perf["1m"] : null, live(p) && p.mk.perf ? p.mk.perf["1y"] : null,
+    mk ? round(p.nowV) : null, mk ? round(p.wNow * 100, 3) : null, mk ? (p.nowB != null ? t("биржевая цена", "market price") : t("по выписке", "statement value")) : "",
     p.underQ ? (p.underQ.name || p.under) : (p.mk && p.mk.underlying ? p.under : ""), p.underQ ? p.underQ.price : (p.mk && p.mk.underlying) || null]);
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([head, ...rows]), t("Позиции", "Positions"));
-  const docs = [[t("Файл", "File"), t("Банк", "Institution"), t("Документ", "Document"), t("Дата", "As of"), t("Страниц", "Pages"), t("В отчёте", "Included"), t("Причина", "Reason"),
-    t("Сверка", "Reconciliation"), t("Итог банка", "Bank total"), t("Валюта итога", "Total currency"), t("Сумма позиций", "Positions sum")]];
-  for(const d of m.docs){ const c = d.recon && (d.recon.checks.find(x => x.scope === "total") || d.recon.checks[0]);
-    docs.push([d.file, d.institution, TYPE[d.type] || d.type, d.as_of, d.pageCount, d.use ? t("да", "yes") : t("нет", "no"), d.use ? "" : WHY[d.why] || d.why,
-      d.recon ? {ok: t("сошлось", "matches"), partial: t("частично", "partly"), mismatch: t("не сошлось", "mismatch"), none: t("нет итога", "no total")}[d.recon.status] : "",
-      c ? c.amount : null, c ? c.ccy : "", c ? round(c.sum) : null]); }
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(docs), t("Выписки", "Statements"));
-  if(m.mkt){
-    const mk = m.mkt, P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
-    const sheet = [[t("Рынок", "Market"), new Date(mk.at).toLocaleString()], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],
+  const tot = head.map(() => null); tot[0] = t("Итого", "Total");
+  tot[12] = round(m.total); tot[13] = 100;
+  if(mk){ tot[27] = round(mk.nowTotal); tot[28] = 100; }
+  sheet([head, ...rows, [], tot], t("Позиции", "Positions"), [22, 40, 14, 9, 22, 14, 12, 10, 8, 14, 8, 12, 16, 10, 12, 8, 14, 12, 26, 8, 12, 14, 11, 8, 9, 9, 9, 16, 10, 16, 18, 12]);
+  // Файлы: все загруженные, и прочитанные, и нет, — с причиной, почему файл не вошёл
+  const STATUS = {error: t("не прочитан", "not read"), skipped: t("пропущен", "skipped"), reading: t("читается", "being read"), queued: t("в очереди", "queued")};
+  const REC = {ok: t("сошлось", "matches"), partial: t("частично", "partly"), mismatch: t("не сошлось", "mismatch"), none: t("нет итога", "no total")};
+  const files = [[t("Файл", "File"), t("Чтение", "Reading"), t("В отчёте", "Included"), t("Причина", "Reason"), t("Банк", "Institution"), t("Документ", "Document"), t("Дата", "As of"),
+    t("Страниц", "Pages"), t("Не прочитаны страницы", "Pages not read"), t("Позиций", "Positions"), t(`Стоимость, ${base}`, `Value, ${base}`),
+    t("Сверка с итогом банка", "Check against the bank total"), t("Итог банка", "Bank total"), t("Валюта итога", "Total currency"), t("Сумма позиций", "Positions sum"), t("Частичные итоги", "Subtotals")]];
+  for(const f of s.files){
+    const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), rc = d && d.use && d.recon;
+    const c = rc && (rc.checks.find(x => x.scope === "total" && !x.unchecked) || rc.checks.find(x => !x.unchecked));
+    const gaps = raw && raw.failed && raw.failed.length ? raw.failed.map(x => x.from === x.to ? x.from : `${x.from}–${x.to}`).join(", ") : "";
+    const read = f.status === "done" ? (gaps ? t("прочитан частично", "partly read") : t("прочитан", "read")) : STATUS[f.status] || f.status;
+    const why = f.status !== "done" ? f.reason || t("файл не прочитан", "the file was not read") : d && !d.use ? WHY[d.why] || d.why
+      : d && d.replaced && d.replaced.length ? d.replaced.map(z => t(`счёт ${z.acct} — из более свежей выписки «${z.byFile}»`, `account ${z.acct} — from the newer statement “${z.byFile}”`)).join("; ") : "";
+    const bad = rc ? rc.checks.filter(x => !x.ok && !x.unchecked).length : 0, na = rc ? rc.checks.filter(x => x.unchecked).length : 0;
+    files.push([f.name, read, d && d.use ? t("да", "yes") : t("нет", "no"), why, d ? d.institution : f.inst || "", d ? TYPE[d.type] || d.type : "", d && d.as_of ? fmt.date(d.as_of) : "",
+      raw ? raw.pageCount : null, gaps, d && d.use ? d.positions : null, d && d.use ? round(d.value) : null, rc ? REC[rc.status] : "",
+      c ? c.amount : null, c ? c.ccy : "", c ? round(c.sum) : null,
+      rc && rc.checks.length > 1 ? [bad ? t(`не сошлись: ${bad}`, `not matching: ${bad}`) : t("все сошлись", "all match"), na ? t(`не проверено: ${na}`, `not checked: ${na}`) : ""].filter(Boolean).join(", ") : ""]);
+  }
+  sheet(files, t("Файлы", "Files"), [34, 16, 9, 44, 24, 20, 11, 8, 12, 9, 14, 14, 14, 9, 14, 20]);
+  if(mk){
+    const P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
+    sheet([[t("Рынок", "Market"), when], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],
       [t("Доля по рыночной цене, %", "Share at market prices, %"), round(mk.coverage * 100)], [],
       [t("Изменение, %", "Change, %"), t("Весь портфель", "Whole portfolio"), t("Котируемая часть", "Listed part"), ...mk.benchmarks.map(b => b.label)],
       ...P.map(([id, l]) => [l, mk.perf[id] && mk.perf[id].whole != null ? round(mk.perf[id].whole * 100) : null, mk.perf[id] && mk.perf[id].pct != null ? round(mk.perf[id].pct * 100) : null,
         ...mk.benchmarks.map(b => b.perf ? b.perf[id] : null)]), [],
-      [t("Котировка", "Quote"), t("Цена", "Price"), t("Изм. день, %", "Chg. day, %")], ...mk.overview.map(x => [x.label, x.price, x.change])];
-    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(sheet), t("Рынок", "Market"));
+      [t("Котировка", "Quote"), t("Цена", "Price"), t("Изм. день, %", "Chg. day, %")], ...mk.overview.map(x => [x.label, x.price, x.change])], t("Рынок", "Market"), [34, 16, 16, 14]);
   }
   const al = [[t("Уровень", "Level"), t("Что", "What"), t("Подробно", "Details"), t("Источник", "Source")]];
   for(const a of m.alerts) al.push([LVL[a.level], a.title, a.text, basisOf(a)]);
   for(const a of (r.alerts || [])) al.push([LVL[a.level], a.title, a.text, t("ИИ-анализ", "AI analysis")]);
   for(const q of (r.questions || [])) al.push([t("Уточнить", "Check"), q.text, "", t("ИИ-анализ", "AI analysis")]);
-  X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(al), t("Внимание", "Attention"));
+  sheet(al, t("Внимание", "Attention"), [12, 48, 90, 34]);
   const name = `${(s.client || "WealthLens").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim()} ${WL.today()}.xlsx`;
   X.writeFile(wb, name);
 };

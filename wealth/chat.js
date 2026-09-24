@@ -48,7 +48,7 @@ const talked = id => !!(chats()[id] && chats()[id].messages && chats()[id].messa
 
 /* Темы: портфель, рынок, выводы (в закрытом отчёте — только открытый), вопросы. */
 function topics(){
-  const m = M(), r = S().review || {};
+  const m = M(), r = WL.reviewNow() || {};
   if(!m) return [];
   const out = [{id: "portfolio", kind: "portfolio", title: t("Портфель целиком", "The whole portfolio"), text: r.summary || "", level: ""}];
   if(m.mkt) out.push({id: "market", kind: "market", title: t("Портфель и рынок сейчас", "The portfolio and the market now"), level: "",
@@ -87,7 +87,11 @@ function creditsPill(){
   const n = c.left, free = !(c.paid || c.bought || c.test);
   const txt = free ? t(`${n} ${WL.pl(n, ["бесплатное сообщение", "бесплатных сообщения", "бесплатных сообщений"], ["", ""])}`, `${n} free ${n === 1 ? "message" : "messages"}`)
     : t(`${n} ${WL.pl(n, ["сообщение", "сообщения", "сообщений"], ["", ""])}`, `${n} ${n === 1 ? "message" : "messages"} left`);
-  return `<span class="credits${n <= 0 ? " out" : n <= 2 ? " low" : ""}" title="${esc(t(`Сообщения считаются на этот отчёт. Вступление ассистента по новой теме бесплатно — ещё ${c.opens_left} из ${c.opens_limit}.`, `Messages are counted per report. The assistant's opening on a new topic is free — ${c.opens_left} of ${c.opens_limit} left.`))}">${esc(txt)}</span>`;
+  // из чего сложилось число: бесплатные + входящие в полный отчёт + пакеты, минус отправленные (23 = 3 + 20, если бесплатные не потрачены)
+  const had = [c.free ? t(`${c.free} бесплатных`, `${c.free} free`) : "", c.included ? t(`${c.included} с полным отчётом`, `${c.included} with the full report`) : "",
+    c.bought ? t(`${c.bought} из пакетов`, `${c.bought} from packs`) : ""].filter(Boolean).join(" + ");
+  return `<span class="credits${n <= 0 ? " out" : n <= 2 ? " low" : ""}" title="${esc(t(`На этот отчёт: ${had}, отправлено ${c.used || 0}. Вступление ассистента по новой теме бесплатно — ещё ${c.opens_left} из ${c.opens_limit}.`,
+    `For this report: ${had}, ${c.used || 0} sent. The assistant's opening on a new topic is free — ${c.opens_left} of ${c.opens_limit} left.`))}">${esc(txt)}</span>`;
 }
 
 function topicButton(x){
@@ -134,7 +138,7 @@ function noCredits(){
   const lockedReport = WL.pay.PAYWALL && WL.pay.locked() && !S().demo;
   const packs = (c.packs || []).map(p => `<button type="button" class="btn small" data-pack="${esc(p.id)}">${t(`${p.messages} сообщений`, `${p.messages} messages`)}${p.label ? " · " + esc(p.label) : ""}</button>`).join("");
   return `<div class="nocred"><b>${c.paid || c.bought ? t("Сообщения закончились", "You are out of messages") : t("Бесплатные сообщения закончились", "The free messages are used up")}</b>
-    <p>${lockedReport ? t(`В полный отчёт входит ${c.included_if_paid} сообщений ассистенту — а ещё все позиции, выводы, PDF и Excel.`, `The full report includes ${c.included_if_paid} messages to the assistant, plus every position, all findings, PDF and Excel.`)
+    <p>${lockedReport ? t(`С полным отчётом — ещё ${c.included_if_paid} сообщений ассистенту, а также все позиции, выводы, PDF и Excel.`, `The full report adds ${c.included_if_paid} more messages to the assistant, plus every position, all findings, PDF and Excel.`)
       : packs ? t("Докупите сообщения — они добавятся к этому отчёту и не сгорают.", "Buy more messages — they are added to this report and don't expire.")
       : t("Скоро здесь можно будет докупить сообщения. Если нужно больше прямо сейчас — напишите нам.", "You will soon be able to buy more messages here. If you need more right now, write to us.")}</p>
     ${lockedReport || packs ? `<div class="nb-a">${lockedReport ? `<button type="button" class="btn primary small" data-buy="chat">${t(`Открыть полный отчёт · ${WL.pay.PRICE.label}`, `Unlock the full report · ${WL.pay.PRICE.label}`)}</button>` : ""}${lockedReport ? "" : packs}</div>` : ""}</div>`;
@@ -178,7 +182,7 @@ function launcher(){
   b.innerHTML = `${SPARK}<span>${t("Обсудить портфель", "Discuss the portfolio")}</span>${fresh.length ? `<em>${fresh.length}</em>` : ""}`;
   b.setAttribute("aria-label", t("Обсудить портфель с ассистентом", "Discuss the portfolio with the assistant") + (fresh.length ? t(`: ${fresh.length} ${WL.pl(fresh.length, ["тема", "темы", "тем"], ["", ""])}`, `: ${fresh.length} ${fresh.length === 1 ? "topic" : "topics"}`) : ""));
   let n = $("#chatNudge");
-  const show = ready && !C.open && fresh.length && !S().chatNudged && S().review && S().review.summary && !document.body.classList.contains("has-modal");
+  const show = ready && !C.open && fresh.length && !S().chatNudged && WL.reviewNow() && WL.reviewNow().summary && !document.body.classList.contains("has-modal");
   if(!show){ if(n) n.remove(); return; }
   if(!n){ n = document.createElement("div"); n.id = "chatNudge"; n.className = "chat-nudge no-print"; n.setAttribute("role", "status"); document.body.appendChild(n);
     clearTimeout(C.nudgeTimer); C.nudgeTimer = setTimeout(dismissNudge, 20000); }
@@ -201,7 +205,7 @@ async function loadCredits(){
    (остальные — одной суммой) плюс позиции темы разговора: так ответ по большому портфелю стоит как по среднему. */
 const CHAT_POSITIONS = 150;
 function reportFor(refs){
-  const rep = WL.compact(M(), S(), {keep: refs}), r = S().review || {};
+  const rep = WL.compact(M(), S(), {keep: refs}), r = WL.reviewNow() || {};
   const all = WL.alertList ? WL.alertList() : [], vis = WL.pay.locked() ? all.slice(0, 1) : all;
   rep.findings_shown_to_user = {summary: r.summary || undefined, alerts: vis.map(a => ({level: a.level, title: a.title, text: a.text, source: a.auto ? "checks" : "ai_analysis"})),
     more_in_full_report: all.length - vis.length || undefined, questions_to_check: (r.questions || []).map(q => q.text)};

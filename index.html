@@ -159,6 +159,8 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .badge{display:inline-flex; align-items:center; gap:4px; font:500 11px/1 var(--mono); padding:3px 7px; border-radius:999px; white-space:nowrap}
 .badge svg{width:11px; height:11px}
 .badge.ok{color:var(--good); background:var(--good-soft)} .badge.bad{color:var(--risk); background:var(--risk-soft)} .badge.none{color:var(--muted); background:rgba(226,236,255,.05)}
+.badge.part{color:var(--watch); background:var(--watch-soft)}
+.paywall.checking h2{display:flex; align-items:center; gap:10px}
 
 /* Оплата */
 .paywall{margin-top:18px; padding:18px 22px; display:flex; gap:18px; align-items:center; justify-content:space-between; flex-wrap:wrap;
@@ -181,6 +183,7 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 
 /* Предупреждения */
 .alerts{display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px}
+.alerts.more,.docs.more{margin-top:12px}    /* первые две карточки — вместе с заголовком раздела (блок keep), остальные — следом той же сеткой */
 .alert{padding:15px 17px 16px; border-left-width:3px}
 .alert.lv-high{border-left-color:var(--risk)} .alert.lv-watch{border-left-color:var(--watch)} .alert.lv-info{border-left-color:var(--info)}
 .al{display:flex; gap:8px; align-items:center}
@@ -253,6 +256,7 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 .checks{list-style:none; margin:0; padding:0; display:grid; gap:4px; font-size:12.5px}
 .checks li{display:flex; gap:6px; align-items:flex-start} .checks svg{margin-top:2px}
 .checks .ok{color:var(--ink-2)} .checks .ok svg{color:var(--good)} .checks .bad{color:var(--ink)} .checks .bad svg{color:var(--risk)}
+.checks .na{color:var(--muted)} .checks .na svg{color:var(--muted)}
 .dnote{display:flex; gap:8px; margin:0; font-size:13px; color:var(--ink-2)} .dnote svg{color:var(--accent); margin-top:3px}
 .rnotes{margin:0; padding-left:18px; font-size:12.5px; color:var(--muted)}
 .rn summary{cursor:pointer; font-size:12.5px; color:var(--muted)} .rn[open] summary{margin-bottom:4px}
@@ -397,18 +401,18 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 .news-grid li span{font-size:11.5px}
 .nt{margin-bottom:10px} .nt > b{font:600 12px/1 var(--mono); color:var(--accent); display:block; margin-bottom:6px}
 
-@media (max-width:900px){
+@media screen and (max-width:900px){
   .hero,.two{grid-template-columns:minmax(0,1fr)}
   .alerts,.docs{grid-template-columns:minmax(0,1fr)}
   .fl{grid-template-columns:20px minmax(0,1fr) 90px 28px} .fl .fm{grid-column:2 / -1; grid-row:2}
   .fl .fb{grid-column:3; grid-row:1} .fl .fx{grid-column:4; grid-row:1}
 }
-@media (max-width:1020px){
+@media screen and (max-width:1020px){
   .pos .mt{display:none}
   .pos .nm{min-width:160px}
   .pos th{white-space:normal}
 }
-@media (max-width:760px){
+@media screen and (max-width:760px){
   .wrap{padding:0 16px}
   .pos th,.pos td,.pos tfoot td{padding-left:6px; padding-right:6px}
   .pos tfoot td .sub{display:none}
@@ -438,7 +442,7 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .starters .sug{white-space:nowrap}
 }
 
-@media (max-width:360px){
+@media screen and (max-width:360px){
   table.pos{font-size:12.5px}
   .pos tr.gh td:first-child,.pos .nm b{-webkit-hyphens:auto; hyphens:auto}   /* «Альтернатив-ные активы» на 320 px */
 }
@@ -448,7 +452,7 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   :root{--ground:#fff; --surface:#fff; --ink:#111; --ink-2:#333; --muted:#666; --line:#ddd; --line-2:#bbb; --accent:#9A6A12; --good:#0F7A5C; --risk:#B42318; --info:#1F5FBF; --watch:#9A6A12;
     --good-soft:#E7F5EF; --risk-soft:#FDECEA; --info-soft:#E8F0FC; --watch-soft:#FBF1DD; --accent-soft:#FBF1DD; color-scheme:light}
   @page{size:A4; margin:14mm 12mm}
-  body{background:#fff; font-size:10pt}
+  body{background:#fff; font-size:10pt; min-height:0} #app.wrap{padding-bottom:0}   /* без запаса под кнопку ассистента — иначе лишняя пустая страница */
   body::before{display:none}
   .bar,.no-print,.ask,.da,.demo-bar,.paywall,.drawer,.scrim,#toast,.reading,.modal-wrap,.seg,.link,.demo-link,.chat,.chat-fab,.chat-nudge,.starters,.talkbtn,.sh-hint{display:none !important}
   body.chat-open #app.wrap{margin:0 auto}
@@ -462,10 +466,25 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .print-head h1{margin:2mm 0 1mm; font-size:20pt} .print-head p{margin:0; color:#444}
   .tv{font-size:26pt} .summary{font-size:11pt}
   .hero,.two{grid-template-columns:1fr 1fr; gap:5mm}
-  .alerts,.docs{grid-template-columns:1fr 1fr; gap:4mm}
-  .alert,.doc,.hero .card,.two .card{break-inside:avoid}
+  /* Карточки выводов и файлов — строчными блоками по две в ряд: строчный блок печать не разрывает между страницами ни в Chrome,
+     ни в Safari (break-inside у ячеек сетки Safari не соблюдает — заголовок оставался внизу страницы, текст уезжал на следующую) */
+  .alerts,.docs{display:block}
+  .alerts > .alert,.docs > .doc{display:inline-block; vertical-align:top; width:calc(50% - 2.2mm); margin:0 0 4mm; break-inside:avoid; page-break-inside:avoid}
+  .alerts > .alert:nth-child(odd),.docs > .doc:nth-child(odd){margin-right:4mm}
+  .keep{display:inline-block; width:100%; vertical-align:top}   /* заголовок раздела и первый ряд карточек — на одной странице */
+  #holdings{break-before:page; page-break-before:always}          /* таблица позиций — с новой страницы, а не шапкой внизу предыдущей */
+  .alerts.more,.docs.more{margin-top:0}
+  .hero .card,.two .card,.brief,.qlist li,.method{break-inside:avoid; page-break-inside:avoid}
+  .sh,h2,h3{break-after:avoid; page-break-after:avoid}
   .sec{margin-top:7mm} .sh h2{font-size:14pt}
-  table.pos{font-size:8.5pt} .pos th{color:#555} .pos td{padding:4px 6px} .pos tr{break-inside:avoid} .pos thead{display:table-header-group}
+  /* Таблица позиций на бумаге — полная, со всеми колонками (правила узкого экрана к печати не относятся) */
+  .tw{overflow:visible}
+  table.pos{font-size:7.6pt} .pos th{color:#555; white-space:normal; font-size:6.6pt; letter-spacing:.04em; padding:3px 4px} .pos td{padding:3px 4px}
+  .pos .nm{min-width:0} .pos .nm,.pos .nm .sub{overflow-wrap:anywhere} .pos .sub{font-size:6.6pt}
+  .pos tr{break-inside:avoid; page-break-inside:avoid} .pos thead{display:table-header-group}
+  .pos tfoot{display:table-row-group}          /* «Итого» — один раз в конце таблицы, а не внизу каждой страницы */
+  .pos tr.gh{break-after:avoid; page-break-after:avoid}
+  .pos td.mk{font-size:7.6pt} .pos td.ac{width:14%} .pos .nm{width:24%}
   .method{border-top:1px solid #bbb}
   .mix-bar i,.k,.trk i,.bt i{-webkit-print-color-adjust:exact; print-color-adjust:exact}
   .bt i{background:#555}
@@ -498,12 +517,12 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/track.js?v=689876582aab"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=80b48af2ce95"></script>
-<script src="wealth/report.js?v=a63b27eb6784"></script>
+<script src="wealth/report.js?v=68a1f4dfb773"></script>
 <script src="wealth/market.js?v=75b336d2bdf2"></script>
-<script src="wealth/pay.js?v=57f94cccba8f"></script>
-<script src="wealth/view.js?v=5fc50ec408ca"></script>
-<script src="wealth/chat.js?v=fd7898daa189"></script>
+<script src="wealth/pay.js?v=d5482dcb642b"></script>
+<script src="wealth/view.js?v=9a5b46032a52"></script>
+<script src="wealth/chat.js?v=f0e886576145"></script>
 <script src="wealth/demo.js?v=c8b504f61923"></script>
-<script src="wealth/app.js?v=c0a95ea4f8a2"></script>
+<script src="wealth/app.js?v=d7dc6940a4f9"></script>
 </body>
 </html>

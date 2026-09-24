@@ -60,9 +60,18 @@ function extendPaid(){
   const m = unlocks(); m[S().rid] = Object.assign({}, u, {a: u.a.concat(add)}); setUnlocks(m);
 }
 
+/* Пока проверка оплаты после открытия не закончилась, оплаченный отчёт не должен предлагать «€49»: вместо предложения —
+   «Проверяем доступ…». Проверка заканчивается ответом сервера или через 8 секунд. */
+let settled = false;
+const RETURNING = new URLSearchParams(location.search).has("paid");            // вернулись со Stripe — оплата ещё проверяется
+setTimeout(() => { if(!settled){ settled = true; if(WL.render && S() && S().docs && S().docs.length) WL.render(); } }, 8000);
+
 const pay = WL.pay = {
   PAYWALL, ON_SITE, PRICE,
   locked: () => PAYWALL && !S().demo && (!confirmed(unlockOf(S().rid)) || otherPortfolio()),
+  pending: () => !settled && PAYWALL && !S().demo && (RETURNING || (!!unlockOf(S().rid) && !confirmed(unlockOf(S().rid)) && !otherPortfolio())),
+  // Подпись доступа проверяется в браузере за миллисекунды — до первой отрисовки, чтобы не мелькало предложение оплаты.
+  prime: () => primeGrant().catch(() => false),
   // Для сервера чтения: оплаченный отчёт читает больше страниц в сутки.
   auth(){ const s = S(), u = s && unlockOf(s.rid); return u ? {rid: s.rid, token: u.t, sid: u.s || ""} : {}; },
   extendPaid,
@@ -92,6 +101,9 @@ async function unlockWith(sid, r, restored){
 
 let checking = false;
 pay.check = async () => {
+  try{ return await checkAccess(); } finally { if(!settled){ settled = true; WL.render(); } }
+};
+async function checkAccess(){
   const s = S();
   if(!PAYWALL || s.demo || !s.rid || checking) return;
   const u = unlockOf(s.rid);

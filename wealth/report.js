@@ -167,22 +167,36 @@ function converter(S, base){
   };
 }
 
-/* Сверка с итогами банка. Итог по валюте сравнивается с суммой позиций в этой валюте точно; общий итог — через стоимость
-   в валюте выписки, если банк её напечатал, иначе через курс (допуск шире). НКД банк то включает, то нет — пробуем оба. */
+/* Сверка с итогами банка. Итог по счёту — с позициями этого счёта, итог по валюте — с позициями в этой валюте, общий итог —
+   со всеми. Валюта группы и валюта суммы — разные вещи: «активы в EUR — CHF 1 028 204» — это позиции в евро, пересчитанные
+   во франки (group_ccy EUR, currency CHF). Пересчёт — через стоимость в валюте выписки, если банк её напечатал, иначе через
+   курс (допуск шире). НКД банк то включает, то нет — пробуем оба. Итог, который не с чем сравнить (нет курса, строки не
+   разнесены по счетам), помечается «не проверено» и на статус не влияет. Статус «ok» — сошёлся общий итог; частичные итоги,
+   которые при этом не сошлись, считаются отдельно (open): итог отчёта верен, но состав требует уточнения. */
+const ISO3 = /(?:^|[^A-Z])([A-Z]{3})(?![A-Z])/g;
+function groupCcy(tot, rows, doc, ccy){
+  const g = String(tot.group_ccy || "").trim().toUpperCase();
+  if(/^[A-Z]{3}$/.test(g)) return g;
+  // прочитано до появления group_ccy: валюта группы — в подписи («Währungsaufteilung EUR»), если такая есть среди позиций
+  const have = new Set(rows.map(r => r.ccy || doc.ref_ccy).filter(Boolean));
+  const named = [...new Set([...String(tot.label || "").toUpperCase().matchAll(ISO3)].map(m => m[1]))].filter(c => have.has(c));
+  const other = named.filter(c => c !== ccy);
+  return other.length === 1 ? other[0] : named.length === 1 ? named[0] : ccy;
+}
 function reconcile(doc, rows, S){
   const totals = doc.totals.filter(x => ["total", "account", "currency"].includes(x.scope) && isFinite(x.amount));
-  if(!totals.length) return {status: "none", checks: []};
-  const conv = converter(S, "");
-  const checks = [];
+  if(!totals.length) return {status: "none", checks: [], open: 0};
+  const checks = [], nAcct = new Set(rows.map(r => r.acct).filter(Boolean)).size;
   for(const tot of totals){
     const ccy = (tot.currency || doc.ref_ccy || "").toUpperCase();
-    let pool = rows;
+    let pool = rows, group = "", unchecked = "";
     if(tot.scope === "account" && tot.account){
       const ti = acctInfo(tot.account);
       const mine = rows.filter(r => r.acct && (r.acct === tot.account || (ti && (a => a && (sameAcct(a, ti) || (!a.masked && !ti.masked && a.key.startsWith(ti.key))))(acctInfo(r.acct)))));
       if(mine.length) pool = mine;
+      else if(nAcct > 1 || (doc.accounts || []).length > 1) unchecked = "acct";   // счёт не найден среди строк — сравнить не с чем
     }
-    if(tot.scope === "currency") pool = pool.filter(r => (r.ccy || doc.ref_ccy) === ccy);
+    if(tot.scope === "currency"){ group = groupCcy(tot, rows, doc, ccy); pool = pool.filter(r => (r.ccy || doc.ref_ccy) === group); }
     let sum = 0, acc = 0, approx = false, missing = false;
     for(const r of pool){
       if(r.value == null) continue;
@@ -200,17 +214,19 @@ function reconcile(doc, rows, S){
       }
       missing = true;
     }
+    if(missing && !unchecked) unchecked = "fx";
     const tol = approx ? Math.max(2, Math.abs(tot.amount) * 0.006) : Math.max(1.01, Math.abs(tot.amount) * 0.0005);
     const d0 = sum - tot.amount, d1 = sum + acc - tot.amount;
-    const ok = !missing && (Math.abs(d0) <= tol || Math.abs(d1) <= tol);
-    checks.push({label: tot.label, scope: tot.scope, account: tot.account, ccy, amount: tot.amount, sum, sumAcc: sum + acc,
-      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: Math.abs(d1) < Math.abs(d0) ? d1 : d0, ok, approx, missing, page: tot.page});
+    const ok = !unchecked && (Math.abs(d0) <= tol || Math.abs(d1) <= tol);
+    checks.push({label: tot.label, scope: tot.scope, account: tot.account, ccy, group, amount: tot.amount, sum, sumAcc: sum + acc,
+      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: Math.abs(d1) < Math.abs(d0) ? d1 : d0, ok, approx, missing, unchecked, page: tot.page});
   }
-  const grand = checks.filter(c => c.scope === "total");
+  const live = checks.filter(c => !c.unchecked), grand = live.filter(c => c.scope === "total");
   let status;
-  if(grand.length) status = grand.some(c => c.ok) ? "ok" : checks.some(c => c.ok) ? "partial" : "mismatch";
-  else status = checks.every(c => c.ok) ? "ok" : checks.some(c => c.ok) ? "partial" : "mismatch";
-  return {status, checks};
+  if(!live.length) status = "none";
+  else if(grand.length) status = grand.some(c => c.ok) ? "ok" : live.some(c => c.ok) ? "partial" : "mismatch";
+  else status = live.every(c => c.ok) ? "ok" : live.some(c => c.ok) ? "partial" : "mismatch";
+  return {status, checks, open: status === "ok" ? live.filter(c => !c.ok).length : 0};
 }
 
 /* Модель отчёта */
@@ -274,6 +290,27 @@ WL.build = S => {
   return M;
 };
 
+/* Выводы о долях — крупная бумага и много денег — зависят от оценки: по выпискам или по текущим ценам. */
+function shareAlerts(M, w, v, byCat){
+  const out = [], money = x => fmt.money(x, M.base), name = p => p.name || p.isin || p.ticker || "—";
+  const big = M.positions.filter(p => ["stock", "bond", "note", "alt", "crypto", "other"].includes(p.cls) && w(p) >= 0.1).sort((a, b) => w(b) - w(a));
+  if(big.length) out.push({level: w(big[0]) >= 0.2 ? "high" : "watch", id: "conc", title: t("Крупная доля в одной бумаге", "Large share in a single holding"),
+    text: big.slice(0, 4).map(p => `${name(p)} — ${fmt.pct(w(p))} (${money(v(p))})`).join("; ") + ".", refs: big.map(p => p.id), auto: true});
+  const cash = byCat.find(c => c.key === "cash");
+  if(cash && cash.share >= 0.3 && M.positions.length > 2) out.push({level: "info", id: "cash", title: t(`Деньги — ${fmt.pct(cash.share, 0)} портфеля`, `Cash is ${fmt.pct(cash.share, 0)} of the portfolio`),
+    text: t(`${money(cash.value)} на счетах и депозитах.`, `${money(cash.value)} in accounts and deposits.`), refs: [], auto: true});
+  return out;
+}
+/* В режиме «Сейчас» те же выводы о долях считаются от текущей оценки — как итог, таблица и диаграмма рядом. */
+WL.alertsNow = M => {
+  if(!M.mkt || !M.mkt.byCat) return M.alerts;
+  const when = new Date(M.mkt.at).toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
+  const basis = t(`Основа: текущие цены на ${when}, бумаги без котировки — по выпискам`, `Source: current prices at ${when}, unlisted holdings at statement values`);
+  const live = shareAlerts(M, p => p.wNow != null ? p.wNow : p.w, p => p.nowV != null ? p.nowV : (p.vb || 0) + (p.ab || 0), M.mkt.byCat).map(a => Object.assign(a, {basis}));
+  const order = {high: 0, watch: 1, info: 2};
+  return M.alerts.filter(a => a.id !== "conc" && a.id !== "cash").concat(live).map((a, i) => [a, i]).sort((x, y) => order[x[0].level] - order[y[0].level] || x[1] - y[1]).map(x => x[0]);
+};
+
 /* Автоматические предупреждения: только то, что следует из чисел. Остальное добавляет ИИ в сводке. */
 function alerts(M, S){
   const out = [], base = M.base, money = v => fmt.money(v, base), name = p => p.name || p.isin || p.ticker || "—";
@@ -299,6 +336,12 @@ function alerts(M, S){
         t(`«${d.institution || d.file}»: сумма позиций не совпала с итогом банка`, `“${d.institution || d.file}”: positions don't add up to the bank's total`),
         t(`Итог в выписке «${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, сумма прочитанных позиций — ${fmt.money(c.sum, c.ccy, 2)}${c.approx ? " (через курс)" : ""}, разница ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`,
           `The statement total “${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions read add up to ${fmt.money(c.sum, c.ccy, 2)}${c.approx ? " (via FX)" : ""}, a difference of ${fmt.money(Math.abs(c.diff), c.ccy, 2)}.`), [d.id]);
+    } else if(d.recon.status === "ok" && d.recon.open){
+      const bad = d.recon.checks.filter(x => !x.ok && !x.unchecked), c = bad[0], more = bad.length - 1;
+      const of = c.group ? t(` в ${c.group}`, ` in ${c.group}`) : c.account ? t(` счёта ${c.account}`, ` of account ${c.account}`) : "";
+      add("info", "recon-" + d.id, t(`«${d.institution || d.file}»: общий итог сошёлся, частичные — нет`, `“${d.institution || d.file}”: the grand total matches, some subtotals don't`),
+        t(`«${c.label}» — ${fmt.money(c.amount, c.ccy, 2)}, позиции${of} — ${fmt.money(c.sum, c.ccy, 2)}${more ? ` (и ещё ${more} ${WL.pl(more, ["итог", "итога", "итогов"], ["", ""])})` : ""}. Итог отчёта совпадает с банком; не сходится состав — возможно, у части позиций неверно прочитаны валюта или счёт. Проверьте по выписке.`,
+          `“${c.label}” is ${fmt.money(c.amount, c.ccy, 2)}; the positions${of} add up to ${fmt.money(c.sum, c.ccy, 2)}${more ? ` (and ${more} more)` : ""}. The report total matches the bank's; the breakdown doesn't — the currency or account of some positions may have been read wrong. Check against the statement.`), [d.id]);
     }
     if(d.summaryOnly) add("watch", "summary-" + d.id, t(`«${d.file}»: найдены только сводные таблицы`, `“${d.file}”: only summary tables were found`),
       t("Полного списка позиций в файле нет — отчёт построен по сводной таблице и может быть неполным.", "The file has no complete list of positions — the report uses a summary table and may be incomplete."), [d.id]);
@@ -314,12 +357,7 @@ function alerts(M, S){
   const neg = M.positions.filter(p => p.cls === "cash" && (p.vb || 0) < -1);
   if(neg.length) add("high", "neg", t("Отрицательный остаток на счёте", "Negative cash balance"),
     neg.map(p => `${name(p)} (${p.inst}): ${fmt.money(p.value, p.ccy)}`).join("; ") + t(" — это долг банку или маржинальный кредит.", " — money owed to the bank or a margin loan."), neg.map(p => p.id));
-  const big = M.positions.filter(p => ["stock", "bond", "note", "alt", "crypto", "other"].includes(p.cls) && p.w >= 0.1).sort((a, b) => b.w - a.w);
-  if(big.length) add(big[0].w >= 0.2 ? "high" : "watch", "conc", t("Крупная доля в одной бумаге", "Large share in a single holding"),
-    big.slice(0, 4).map(p => `${name(p)} — ${fmt.pct(p.w)} (${money((p.vb || 0) + (p.ab || 0))})`).join("; ") + ".", big.map(p => p.id));
-  const cash = M.byCat.find(c => c.key === "cash");
-  if(cash && cash.share >= 0.3 && M.positions.length > 2) add("info", "cash", t(`Деньги — ${fmt.pct(cash.share, 0)} портфеля`, `Cash is ${fmt.pct(cash.share, 0)} of the portfolio`),
-    t(`${money(cash.value)} на счетах и депозитах.`, `${money(cash.value)} in accounts and deposits.`));
+  for(const a of shareAlerts(M, p => p.w, p => (p.vb || 0) + (p.ab || 0), M.byCat)) out.push(a);
   /* Проданный пут в выписке стоит копейки, а обязывает купить акции по страйку: количество × страйк × множитель контракта.
      Множитель — из самой выписки (стоимость ÷ количество ÷ цена), иначе 100, как у опционов на акции США. */
   const puts = M.positions.filter(p => p.cls === "option" && p.right === "P" && p.qty < 0 && p.strike > 0);
@@ -361,6 +399,11 @@ function alerts(M, S){
   return out.sort((a, b) => order[a.level] - order[b.level]);
 }
 
+/* Сводка ИИ относится к тому набору выписок, по которому её получили. Если набор изменился (файл убран, добавлен,
+   дочитан), прежние выводы не показываются, пока не придёт новая сводка: иначе на экране висят выводы о другом портфеле. */
+WL.reviewComp = (M, S) => M ? [M.positions.length, M.docs.filter(d => d.use).map(d => d.id).join(","), S.docs.map(d => d.id + (S.include[d.id] ?? "")).join(",")].join("|") : "";
+WL.reviewNow = () => { const s = WL.state, r = s && s.review; return r && (!r.comp || r.comp === WL.reviewComp(WL.model, s)) ? r : null; };
+
 /* Данные отчёта для сводки ИИ: сводка, выписки со сверкой, позиции (до 700 крупнейших), автоматические предупреждения. */
 WL.compact = (M, S, opts = {}) => {
   const r2 = v => v == null ? null : Math.round(v * 100) / 100;
@@ -374,8 +417,9 @@ WL.compact = (M, S, opts = {}) => {
     documents: M.docs.map(d => ({id: d.id, file: d.file, institution: d.institution, type: d.type, as_of: d.as_of, reference_currency: d.ref_ccy,
       included: d.use, excluded_reason: d.use ? undefined : d.why, accounts: d.accounts.map(a => a.id + (a.label ? " " + a.label : "")),
       positions: d.positions, value_in_report_currency: r2(d.value), pages: d.pageCount, unread_pages: (d.failed || []).map(f => `${f.from}-${f.to}`),
-      summary_rows_ignored: d.summaryDropped || 0, reconciliation: d.recon ? {status: d.recon.status, checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope,
-        currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum), positions_with_accrued: r2(c.sumAcc), matched: c.ok, via_fx: c.approx}))} : undefined,
+      summary_rows_ignored: d.summaryDropped || 0, reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
+        checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
+          positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx}))} : undefined,
       reader_notes: d.notes})),
     positions: top.map(p => ({id: p.id, doc: p.doc, class: p.cls, name: p.name, isin: p.isin || undefined, ticker: p.ticker || undefined, qty: p.qty ?? undefined,
       price: p.price ?? undefined, price_in_percent: p.unit === "%" || undefined, value: r2(p.value), currency: p.ccy, value_report_ccy: r2(p.vb),

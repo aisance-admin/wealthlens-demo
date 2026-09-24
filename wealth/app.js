@@ -191,15 +191,15 @@ function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([m
 async function requestReview(force){
   const s = WL.state, m = WL.model;
   if(s.demo || !m || !m.positions.length || WL.reading) return;
-  const key = reviewKey();
+  const key = reviewKey(), comp = WL.reviewComp(m, s);
   if(!force && s.review && s.review.key === key && !s.review.error) return;
   const seq = ++reviewSeq;
   WL.reviewing = true; WL.render();
   const r = await WL.api("/review", Object.assign({lang: WL.lang, report: WL.compact(m, s)}, WL.pay.auth()), {timeout: 240000});
   if(seq !== reviewSeq) return;
   WL.reviewing = false;
-  s.review = r && !r.error && r.summary ? {summary: r.summary, alerts: r.alerts || [], documents: r.documents || [], questions: r.questions || [], key, base: m.base, lang: WL.lang, at: Date.now()}
-    : {error: (r && r.error) || "failed", key};
+  s.review = r && !r.error && r.summary ? {summary: r.summary, alerts: r.alerts || [], documents: r.documents || [], questions: r.questions || [], key, comp, base: m.base, lang: WL.lang, at: Date.now()}
+    : {error: (r && r.error) || "failed", key, comp};
   WL.save(); WL.render();
 }
 const reviewSoon = () => { clearTimeout(reviewTimer); reviewTimer = setTimeout(() => requestReview(), 1500); };
@@ -237,7 +237,8 @@ async function removeFile(id){
 WL.renderBar = () => {
   const lock = WL.pay.locked(), s = WL.state;
   const dl = $("#dlBtn");
-  if(dl) dl.textContent = lock ? (WL.pay.promo() ? t("Полный отчёт · €0", "Full report · €0") : t(`Полный отчёт · ${WL.pay.PRICE.label}`, `Full report · ${WL.pay.PRICE.label}`)) : t("Скачать", "Download");
+  if(dl) dl.textContent = lock && WL.pay.pending() ? t("Проверяем доступ…", "Checking access…")
+    : lock ? (WL.pay.promo() ? t("Полный отчёт · €0", "Full report · €0") : t(`Полный отчёт · ${WL.pay.PRICE.label}`, `Full report · ${WL.pay.PRICE.label}`)) : t("Скачать", "Download");
   const busy = WL.reading;
   ["#addBtn", "#newBtn"].forEach(k => { const b = $(k); if(b) b.disabled = !!s.demo && k === "#addBtn" ? false : false; });
   const menu = $("#dlMenu"); if(menu && lock) menu.hidden = true;
@@ -287,7 +288,7 @@ document.addEventListener("click", async e => {
   if(el.id === "addBtn") return pick("files");
   if(el.id === "newBtn") return WL.state.demo ? leaveDemo() : newReport();
   if(el.id === "langBtn"){ const u = new URL(location.href); u.searchParams.set("lang", WL.EN ? "ru" : "en"); location.href = u.toString(); return; }
-  if(el.id === "dlBtn"){ if(WL.pay.locked()) return WL.pay.open("bar"); const m = $("#dlMenu"); m.hidden = !m.hidden; e.stopPropagation(); return; }
+  if(el.id === "dlBtn"){ if(WL.pay.locked()) return WL.pay.pending() ? undefined : WL.pay.open("bar"); const m = $("#dlMenu"); m.hidden = !m.hidden; e.stopPropagation(); return; }
   if(d.dl){ $("#dlMenu").hidden = true; return d.dl === "pdf" ? WL.printReport() : WL.excel(); }
   const menu = $("#dlMenu"); if(menu && !menu.hidden && !el.closest("#dlMenu")) menu.hidden = true;
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
@@ -324,12 +325,13 @@ window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.
 /* ── Запуск ─────────────────────────────────────────────────────────── */
 (async () => {
   if(WL.state.docs.length){ try{ WL.model = WL.build(WL.state); }catch(e){ console.error(e); WL.model = null; } }
+  if(WL.state.docs.length) await Promise.race([WL.pay.prime(), new Promise(r => setTimeout(r, 400))]);   // оплаченный отчёт открывается сразу открытым
   WL.render();
+  const access = WL.pay.returnFromStripe().then(() => WL.pay.check());   // проверка оплаты — сразу, параллельно с курсами и котировками
   if(WL.state.docs.length){ await WL.rebuild(); WL.refreshMarket(); }
-  await WL.pay.returnFromStripe();
-  await WL.pay.check();
+  await access;
   if(WL.chatReturn) await WL.chatReturn();
-  if(WL.model && !WL.state.demo && (!WL.state.review || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
+  if(WL.model && !WL.state.demo && (!WL.reviewNow() || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
   if(WL.track) WL.track("ViewContent", {content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"});
 })();
 })();
