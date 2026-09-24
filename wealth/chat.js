@@ -22,6 +22,27 @@ function rid(){
   return r;
 }
 const auth = () => S().demo ? {} : WL.pay.auth();
+
+/* Учёт сообщений хранится вместе с отчётом: счётчик с подписью сервера (изменить его нельзя) и номера оплаченных пакетов
+   (сервер сверяет каждый со Stripe). У примера счётчик свой на этот браузер. */
+const TALLY_DEMO = "wl_demo_chat_tally";
+function tally(){
+  if(!S().demo) return S().chatTally || null;
+  const t = WL.store.get(TALLY_DEMO); return t && t.rid === rid() ? t : null;
+}
+function keepTally(c){
+  const t = c && c.tally; if(!t || !t.sig) return;
+  if(S().demo) WL.store.set(TALLY_DEMO, {rid: rid(), used: t.used, opens: t.opens, sig: t.sig});
+  else { S().chatTally = {used: t.used, opens: t.opens, sig: t.sig}; WL.save(); }
+}
+const packs = () => S().demo ? [] : (S().chatPacks || []);
+function ledgerQuery(extra){
+  const a = auth(), t = tally(), q = Object.assign({rid: rid()}, extra || {});
+  if(a.token){ q.token = a.token; q.sid = a.sid || ""; }
+  if(t) q.tally = `${t.used}.${t.opens}.${t.sig}`;
+  if(packs().length) q.packs = packs().join(",");
+  return new URLSearchParams(q).toString();
+}
 const chats = () => (S().chats = S().chats || {});
 const talked = id => !!(chats()[id] && chats()[id].messages && chats()[id].messages.length);
 
@@ -169,9 +190,8 @@ WL.renderChatLauncher = launcher;
 const dismissNudge = () => { S().chatNudged = true; WL.save(); const n = $("#chatNudge"); if(n) n.remove(); };
 
 async function loadCredits(){
-  const a = auth(), q = new URLSearchParams(Object.assign({rid: rid()}, a.token ? {token: a.token, sid: a.sid || ""} : {}));
-  const r = await WL.api("/chat/credits?" + q.toString(), undefined, {timeout: 20000});
-  if(r && r.left != null) C.credits = Object.assign(r, {rid: rid()});
+  const r = await WL.api("/chat/credits?" + ledgerQuery(), undefined, {timeout: 20000});
+  if(r && r.left != null){ C.credits = Object.assign(r, {rid: rid()}); keepTally(r); }
   if(C.open) renderPanel();
 }
 
@@ -193,10 +213,11 @@ async function turn(topic, text){
   C.pending.add(id); delete C.errors[id];
   dismissNudge(); WL.save(); renderPanel(); launcher();
   const body = Object.assign({lang: WL.lang, rid: rid(), topic: {kind: topic.kind, title: topic.title, text: topic.text, level: topic.level, positions: topic.refs || []},
-    messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(), preview: !S().demo && WL.pay.locked()}, auth());
+    messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(), preview: !S().demo && WL.pay.locked(),
+    tally: tally() || undefined, packs: packs()}, auth());
   const r = await WL.api("/chat", body, {timeout: 200000});
   C.pending.delete(id);
-  if(r && r.credits) C.credits = Object.assign(r.credits, {rid: rid()});
+  if(r && r.credits){ C.credits = Object.assign(r.credits, {rid: rid()}); keepTally(r.credits); }
   if(r && r.reply){ ch.messages.push({role: "assistant", text: r.reply, at: Date.now()}); ch.suggestions = r.suggestions || []; ch.updated = Date.now(); }
   else if(r && r.error === "no_credits"){ if(text){ ch.messages.pop(); C.draft = text; } }
   else if(r && r.error === "no_opens"){ C.errors[id] = {text: t("Ассистент уже открыл много тем в этом отчёте — задайте вопрос сами, внизу.", "The assistant has already opened many topics in this report — ask your question below.")}; }
@@ -245,9 +266,12 @@ WL.chatReturn = async () => {
   u.searchParams.delete("chat_paid"); u.searchParams.delete("chat_canceled"); history.replaceState(null, "", u.pathname + u.search + u.hash);
   if(canceled){ WL.store.del("wl_chat_pending"); return WL.toast(t("Оплата не завершена — сообщения не добавлены.", "Payment was not completed — no messages were added.")); }
   const pend = WL.store.get("wl_chat_pending"), r0 = pend && pend.sid === sid ? pend.rid : rid();
-  const a = auth(), q = new URLSearchParams(Object.assign({session_id: sid, rid: r0}, a.token ? {token: a.token, sid: a.sid || ""} : {}));
-  const r = await WL.api("/chat/verify?" + q.toString(), undefined, {timeout: 30000});
-  if(r && r.ok){ C.credits = Object.assign(r.credits, {rid: r0}); WL.store.del("wl_chat_pending"); WL.toast(t("Сообщения добавлены", "Messages added")); WL.openChat(null); }
+  const r = await WL.api("/chat/verify?" + ledgerQuery({session_id: sid, rid: r0}), undefined, {timeout: 30000});
+  if(r && r.ok){
+    if(!S().demo && r0 === S().rid){ S().chatPacks = [...new Set([...(S().chatPacks || []), sid])]; keepTally(r.credits); WL.save(); }
+    C.credits = Object.assign(r.credits, {rid: r0}); WL.store.del("wl_chat_pending");
+    WL.toast(t(`Добавлено ${r.messages} сообщений`, `${r.messages} messages added`)); WL.openChat(null);
+  }
   else WL.toast(t("Оплату сообщений не удалось подтвердить. Обновите страницу через минуту или напишите нам.", "Could not confirm the message payment. Refresh in a minute or write to us."));
 };
 
