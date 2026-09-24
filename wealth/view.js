@@ -66,7 +66,8 @@ function fileLine(f){
   const pct = f.total ? Math.round(100 * (f.done || 0) / f.total) : 0;
   return `<li class="fl st-${esc(st)}"><span class="fi">${st === "done" ? ICON.check : st === "warn" || st === "error" ? ICON.warn : st === "skipped" ? ICON.dash : '<i class="spin"></i>'}</span>
     <span class="fn">${esc(f.name)}</span><span class="fm">${esc(meta)}</span>
-    ${f.status === "reading" ? `<span class="fb"><i style="width:${pct}%"></i></span>` : ""}</li>`;
+    ${f.status === "reading" ? `<span class="fb"><i style="width:${pct}%"></i></span>` : ""}
+    ${/queued|reading/.test(f.status) ? `<button type="button" class="fx" data-cancel="${esc(f.id)}" title="${t("Остановить чтение и убрать файл", "Stop reading and remove the file")}" aria-label="${t("Отменить", "Cancel")} ${esc(f.name)}">×</button>` : ""}</li>`;
 }
 function readingPanel(){
   const files = S().files, active = files.filter(f => /queued|reading/.test(f.status));
@@ -96,6 +97,7 @@ function hero(){
       <div class="ts">${esc([m.mkt && WL.ui.val !== "stmt" ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
         `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
+      ${coverage(m)}
       ${mix(agg(m))}
     </div>
     <div class="card where">
@@ -120,6 +122,44 @@ function valuation(m, dates){
     ${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")} · ${t("цены на", "prices at")} ${esc(when)}${WL.marketLoading ? " · " + t("обновляю…", "refreshing…") : ""}</div>
       <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))} · по рыночной цене ${esc(fmt.pct(m.mkt.coverage, 0))} портфеля, остальное — по выпискам`, `per statement ${esc(dates)}: ${esc(money(m.total))} · ${esc(fmt.pct(m.mkt.coverage, 0))} of the portfolio at market prices, the rest at statement values`)}</div>`
       : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
+}
+/* Насколько итог полный — прямо под ним: сколько выписок учтено, что не вошло и почему, что не прочитано и не сошлось с
+   банком. Подробности — в разделе «Файлы» внизу. */
+function coverage(m){
+  const files = S().files, docs = m.docs, used = docs.filter(d => d.use);
+  const n = (k, one, few, many, en1, enN) => t(`${k} ${WL.pl(k, [one, few, many], ["", ""])}`, `${k} ${k === 1 ? en1 : enN}`);
+  const why = {};
+  docs.filter(d => !d.use).forEach(d => { why[d.why] = (why[d.why] || 0) + 1; });
+  const reading = files.filter(f => /queued|reading/.test(f.status)).length;
+  const broken = files.filter(f => (f.status === "error" || f.status === "skipped") && !docs.some(d => d.id === f.id)).length;
+  const pages = used.reduce((k, d) => k + (d.failed || []).reduce((q, x) => q + x.to - x.from + 1, 0), 0);
+  const cut = used.filter(d => d.truncated).length;
+  const bad = used.filter(d => d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
+  const checked = used.filter(d => d.recon && d.recon.status === "ok").length;
+  const twice = used.filter(d => d.conflict && d.conflict.length).length;
+  const out = [], note = [];
+  const WHY = {older: [t("более старая выписка того же счёта", "an older statement of the same account"), t("более старые выписки тех же счетов", "older statements of the same accounts")],
+    duplicate: [t("повтор", "a duplicate"), t("повторы", "duplicates")], not_financial: [t("не выписка", "not a statement"), t("не выписки", "not statements")],
+    no_positions: [t("без позиций", "no positions"), t("без позиций", "no positions")], unread: [t("не прочитан", "not read"), t("не прочитаны", "not read")],
+    removed: [t("убран вами", "removed by you"), t("убраны вами", "removed by you")]};
+  for(const [k, c] of Object.entries(why)) note.push(`${c} — ${(WHY[k] || [k, k])[c === 1 ? 0 : 1]}`);
+  if(broken) out.push(n(broken, "файл не удалось прочитать", "файла не удалось прочитать", "файлов не удалось прочитать", "file could not be read", "files could not be read"));
+  if(reading) out.push(n(reading, "файл ещё читается", "файла ещё читаются", "файлов ещё читаются", "file is still being read", "files are still being read"));
+  if(pages) out.push(t(`не прочитано ${pages} стр.`, `${pages} ${pages === 1 ? "page" : "pages"} not read`));
+  if(cut) out.push(n(cut, "файл прочитан не полностью", "файла прочитаны не полностью", "файлов прочитаны не полностью", "file was read only in part", "files were read only in part"));
+  if(bad) out.push(n(bad, "выписка не сошлась с итогом банка", "выписки не сошлись с итогом банка", "выписок не сошлись с итогом банка", "statement doesn't match the bank's total", "statements don't match the bank's total"));
+  if(twice) out.push(t("возможен двойной учёт счёта", "an account may be counted twice"));
+  const warn = out.length > 0 || !!(why.unread || why.no_positions);
+  const all = docs.length && used.length === docs.length && !broken;
+  const head = all && used.length === 1 ? t("Выписка в отчёте", "The statement is included")
+    : all ? t(`В отчёте все ${n(used.length, "выписка", "выписки", "выписок", "statement", "statements")}`, `All ${used.length} statements are included`)
+    : t(`В отчёте ${n(used.length, "выписка", "выписки", "выписок", "", "")} из ${files.length} ${WL.pl(files.length, ["файла", "файлов", "файлов"], ["", ""])}`,
+        `${used.length} of ${files.length} ${files.length === 1 ? "file is" : "files are"} included`);
+  const ok = !warn && used.length && bad === 0 && checked > 0 ? t("итоги сверены с банком", "totals match the bank's") : "";
+  const parts = [head + (note.length ? ` (${note.join(", ")})` : ""), ...out, ok].filter(Boolean);
+  if(!parts.length || !files.length) return "";
+  return `<div class="cover ${warn ? "warn" : "ok"}">${warn ? ICON.warn : ICON.check}<span>${esc(parts.join(" · "))}
+    <button class="link" type="button" data-goto="files">${t("Подробнее", "Details")}</button></span></div>`;
 }
 function recBadge(st){
   if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом банка", "Positions add up to the bank's total")}">${ICON.check}${t("сверено", "reconciled")}</span>`;

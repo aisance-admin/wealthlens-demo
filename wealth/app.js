@@ -121,20 +121,25 @@ function errText(e){
     : c === "unsupported" ? t("формат не поддерживается", "unsupported format")
     : t("не удалось прочитать файл — попробуйте ещё раз", "could not read the file — try again");
 }
+/* У каждого файла своя остановка чтения (кнопка «×» в панели чтения); «Новый отчёт» останавливает все. */
+const fileAborts = {};
 async function readOne(f, pool, only){
   const s = WL.state, gen = s.rid;
+  if(!s.files.includes(f)) return;                       // файл отменили, пока он ждал очереди
   f.status = "reading"; f.done = 0; f.total = 0; f.reason = ""; f.found = 0;
   renderReadingSoon();
   let blob = WL.blobs[f.id] || await WL.files.get(f.id);
   if(!blob){ f.status = "error"; f.reason = t("файла нет в этом браузере — добавьте его снова", "the file isn't in this browser — add it again"); return; }
   WL.blobs[f.id] = blob;
+  const ctl = new AbortController(), stop = () => ctl.abort();
+  fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
   try{
     const prev = only ? s.docs.find(d => d.fileId === f.id) : null;
-    const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: abort.signal, askPassword, only,
+    const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only,
       ctx: prev ? {institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts} : undefined,
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); },
       onPart: d => { f.found = (f.found || 0) + (d.rows || []).filter(r => r.table !== "S").length; if(!f.inst && d.doc && d.doc.institution) f.inst = d.doc.institution; renderReadingSoon(); }});
-    if(WL.state.rid !== gen) return;                   // пока читали, начали новый отчёт
+    if(WL.state.rid !== gen || ctl.signal.aborted) return;   // пока читали, начали новый отчёт или отменили файл
     const merged = prev ? WL.mergeDocs(prev, doc) : doc;
     merged.accts = await WL.acctPrints(merged);
     const i = s.docs.findIndex(d => d.fileId === f.id);
@@ -144,10 +149,10 @@ async function readOne(f, pool, only){
     if(!readAny) f.reason = quota ? t("лимит бесплатного чтения на сегодня исчерпан", "today's free reading limit is used up") : t("файл не удалось прочитать — попробуйте ещё раз", "the file could not be read — try again");
     WL.pay.extendPaid();
   }catch(e){
-    if(WL.state.rid !== gen) return;
+    if(WL.state.rid !== gen || ctl.signal.aborted) return;
     if(!(e && e.code)) console.error("WealthLens: файл не прочитан", e);
     f.status = e && e.code === "password" ? "skipped" : "error"; f.reason = errText(e);
-  }
+  }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); }
   WL.save();
   if(!WL.quotaHit) await WL.rebuild();
 }
@@ -158,6 +163,17 @@ async function reread(id){
   WL.reading = true; WL.render();
   try{ await readOne(f, WL.makePool(PART_PARALLEL), d && d.failed && d.failed.length && f.status === "done" ? d.failed.map(x => ({from: x.from, to: x.to})) : undefined); }
   finally{ WL.reading = false; await WL.rebuild(); if(WL.quotaHit) quotaMessage(); requestReview(); }
+}
+/* Отмена файла во время чтения: ещё не прочитанный файл убирается из отчёта; у прочитанного останавливается только
+   дочитывание, прочитанное остаётся. */
+function cancelFile(id){
+  const s = WL.state, f = s.files.find(x => x.id === id); if(!f) return;
+  const had = s.docs.some(d => d.fileId === id);
+  if(fileAborts[id]) fileAborts[id].abort();
+  if(had) f.status = "done";
+  else { s.files = s.files.filter(x => x !== f); delete s.include[id]; delete WL.blobs[id]; WL.files.del(id); }
+  WL.save(); WL.render();
+  WL.toast(had ? t(`Дочитывание «${f.name}» остановлено`, `Stopped reading “${f.name}”`) : t(`Чтение остановлено — «${f.name}» убран из отчёта`, `Reading stopped — “${f.name}” removed from the report`));
 }
 function quotaMessage(){
   const paid = !WL.pay.locked();
@@ -287,6 +303,8 @@ document.addEventListener("click", async e => {
   if(d.restore !== undefined) return WL.pay.restore(el);
   if(d.review !== undefined) return requestReview(true);
   if(d.reread) return reread(d.reread);
+  if(d.cancel) return cancelFile(d.cancel);
+  if(d.goto){ const g = $("#" + d.goto); if(g) g.scrollIntoView({behavior: "smooth", block: "start"}); return; }
   if(d.include){ WL.state.include[d.include] = true; await WL.rebuild(); WL.refreshMarket(); return reviewSoon(); }
   if(d.exclude){ WL.state.include[d.exclude] = false; await WL.rebuild(); return reviewSoon(); }
   if(d.remove) return removeFile(d.remove);

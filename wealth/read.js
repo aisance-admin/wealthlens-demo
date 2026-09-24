@@ -201,6 +201,7 @@ WL.Quota = Quota;
 
 /* Одна часть: до трёх повторов при перегрузке, деление пополам при слишком длинном ответе. */
 async function readPart(src, part, env, depth = 0){
+  if(env.signal && env.signal.aborted) return [{part, error: "aborted"}];      // файл отменён — страницы не рисуем и не отправляем
   const body = Object.assign({file: src.name, lang: WL.lang, part: {from: part.from, to: part.to, total: src.total}, ctx: env.ctx || undefined}, env.auth ? env.auth() : {});
   if(src.kind === "sheet") body.sheet = src.sheets[part.from - 1];
   else body.pages = await src.pages(part.from, part.to);

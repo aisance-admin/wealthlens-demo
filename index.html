@@ -111,7 +111,10 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .reading .orb{animation:pulse 1.8s ease-in-out infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(243,189,88,.45)} 50%{box-shadow:0 0 0 10px rgba(243,189,88,0)}}
 .files{list-style:none; margin:0; padding:0; display:grid}
-.fl{display:grid; grid-template-columns:20px minmax(0,1.1fr) minmax(0,1.6fr) 120px; gap:12px; align-items:center; padding:8px 0; border-top:1px solid var(--line); font-size:13.5px}
+.fl{display:grid; grid-template-columns:20px minmax(0,1.1fr) minmax(0,1.6fr) 120px 28px; gap:12px; align-items:center; padding:8px 0; border-top:1px solid var(--line); font-size:13.5px}
+.fl .fb{grid-column:4}
+.fl .fx{grid-column:5; width:26px; height:26px; border-radius:8px; border:1px solid var(--line-2); background:none; color:var(--muted); font-size:16px; line-height:1; padding:0}
+.fl .fx:hover{color:var(--risk); border-color:rgba(255,123,108,.5)}
 .fl:first-child{border-top:0}
 .fi{display:grid; place-items:center; width:18px; height:18px; border-radius:50%}
 .st-done .fi{color:var(--good); background:var(--good-soft)} .st-warn .fi,.st-error .fi{color:var(--risk); background:var(--risk-soft)} .st-skipped .fi{color:var(--muted); background:rgba(226,236,255,.06)}
@@ -134,6 +137,9 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .tv{font-size:clamp(30px, 8.6vw, 48px); font-weight:650; letter-spacing:-.045em; line-height:1.05; margin:14px 0 8px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere}
 .ts{color:var(--ink-2); font-size:13.5px}
 .ts.muted{color:var(--muted); font-size:12.5px; margin-top:2px}
+.cover{display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:13px; line-height:1.45; color:var(--ink-2)}
+.cover svg{flex:none; width:15px; height:15px; margin-top:2px} .cover.ok svg{color:var(--good)} .cover.warn svg{color:var(--watch)}
+.cover .link{margin-left:6px; font-size:12.5px}
 .mix{margin-top:auto; padding-top:20px}
 .mix-bar{display:flex; gap:2px; height:10px; border-radius:5px; overflow:hidden}
 .mix-bar i{flex:0 1 0; min-width:3px}
@@ -394,7 +400,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 @media (max-width:900px){
   .hero,.two{grid-template-columns:minmax(0,1fr)}
   .alerts,.docs{grid-template-columns:minmax(0,1fr)}
-  .fl{grid-template-columns:20px minmax(0,1fr) 90px} .fl .fm{grid-column:2 / -1; grid-row:2}
+  .fl{grid-template-columns:20px minmax(0,1fr) 90px 28px} .fl .fm{grid-column:2 / -1; grid-row:2}
+  .fl .fb{grid-column:3; grid-row:1} .fl .fx{grid-column:4; grid-row:1}
 }
 @media (max-width:1020px){
   .pos .mt{display:none}
@@ -490,13 +497,13 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/config.js?v=b54925549ce3"></script>
 <script src="wealth/track.js?v=689876582aab"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
-<script src="wealth/read.js?v=060f346364c4"></script>
+<script src="wealth/read.js?v=80b48af2ce95"></script>
 <script src="wealth/report.js?v=a63b27eb6784"></script>
 <script src="wealth/market.js?v=75b336d2bdf2"></script>
 <script src="wealth/pay.js?v=57f94cccba8f"></script>
-<script src="wealth/view.js?v=2f6755d7d532"></script>
+<script src="wealth/view.js?v=5fc50ec408ca"></script>
 <script src="wealth/chat.js?v=fd7898daa189"></script>
 <script src="wealth/demo.js?v=c8b504f61923"></script>
-<script src="wealth/app.js?v=ab40f8339a4e"></script>
+<script src="wealth/app.js?v=c0a95ea4f8a2"></script>
 </body>
 </html>
