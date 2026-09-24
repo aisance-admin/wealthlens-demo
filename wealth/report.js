@@ -146,12 +146,36 @@ WL.ensureFx = async (S, base) => {
   }));
 };
 
+/* Валюта выписки, если она нигде не напечатана (модель Саши: клиент ничего не выбирает вручную): у других выписок того же
+   банка, по стране IBAN счёта, по стране ISIN всех бумаг. Догадка помечается и видна в выводах; спросить — только если
+   зацепок нет совсем. */
+const EUROZONE = new Set("AT BE CY DE EE ES FI FR GR HR IE IT LT LU LV MC MT NL PT SI SK SM".split(" "));
+const CC_CCY = {US: "USD", CH: "CHF", LI: "CHF", GB: "GBP", CA: "CAD", AU: "AUD", JP: "JPY", SE: "SEK", NO: "NOK", DK: "DKK", AE: "AED", SG: "SGD", HK: "HKD", PL: "PLN", CZ: "CZK"};
+const ccyOfCountry = cc => EUROZONE.has(cc) ? "EUR" : CC_CCY[cc] || "";
+function guessCcy(doc, S){
+  const inst = normInst(doc.institution);
+  if(inst){ const o = (S.docs || []).find(x => x !== doc && x.id !== doc.id && x.ref_ccy && normInst(x.institution) === inst); if(o) return {ccy: o.ref_ccy, why: "bank"}; }
+  for(const a of doc.accounts || []){
+    const m = String(a.id || "").replace(/[\s-]/g, "").toUpperCase().match(/^([A-Z]{2})\d{2}[A-Z0-9]{8,30}$/), c = m && ccyOfCountry(m[1]);
+    if(c) return {ccy: c, why: "iban"};
+  }
+  const cc = [...new Set((doc.rows || []).map(r => String(r.isin || "").toUpperCase().slice(0, 2)).filter(x => /^[A-Z]{2}$/.test(x)))], c = cc.length === 1 && ccyOfCountry(cc[0]);
+  return c ? {ccy: c, why: "isin"} : null;
+}
+WL.guessCcy = guessCcy;
 function converter(S, base){
+  const guesses = new Map();
+  const guessed = doc => { if(!guesses.has(doc)) guesses.set(doc, guessCcy(doc, S)); return guesses.get(doc); };
   return (doc, r, field = "value") => {
     const v = r[field];
     if(v == null || !isFinite(v)) return {v: null};
-    const ccy = r.ccy || doc.ref_ccy || (doc.accounts.length === 1 ? doc.accounts[0].currency : "") || "";
+    let ccy = r.ccy || doc.ref_ccy || (doc.accounts.length === 1 ? doc.accounts[0].currency : "") || "", guess = null;
+    if(!ccy && (guess = guessed(doc))) ccy = guess.ccy;
     if(!ccy) return {v: null, missing: "?"};
+    if(guess){ const rate = ccy === base ? 1 : null;
+      if(rate) return {v, src: "guess", guess};
+      const date = doc.as_of && doc.as_of <= WL.today() ? doc.as_of : "", tab = (S.fx || {})[fxKey(base, date)] || (S.fx || {})[fxKey(base, "")];
+      return tab && tab.rates[ccy] > 0 ? {v: v / tab.rates[ccy], src: "guess", guess} : {v: null, missing: ccy}; }
     if(ccy === base) return {v, src: "same"};
     if(doc.ref_ccy === base){
       if(field === "value" && r.value_ref != null && isFinite(r.value_ref)) return {v: r.value_ref, src: "statement"};
@@ -239,6 +263,9 @@ function reconcile(doc, rows, S){
   return {status, checks, open: status === "ok" ? live.filter(c => !c.ok).length : 0};
 }
 
+/* Сверка одной выписки — для самопроверки после чтения (сравнить прочитанное до и после повторного чтения). */
+WL.reconOf = (d, S) => reconcile(d, docRows(d).rows, S);
+
 /* Модель отчёта */
 WL.build = S => {
   const base = S.base || "USD", conv = converter(S, base);
@@ -269,6 +296,7 @@ WL.build = S => {
       const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0};
       if(a.missing) missingFx.add(a.missing);
       if(a.missing === "?") info.noCcy = true;
+      if(a.guess) info.ccyGuessed = a.guess;
       const p = Object.assign({}, r, {cat: catOf(r.cls).key, inst: d.institution || d.file, docFile: d.file, as_of: d.as_of,
         ccy: r.ccy || d.ref_ccy || "", vb: a.v, ab: b.v || 0, fxSrc: a.src || "", ccyGuess: !r.ccy});
       positions.push(p);
@@ -430,6 +458,11 @@ function alerts(M, S){
     if(d.summaryOnly) add("watch", "summary-" + d.id, t(`«${d.file}»: найдены только сводные таблицы`, `“${d.file}”: only summary tables were found`),
       t("Полного списка позиций в файле нет — отчёт построен по сводной таблице и может быть неполным.", "The file has no complete list of positions — the report uses a summary table and may be incomplete."), [d.id]);
   }
+  const guessedCcy = M.docs.filter(d => d.use && d.ccyGuessed && !d.noCcy);
+  const WHYC = {bank: t("по другим выпискам этого банка", "from other statements of this bank"), iban: t("по номеру счёта (IBAN)", "from the account number (IBAN)"),
+    isin: t("по стране бумаг", "from the securities' country")};
+  if(guessedCcy.length) add("watch", "ccy-doc", t("Валюта выписки определена по косвенным признакам", "The statement currency was inferred"),
+    guessedCcy.map(d => t(`«${d.file}» — ${d.ccyGuessed.ccy}, ${WHYC[d.ccyGuessed.why]}`, `“${d.file}” — ${d.ccyGuessed.ccy}, ${WHYC[d.ccyGuessed.why]}`)).join("; ") + t(". Если валюта другая, её можно сменить в разделе «Файлы».", ". If it's another currency, change it in the Files section."), guessedCcy.map(d => d.id));
   const noCcy = M.docs.filter(d => d.use && d.noCcy);
   if(noCcy.length) add("high", "ccy", t("В выписке не указана валюта", "The statement doesn't show a currency"),
     t(`${noCcy.map(d => "«" + d.file + "»").join(", ")}: выберите валюту в разделе «Файлы» — до этого суммы из ${noCcy.length === 1 ? "неё" : "них"} в итог не входят.`,

@@ -53,7 +53,8 @@ function upload(){
 function fileLine(f){
   const d = S().docs.find(x => x.fileId === f.id), m = M() && M().docs.find(x => x.id === f.id);
   let meta = "", st = f.status;
-  if(f.status === "reading") meta = f.total ? [f.inst, f.found ? t(`найдено ${f.found} ${WL.pl(f.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${f.found} ${f.found === 1 ? "position" : "positions"} found`) : "",
+  if(f.status === "reading" && f.checking) meta = t(`перепроверяю: сумма не сошлась с итогом${f.total ? ` · ${f.done || 0} из ${f.total} стр.` : ""}`, `re-checking: the sum didn't match the total${f.total ? ` · ${f.done || 0} of ${f.total} pages` : ""}`);
+  else if(f.status === "reading") meta = f.total ? [f.inst, f.found ? t(`найдено ${f.found} ${WL.pl(f.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${f.found} ${f.found === 1 ? "position" : "positions"} found`) : "",
       t(`${f.done || 0} из ${f.total} стр.`, `${f.done || 0} of ${f.total} pages`)].filter(Boolean).join(" · ") : t("открываю файл…", "opening the file…");
   else if(f.status === "queued") meta = t("в очереди", "queued");
   else if(f.status === "skipped" || f.status === "error") meta = f.reason || t("не прочитан", "not read");
@@ -509,13 +510,18 @@ function fileCard(f, s, m, notes){
     ${d && (d.use || d.history) && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
       ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
         "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
-    ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
+    ${raw && raw.recheck && raw.recheck.after ? `<p class="dst">${esc(raw.recheck.kept === "new" && raw.recheck.after.status === "ok"
+    ? t("Сумма сначала не сошлась с итогом — выписку перечитали, теперь совпадает.", "The sum first didn't match the total — the statement was re-read and now it matches.")
+    : raw.recheck.kept === "new" ? t("Выписку перечитали: расхождение с итогом уменьшилось, но осталось.", "The statement was re-read: the difference shrank but remains.")
+    : t("Выписку перечитали — расхождение с итогом осталось: похоже, в самой выписке суммы не согласованы.", "The statement was re-read — the difference remains: the statement's own figures seem inconsistent."))}</p>` : ""}
+  ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
     ${raw && raw.notes && raw.notes.length ? (note
       ? `<details class="rn no-print"><summary>${t(`Заметки при чтении страниц · ${raw.notes.length}`, `Notes made while reading pages · ${raw.notes.length}`)}</summary><ul class="rnotes">${raw.notes.slice(0, 8).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`
       : `<ul class="rnotes">${raw.notes.slice(0, 5).map(n => `<li>${esc(n)}</li>`).join("")}</ul>`) : ""}
     ${d && (d.summaryDropped || d.dupDropped) ? `<p class="fine">${[d.summaryDropped ? t(`Сводные таблицы (${d.summaryDropped} строк) не учтены — позиции взяты из полного списка.`, `Summary tables (${d.summaryDropped} rows) were ignored — positions come from the complete list.`) : "",
       d.dupDropped ? t(`${d.dupDropped} ${WL.pl(d.dupDropped, ["позиция повторялась", "позиции повторялись", "позиций повторялись"], ["", "", ""])} в другой таблице файла — учтены один раз.`, `${d.dupDropped} ${d.dupDropped === 1 ? "position was" : "positions were"} repeated in another table of the file — counted once.`) : ""].filter(Boolean).join(" ")}</p>` : ""}
-    ${d && d.noCcy && !S().demo ? `<div class="ccy-pick no-print"><span>${t("Валюта выписки не указана. Выберите:", "The statement shows no currency. Choose:")}</span>
+    ${d && (d.noCcy || d.ccyGuessed) && !S().demo ? `<div class="ccy-pick no-print"><span>${d.noCcy ? t("Валюта выписки не указана. Выберите:", "The statement shows no currency. Choose:")
+    : t(`Валюта не указана — посчитали в ${d.ccyGuessed.ccy}. Другая?`, `No currency shown — counted in ${d.ccyGuessed.ccy}. Another one?`)}</span>
       ${["USD", "EUR", "GBP", "CHF", "AED", "RUB"].map(c => `<button class="btn small" type="button" data-setccy="${esc(f.id)}|${c}">${c}</button>`).join("")}
       <button class="link" type="button" data-setccy="${esc(f.id)}|?">${t("другая…", "other…")}</button></div>` : ""}
     <div class="da no-print"${S().demo ? " hidden" : ""}>

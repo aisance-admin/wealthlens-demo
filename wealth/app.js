@@ -107,6 +107,7 @@ async function runQueue(){
       queued.forEach(f => { f.status = "reading"; });
       await Promise.all(queued.map(f => filePool(() => readOne(f, partPool))));
     }
+    await autoFix(partPool);
   }finally{
     WL.reading = false;
     await WL.rebuild();
@@ -157,6 +158,70 @@ async function readOne(f, pool, only){
   }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); }
   WL.save();
   if(!WL.quotaHit) await WL.rebuild();
+}
+/* После чтения — без участия клиента (модель Саши, 24.09.2026). Страницы, не прочитанные из-за сбоя сервиса, дочитываются
+   один раз сами. Выписка, у которой сумма позиций не сошлась с её итогом, перечитывается с подсказкой, на сколько не
+   сошлось, и остаётся тот вариант, что лучше сходится с итогом. Числа не подгоняются: не сошлось и после повтора — так и
+   показано. Каждая выписка перепроверяется не больше одного раза (отметка recheck хранится в отчёте). */
+const RETRY_ERR = /^(ai failed|busy|timeout|network|http|too_large|empty|bad_response)$/;
+async function autoFix(pool){
+  const s = WL.state;
+  if(s.demo) return;
+  for(const f of s.files.slice()){
+    const d = s.docs.find(x => x.fileId === f.id);
+    if(WL.quotaHit || !d || d.autoRetried || !d.failed.length || !d.failed.every(x => RETRY_ERR.test(x.error || ""))) continue;
+    d.autoRetried = true;
+    await WL.sleep(3000);
+    await readOne(f, pool, d.failed.map(x => ({from: x.from, to: x.to})));
+  }
+  await WL.rebuild();
+  const m = WL.model;
+  if(!m) return;
+  for(const info of m.docs.filter(x => (x.use || x.history) && x.recon && (x.recon.status === "mismatch" || x.recon.status === "partial"))){
+    const d = s.docs.find(x => x.id === info.id), f = s.files.find(x => x.id === info.id);
+    if(WL.quotaHit || !d || !f || d.recheck) continue;
+    const c = info.recon.checks.filter(x => !x.ok && !x.unchecked).sort((a, b) => (b.scope === "total") - (a.scope === "total"))[0];
+    if(c) await recheck(f, d, c, pool);
+  }
+}
+function recheckPages(d){
+  const n = d.pageCount || 1;
+  if(n <= 12) return Array.from({length: n}, (_, i) => i + 1);
+  const set = new Set();
+  d.rows.forEach(r => r.page && set.add(r.page));
+  d.totals.forEach(x => x.page && set.add(x.page));
+  (d.pages || []).filter(p => ["holdings", "cash", "summary"].includes(p.kind)).forEach(p => set.add(p.n));
+  return [...set].filter(p => p >= 1 && p <= n).sort((a, b) => a - b).slice(0, 12);
+}
+const toRanges = ps => ps.reduce((out, p) => { const last = out[out.length - 1]; if(last && last.to === p - 1) last.to = p; else out.push({from: p, to: p}); return out; }, []);
+const recScore = r => { const c = r.checks.filter(x => !x.unchecked).sort((a, b) => (b.scope === "total") - (a.scope === "total"))[0];
+  return {status: r.status, rank: {ok: 3, partial: 1}[r.status] || 0, diff: c ? Math.abs(c.diff) : Infinity}; };
+async function recheck(f, d, c, pool){
+  const s = WL.state, pages = recheckPages(d);
+  const blob = WL.blobs[f.id] || await WL.files.get(f.id);
+  if(!pages.length || !blob) return;
+  WL.blobs[f.id] = blob;
+  const before = recScore(WL.reconOf(d, s));
+  d.recheck = {at: Date.now(), pages: pages.length, before, kept: "old"};      // отметка сразу: второй раз не перечитываем
+  f.status = "reading"; f.checking = true; f.done = 0; f.total = 0; renderReadingSoon();
+  const ctl = new AbortController(), stop = () => ctl.abort();
+  fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
+  try{
+    const fresh = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only: toRanges(pages),
+      ctx: {institution: d.institution, as_of: d.as_of, ref_ccy: d.ref_ccy, type: d.type, accounts: d.accounts, check: {label: c.label, printed: c.amount, read: c.shown ?? c.sum, ccy: c.ccy}},
+      onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); }});
+    if(ctl.signal.aborted || !fresh.rows.length) return;
+    const on = new Set(pages);
+    const cand = Object.assign({}, d, {rows: d.rows.filter(r => !on.has(r.page)).concat(fresh.rows).map((r, i) => Object.assign({}, r, {id: `${d.id}:${i + 1}`, doc: d.id})),
+      totals: d.totals.concat(fresh.totals.filter(x => !d.totals.some(y => y.label === x.label && y.amount === x.amount))),
+      flows: (d.flows || []).concat((fresh.flows || []).filter(x => !(d.flows || []).some(y => y.kind === x.kind && y.amount === x.amount))),
+      notes: d.notes.concat(fresh.notes.filter(n => !d.notes.includes(n))),
+      usage: {in: (d.usage.in || 0) + (fresh.usage.in || 0), out: (d.usage.out || 0) + (fresh.usage.out || 0), model: fresh.usage.model || d.usage.model, key: fresh.usage.key || d.usage.key}});
+    const after = recScore(WL.reconOf(cand, s)), better = after.rank > before.rank || (after.rank === before.rank && after.diff < before.diff * 0.5);
+    Object.assign(d.recheck, {after, kept: better ? "new" : "old"});
+    if(better) s.docs[s.docs.indexOf(d)] = Object.assign(cand, {recheck: d.recheck});
+  }catch(e){ if(!(e && e.code)) console.error("WealthLens: самопроверка", e); }
+  finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); f.status = "done"; f.checking = false; WL.save(); await WL.rebuild(); }
 }
 async function reread(id){
   const s = WL.state, f = s.files.find(x => x.id === id); if(!f || WL.reading) return;
