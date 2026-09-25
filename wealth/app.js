@@ -375,6 +375,7 @@ document.addEventListener("click", async e => {
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
   if(d.per){ WL.ui.per = d.per; return WL.render(); }
   if(d.navAll !== undefined){ WL.ui.navAll = !WL.ui.navAll; return WL.render(); }
+  if(d.tab){ WL.ui.tab = d.tab; WL.render(); const b = document.querySelector(".tabs"); if(b && b.getBoundingClientRect().top < 0) b.scrollIntoView({block: "start"}); return; }
   if(d.val){ WL.ui.val = d.val; return WL.render(); }
   if(d.bench){ WL.ui.bench = d.bench; return WL.render(); }
   if(d.refreshMarket !== undefined) return WL.refreshMarket();

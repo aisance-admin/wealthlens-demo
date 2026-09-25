@@ -7,7 +7,7 @@
 (function(){
 const WL = window.WL;
 const LISTED = ["stock", "etf", "fund", "metal", "crypto", "alt", "other"];
-let hx = null, hxKey = "", hxVer = 0, loading = null;
+let hx = null, hxKey = "", hxVer = 0, loading = null, failed = false;
 
 const lines = M => (M && M.hist ? M.hist.lines : []).filter(L => L.current);
 /* С какого дня считать: с даты, когда выписка есть у каждой линии (банк и его счета), — раньше портфель известен не целиком. */
@@ -48,15 +48,19 @@ WL.nav = {
     const key = start + "|" + list.map(x => x.key + "=" + x.symbol).sort().join(",");
     if(hx && hxKey === key) return false;
     if(loading) return loading;
+    failed = false;
     loading = WL.api("/market/history", {items: list.slice(0, 80), from: start}, {timeout: 60000}).then(async r => {
-      if(!r || !r.series) return false;
+      if(!r || !r.series){ failed = true; return true; }                  // перерисовать: вкладка покажет, что цены не пришли
       // курсы ЕЦБ по дням — и для валют котировок (ETF в долларах на Лондонской бирже при позиции в евро и т. п.)
       if(WL.ensureFxSeries) await WL.ensureFxSeries(M, Object.values(r.series).map(x => x.ccy).filter(Boolean)).catch(() => false);
       hx = r; hxKey = key; hxVer++;
       return true;
-    }).catch(() => false).finally(() => { loading = null; });
+    }).catch(() => { failed = true; return true; }).finally(() => { loading = null; });
     return loading;
   },
+  /* Можно ли построить ряд: есть бумаги с биржевой ценой (ISIN или символ) и выписка раньше сегодняшнего дня. */
+  possible: (M, S) => { const st = startOf(M); return !!(st && st < WL.today() && S && items(M, S).length); },
+  status: () => hx ? "ok" : loading ? "loading" : failed ? "fail" : "idle",
   loaded: () => !!hx,
   ver: () => hxVer,
   series: () => hx ? hx.series : null,          // для проверок (qa)

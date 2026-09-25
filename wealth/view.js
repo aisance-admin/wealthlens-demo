@@ -177,14 +177,13 @@ function navChart(v, W, Hh, cls){
   const s = navScale(v, W, Hh), days = v.days, {L, R, T, B} = NAV_G, f = n => n.toFixed(1);
   const path = days.map((p, i) => `${i ? "L" : "M"}${f(s.X(p.date))},${f(s.Y(p.nav))}`).join(" ");
   const area = `${path} L${f(s.X(days[days.length - 1].date))},${Hh - B} L${f(s.X(days[0].date))},${Hh - B} Z`;
-  const anchors = days.filter(p => p.anchor), last = days[days.length - 1];
+  const last = days[days.length - 1];
   const mid = days.length > 4 ? days[Math.floor(days.length / 2)] : null;
   const ticks = [days[0], ...(mid ? [mid] : []), last];
   return `<svg class="hchart navchart ${cls}" viewBox="0 0 ${W} ${Hh}" data-w="${W}" data-h="${Hh}" tabindex="0" role="img" aria-label="${esc(t(`Стоимость портфеля по дням, ${fmt.date(days[0].date)} – ${fmt.date(last.date)}`, `Portfolio value by day, ${fmt.date(days[0].date)} – ${fmt.date(last.date)}`))}">
     <line class="hg" x1="${L}" x2="${W - R}" y1="${f(s.Y(v.max))}" y2="${f(s.Y(v.max))}"/><line class="hg" x1="${L}" x2="${W - R}" y1="${f(s.Y(v.min))}" y2="${f(s.Y(v.min))}"/>
     <text class="hv" x="${W - R}" y="${f(s.Y(v.max) - 4)}" text-anchor="end">${esc(money(v.max))}</text><text class="hv" x="${W - R}" y="${f(s.Y(v.min) + 12)}" text-anchor="end">${esc(money(v.min))}</text>
     <path class="ha" d="${area}"/><path class="hl" d="${path}"/>
-    ${anchors.length <= 60 ? anchors.map(p => `<circle class="hp na" cx="${f(s.X(p.date))}" cy="${f(s.Y(p.nav))}" r="3"/>`).join("") : ""}
     <circle class="hp end" cx="${f(s.X(last.date))}" cy="${f(s.Y(last.nav))}" r="4.5"/>
     ${ticks.map((p, i) => `<text class="hx" x="${f(s.X(p.date))}" y="${Hh - 8}" text-anchor="${i === 0 ? "start" : i === ticks.length - 1 ? "end" : "middle"}">${esc(fmt.date(p.date))}</text>`).join("")}
     <line class="nx" x1="0" x2="0" y1="${T}" y2="${Hh - B}" visibility="hidden"/><circle class="nm" cx="0" cy="0" r="5" visibility="hidden"/>
@@ -204,7 +203,7 @@ function navShow(svg, i){
   nm.setAttribute("cx", x); nm.setAttribute("cy", y); nm.setAttribute("visibility", "visible");
   const box = svg.parentNode, tip = box.querySelector(".navtip"); if(!tip) return;
   const dl = navDelta(v, i);
-  tip.innerHTML = `<span>${esc(wday(p.date))}, ${esc(fmt.date(p.date))}${p.anchor ? ` · ${t("выписка", "statement")}` : ""}</span><b>${esc(money(p.nav))}</b>${dl ? `<span class="${dl.abs < 0 ? "dn" : "up"}">${sgn(dl.abs)}${esc(money(Math.abs(dl.abs)))}${dl.pct != null ? ` · ${sgn(dl.pct)}${esc(fmt.pct(Math.abs(dl.pct), 2))}` : ""}</span>` : ""}`;
+  tip.innerHTML = `<span>${esc(wday(p.date))}, ${esc(fmt.date(p.date))}</span><b>${esc(money(p.nav))}</b>${dl ? `<span class="${dl.abs < 0 ? "dn" : "up"}">${sgn(dl.abs)}${esc(money(Math.abs(dl.abs)))}${dl.pct != null ? ` · ${sgn(dl.pct)}${esc(fmt.pct(Math.abs(dl.pct), 2))}` : ""}</span>` : ""}`;
   tip.hidden = false;
   const r = svg.getBoundingClientRect(), br = box.getBoundingClientRect();
   const px = r.left - br.left + x / W * r.width, py = r.top - br.top + y / Hh * r.height, tw = tip.offsetWidth, th = tip.offsetHeight;
@@ -231,7 +230,7 @@ WL.navKey = (svg, key) => {
   if(j == null) return false;
   navShow(svg, j); return true;
 };
-function navSec(){
+function navSec(inTab){
   const r = navSeries();
   if(!r){ navView = null; return ""; }
   const all = r.days, id = WL.ui.per || "all", end = all[all.length - 1].date;
@@ -241,22 +240,40 @@ function navSec(){
   navView = {days, prev0: k > 0 ? all[k - 1].nav : null, x0: WL.dms(days[0].date), x1: WL.dms(end), lo: mn - pad, hi: mx + pad, min: mn, max: mx, i: null};
   const lastI = days.length - 1, last = days[lastI], dl = navDelta(navView, lastI), today = last.date === WL.today();
   const mkt = days.filter(p => !p.anchor).map(p => p.mkt), share = mkt.length ? mkt.reduce((a, b) => a + b, 0) / mkt.length : 0;
-  const tip = t(`Стоимость портфеля на конец каждого торгового дня. Состав — по последней выписке не позже этого дня; бумаги — по ценам закрытия${r.source ? ` (${r.source})` : ""} и курсам ЕЦБ, деньги и бумаги без котировки — по выписке. В дни выписок — итог выписки (точка на графике), поэтому между выписками стоимость движется с рынком, а в день новой выписки может сместиться на пополнения, снятия и сделки за её период. По ценам закрытия — в среднем ${fmt.pct(share, 0)} бумаг.${today ? " За сегодня — последние цены, торги могут идти." : ""}`,
-    `Portfolio value at the end of each trading day. Holdings follow the latest statement on or before that day; securities are valued at closing prices${r.source ? ` (${r.source})` : ""} and ECB rates, cash and unlisted holdings at statement values. On statement dates the value is the statement total (a dot on the chart), so between statements the value moves with the market and on a new statement's date it may shift by deposits, withdrawals and trades of that period. On average ${fmt.pct(share, 0)} of securities are at closing prices.${today ? " Today uses the latest prices; trading may still be open." : ""}`);
+  const tip = t(`Стоимость портфеля на конец каждого торгового дня. Состав — по последней выписке не позже этого дня; бумаги — по ценам закрытия${r.source ? ` (${r.source})` : ""} и курсам ЕЦБ, деньги и бумаги без котировки — по выписке. В дни выписок — итог выписки, поэтому между выписками стоимость движется с рынком, а в день новой выписки может сместиться на пополнения, снятия и сделки за её период. По ценам закрытия — в среднем ${fmt.pct(share, 0)} бумаг.${today ? " За сегодня — последние цены, торги могут идти." : ""}`,
+    `Portfolio value at the end of each trading day. Holdings follow the latest statement on or before that day; securities are valued at closing prices${r.source ? ` (${r.source})` : ""} and ECB rates, cash and unlisted holdings at statement values. On statement dates the value is the statement total, so between statements the value moves with the market and on a new statement's date it may shift by deposits, withdrawals and trades of that period. On average ${fmt.pct(share, 0)} of securities are at closing prices.${today ? " Today uses the latest prices; trading may still be open." : ""}`);
   const chips = `<div class="chips per no-print" role="group" aria-label="${t("Период графика", "Chart period")}">${WL.WINDOWS.filter(([w]) => w !== "1d").map(([w, l]) => `<button type="button" data-per="${w}" aria-pressed="${id === w}">${esc(l)}</button>`).join("")}</div>`;
   const tone = d => !d || Math.abs(d.abs) < 0.5 ? "" : d.abs < 0 ? "neg" : "pos";   // «up»/«dn» у ячеек нельзя: .dn занят сеткой имени
   const rowsAll = days.map((p, i) => [p, navDelta(navView, i)]).reverse(), shown = WL.ui.navAll && !WL.printing ? rowsAll : rowsAll.slice(0, 10);   // на бумаге — последние 10 дней, все — в Excel
   // на телефоне процент — под суммой изменения (своя колонка не помещается), день недели скрыт
   const pctOf = d => d && d.pct != null ? sgn(d.pct) + esc(fmt.pct(Math.abs(d.pct), 2)) : "";
-  const row = ([p, d]) => `<tr><td class="l"><span class="wd">${esc(wday(p.date))}, </span>${esc(fmt.date(p.date))}${p.anchor ? `<span class="tag" title="${esc(t("Стоимость — итог выписки на эту дату", "The value is the statement total as of this date"))}">${t("выписка", "statement")}</span>` : ""}</td>
+  const row = ([p, d]) => `<tr><td class="l"><span class="wd">${esc(wday(p.date))}, </span>${esc(fmt.date(p.date))}</td>
     <td>${esc(money(p.nav))}</td><td class="${tone(d)}">${d ? sgn(d.abs) + esc(money(Math.abs(d.abs))) : ""}<span class="mo">${pctOf(d)}</span></td><td class="${tone(d)} mh">${pctOf(d)}</td></tr>`;
-  return `<section class="sec" id="nav"><div class="sh"><h2>${t("Стоимость по дням", "Value by day")}</h2><span class="muted" title="${esc(tip)}">${esc(t(`с ${fmt.date(days[0].date)}`, `since ${fmt.date(days[0].date)}`))}</span></div>
+  // во вкладке заголовок не нужен — его называет сама вкладка; пояснение — подсказкой у последней стоимости
+  return `<section class="sec${inTab ? " intab" : ""}" id="nav">${inTab ? "" : `<div class="sh"><h2>${t("Стоимость по дням", "Value by day")}</h2><span class="muted" title="${esc(tip)}">${esc(t(`с ${fmt.date(days[0].date)}`, `since ${fmt.date(days[0].date)}`))}</span></div>`}
     <div class="card pad navc">
-      <div class="navtop"><div class="dv"><span class="dl">${today ? t("Сегодня", "Today") : t(`На закрытие ${fmt.date(last.date)}`, `At close ${fmt.date(last.date)}`)}</span><b>${esc(money(last.nav))}</b>${dl ? `<span class="${dl.abs < 0 ? "dn" : "up"}">${sgn(dl.abs)}${esc(money(Math.abs(dl.abs)))}${dl.pct != null ? ` · ${sgn(dl.pct)}${esc(fmt.pct(Math.abs(dl.pct), 2))}` : ""} ${t("за день", "on the day")}</span>` : ""}</div>${chips}</div>
+      <div class="navtop"><div class="dv" title="${esc(tip)}"><span class="dl">${today ? t("Сегодня", "Today") : t(`На закрытие ${fmt.date(last.date)}`, `At close ${fmt.date(last.date)}`)}</span><b>${esc(money(last.nav))}</b>${dl ? `<span class="${dl.abs < 0 ? "dn" : "up"}">${sgn(dl.abs)}${esc(money(Math.abs(dl.abs)))}${dl.pct != null ? ` · ${sgn(dl.pct)}${esc(fmt.pct(Math.abs(dl.pct), 2))}` : ""} ${t("за день", "on the day")}</span>` : ""}</div>${chips}</div>
       <div class="navplot">${navChart(navView, 1100, 230, "hc-wide")}${navChart(navView, 560, 300, "hc-narrow")}<div class="navtip" hidden></div></div>
       <div class="tw"><table class="navt"><thead><tr><th class="l">${t("Дата", "Date")}</th><th>${t("Стоимость", "Value")}</th><th>${t("За день", "Day")}</th><th class="mh">%</th></tr></thead><tbody>${shown.map(row).join("")}</tbody></table></div>
       ${rowsAll.length > 10 ? `<button class="link navmore" type="button" data-nav-all>${WL.ui.navAll ? t("Свернуть", "Show less") : t(`Все дни — ${rowsAll.length}`, `All days — ${rowsAll.length}`)}</button>` : ""}
     </div></section>`;
+}
+/* Вкладки отчёта: «Отчёт» и «Стоимость по дням» — вторая есть, когда ряд можно построить (бумаги с биржевой ценой и выписка
+   раньше сегодняшнего дня). */
+function tabs(m){
+  const can = !WL.printing && WL.nav && (navSeries() || WL.nav.possible(m, S()));
+  const cur = can && WL.ui.tab === "nav" ? "nav" : "report";
+  if(!can) return {cur, html: ""};
+  const b = (id, label) => `<button type="button" role="tab" data-tab="${id}" aria-selected="${cur === id}">${esc(label)}</button>`;
+  return {cur, html: `<nav class="tabs no-print" role="tablist" aria-label="${t("Разделы отчёта", "Report sections")}">${b("report", t("Отчёт", "Report"))}${b("nav", t("Стоимость по дням", "Value by day"))}</nav>`};
+}
+function navTab(){
+  const sec = navSec(true);
+  if(sec) return sec + method();
+  const st = WL.nav.status();
+  return `<section class="sec intab" id="nav"><div class="card pad navwait">${st === "fail"
+    ? `<p>${t("Цены закрытия сейчас не загрузились. Попробуйте позже — кнопка «Обновить» у котировок.", "Closing prices did not load. Try again later with “Refresh” next to the quotes.")}</p>`
+    : `<p><span class="spin" aria-hidden="true"></span>${t("Загружаю цены закрытия…", "Loading closing prices…")}</p>`}</div></section>`;
 }
 function historySec(){
   const m = M(), H = m.hist, lines = H ? H.lines.filter(L => L.current) : [];
@@ -275,7 +292,7 @@ function historySec(){
   })).reverse();
   return `<section class="sec" id="history"><div class="sh"><h2>${t("История", "History")}</h2><span class="muted">${t(`${rows.length} ${WL.pl(rows.length, ["выписка", "выписки", "выписок"], ["", ""])}`, `${rows.length} ${rows.length === 1 ? "statement" : "statements"}`)}</span></div>
     <div class="card pad" title="${esc(t("Стоимость — по выпискам на их даты; кружок без заливки — стоимость на начало периода выписки из её сводки. Стык — проверка, что стоимость на конец одной выписки совпадает с началом следующей.",
-      "Values are taken from the statements as of their dates; an open circle is a statement's opening value from its summary. A link check confirms that one statement's closing value matches the next one's opening value."))}">${navSeries() ? "" : historyChart(pts, 1100, 230, "hc-wide") + historyChart(pts, 560, 300, "hc-narrow")}<ul class="hlist">${rows.join("")}</ul></div></section>`;
+      "Values are taken from the statements as of their dates; an open circle is a statement's opening value from its summary. A link check confirms that one statement's closing value matches the next one's opening value."))}">${WL.printing && navSeries() ? "" : historyChart(pts, 1100, 230, "hc-wide") + historyChart(pts, 560, 300, "hc-narrow")}<ul class="hlist">${rows.join("")}</ul></div></section>`;
 }
 function hero(){
   const m = M(), s = S();
@@ -640,7 +657,10 @@ function method(){
   const rates = [src.has("statement") ? t("курсы из самих выписок", "rates from the statements themselves") : "", src.has("ecb") ? t("курсы ЕЦБ на дату выписки", "ECB rates on the statement date") : "",
     src.has("alt") || src.has("peg") ? t("для валют, которых нет у ЕЦБ, — открытый набор курсов currency-api и привязка к доллару", "for currencies the ECB doesn't publish — the open currency-api rates and dollar pegs") : ""].filter(Boolean);
   return `<footer class="method"><p>${t("Позиции и итоги прочитаны прямо со страниц выписок; числа не пересчитывались, кроме перевода в валюту отчёта", "Positions and totals were read straight from the statement pages; numbers are as printed, except the conversion to the report currency")}${rates.length ? ": " + esc(rates.join("; ")) : ""}.
-    ${t("Итог включает накопленный купон, если банк его показывает. Отчёт показывает факты из выписок и не является инвестиционной рекомендацией.", "The total includes accrued interest where the bank shows it. The report states facts from the statements and is not investment advice.")}</p>
+    ${t("Итог включает накопленный купон, если банк его показывает.", "The total includes accrued interest where the bank shows it.")}
+    ${navSeries() ? t(`Стоимость по дням: в даты выписок — их итог, в остальные дни — по ценам закрытия бирж (${esc(navSeries().source || "Yahoo Finance")}) и курсам ЕЦБ; облигации, ноты, опционы и деньги между выписками — по выписке.`,
+      `Value by day: on statement dates — the statement total, on other days — exchange closing prices (${esc(navSeries().source || "Yahoo Finance")}) and ECB rates; bonds, notes, options and cash between statements — at statement values.`) : ""}
+    ${t("Отчёт показывает факты из выписок и не является инвестиционной рекомендацией.", "The report states facts from the statements and is not investment advice.")}</p>
     <p class="muted">WealthLens · ${esc(fmt.date(WL.today()))}${S().rid && !S().demo ? ` · ${t("отчёт", "report")} ${esc(S().rid)}` : ""}</p></footer>`;
 }
 
@@ -657,7 +677,10 @@ function report(){
     <p>${t("Отчёт по портфелю", "Portfolio report")} · ${esc(fmt.date(WL.today()))}</p></div>`;
   if(!m.positions.length) return printHead + demoBar() + readingPanel() + (WL.reading ? "" : `<section class="card empty"><h2>${t("Позиций не нашлось", "No positions found")}</h2>
     <p class="muted">${t("В этих файлах не нашлось ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "No balances or securities were found in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
-  return printHead + demoBar() + readingPanel() + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + navSec() + historySec() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
+  // «Стоимость по дням» — отдельной вкладкой (Саша, 25.09.2026: «брать его, когда это нужно»); на бумаге — всё подряд
+  const tab = tabs(m);
+  if(tab.cur === "nav") return printHead + demoBar() + readingPanel() + tab.html + navTab();
+  return printHead + demoBar() + readingPanel() + tab.html + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + (WL.printing ? navSec() : "") + historySec() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
 }
 
 WL.ui = WL.ui || {filter: "all", search: "", only: null};
@@ -827,7 +850,7 @@ WL.excel = async () => {
     nv.days.forEach((p, i) => {
       const q = i ? nv.days[i - 1].nav : null;
       nd.push([fmt.date(p.date), round(p.nav), q != null ? round(p.nav - q) : null, q ? round((p.nav - q) / Math.abs(q) * 100, 3) : null,
-        p.anchor ? t("выписка", "statement") : p.mkt > 0 ? t(`цены закрытия — ${Math.round(p.mkt * 100)}% бумаг`, `closing prices — ${Math.round(p.mkt * 100)}% of securities`) : t("выписка и курсы ЕЦБ", "statement and ECB rates")]);
+        p.anchor ? t("из выписки", "from statement") : p.mkt > 0 ? t(`цены закрытия — ${Math.round(p.mkt * 100)}% бумаг`, `closing prices — ${Math.round(p.mkt * 100)}% of securities`) : t("выписка и курсы ЕЦБ", "statement and ECB rates")]);
     });
     sheet(nd, t("По дням", "By day"), [16, 18, 16, 14, 30]);
   }
