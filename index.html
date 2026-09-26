@@ -370,7 +370,9 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 
 /* Рынок: оценка сейчас, изменения, бенчмарк, котировки, новости */
 .up{color:var(--up)} .dn{color:var(--dn)}
-.seg.val{margin:14px 0 0}
+.seg.val{margin:14px 0 0} .seg.val button:disabled{opacity:.55; cursor:default}
+.vl{display:grid; gap:0} .vl.busy{opacity:.55; transition:opacity .2s}
+@media screen and (max-width:420px){ .vl .when{display:none} }   /* иначе строка под итогом переносится и блоки ниже «прыгают» */
 .basis{font:500 11.5px/1.4 var(--mono); color:var(--muted); margin:8px 0 0 !important}
 .thsub{display:block; font:400 10px/1.2 var(--mono); letter-spacing:.04em; text-transform:none; color:var(--muted); margin-top:2px}
 .pos td.mk{font-size:13px}
@@ -578,9 +580,9 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/period.js?v=f1a477c3fdab"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
 <script src="wealth/pay.js?v=d5482dcb642b"></script>
-<script src="wealth/view.js?v=a211b75fd95c"></script>
+<script src="wealth/view.js?v=909cb47fbe87"></script>
 <script src="wealth/chat.js?v=f0e886576145"></script>
 <script src="wealth/demo.js?v=eb3620067d4a"></script>
-<script src="wealth/app.js?v=089f5f6ab88f"></script>
+<script src="wealth/app.js?v=ad844ffc7e16"></script>
 </body>
 </html>

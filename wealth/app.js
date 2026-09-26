@@ -44,7 +44,7 @@ WL.refreshMarket = () => {
   if(!WL.model || !WL.model.positions.length) return Promise.resolve(false);
   WL.marketLoading = true; WL.render();
   marketBusy = WL.market.refresh(WL.state, WL.model).then(ok => ok).catch(() => false).then(async ok => {
-    WL.marketLoading = false; marketBusy = null;
+    WL.marketLoading = false; WL.marketTried = true; marketBusy = null;
     if(!ok) WL.toast(t("Котировки не загрузились — показаны данные выписок. Попробуйте «Обновить» позже.", "Market data did not load — statement values are shown. Try “Refresh” later."));
     await WL.rebuild();
     // цены закрытия по дням — для раздела «Стоимость по дням»; пришли — перерисовать

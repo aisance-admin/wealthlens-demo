@@ -306,7 +306,7 @@ function hero(){
         <div class="seg" role="group" aria-label="${t("Валюта отчёта", "Report currency")}">${WL.BASES.map(b => `<button type="button" data-base="${b}" aria-pressed="${b === m.base}">${b}</button>`).join("")}</div></div>
       ${valuation(m, dates)}
       ${dynamics(m)}
-      <div class="ts">${esc([m.mkt && WL.ui.val !== "stmt" ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
+      <div class="ts">${esc([m.positions.some(p => WL.market.keyOf(p) || WL.market.occOf(p)) ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
         `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
       ${coverage(m)}
@@ -327,14 +327,27 @@ const liveMode = m => !!(m.mkt && m.mkt.coverage > 0 && WL.ui.val !== "stmt");
 const agg = m => liveMode(m) && m.mkt.byCat ? m.mkt : m;
 const wOf = p => liveMode(M()) && p.wNow != null ? p.wNow : p.w;
 function valuation(m, dates){
-  if(!m.mkt || !(m.mkt.coverage > 0)) return `<div class="tv">${esc(money(m.total))}</div>${WL.marketLoading ? `<div class="ts muted">${t("загружаю текущие котировки…", "loading current prices…")}</div>` : ""}`;
+  // Место под переключатель «Сейчас / По выписке» и две строки под итогом занято сразу, пока котировки грузятся: иначе итог
+  // и всё под ним «прыгали» вниз на 45–100 px, когда котировки приходили (замер qa/claude/verify.mjs, 26.09.2026).
+  // В портфеле без бумаг с биржевой ценой котировок не будет — места не держим.
+  const canLive = m.positions.some(p => WL.market.keyOf(p) || WL.market.occOf(p));
+  if(!m.mkt || !(m.mkt.coverage > 0)){
+    if(!canLive) return `<div class="tv">${esc(money(m.total))}</div>`;
+    const why = WL.marketLoading || !WL.marketTried ? t("загружаю текущие котировки…", "loading current prices…")
+      : m.mkt ? t("текущих цен для бумаг нет", "no current prices for the holdings") : t("котировки сейчас не загрузились", "current prices did not load");
+    return `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" disabled aria-pressed="false">${t("Сейчас", "Now")}</button><button type="button" disabled aria-pressed="true">${t("По выписке", "Per statement")}</button></div>
+    <div class="tv">${esc(money(m.total))}</div>
+    <div class="vl"><div class="ts muted">${why}</div><div class="ts muted">${t(`по выписке ${esc(dates)}`, `per statement ${esc(dates)}`)}</div></div>`;
+  }
   const live = liveMode(m), at = new Date(m.mkt.at), when = at.toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
   const d = m.mkt.delta, dp = m.total ? d / m.total : 0;
+  // «обновляю…» — приглушением строки, не текстом: дописанное слово переносило строку на телефоне
   return `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" data-val="now" aria-pressed="${live}">${t("Сейчас", "Now")}</button><button type="button" data-val="stmt" aria-pressed="${!live}">${t("По выписке", "Per statement")}</button></div>
     <div class="tv" title="${esc(live ? t(`По текущим ценам пересчитаны бумаги с биржевой ценой — ${fmt.pct(m.mkt.coverage, 0)} портфеля, остальное — по выпискам.`, `Holdings with a market price (${fmt.pct(m.mkt.coverage, 0)} of the portfolio) are repriced at current prices, the rest stays at statement values.`) : "")}">${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
-    ${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")} · ${t("цены на", "prices at")} ${esc(when)}${WL.marketLoading ? " · " + t("обновляю…", "refreshing…") : ""}</div>
+    <div class="vl${WL.marketLoading ? " busy" : ""}" title="${WL.marketLoading ? esc(t("обновляю котировки…", "refreshing prices…")) : ""}">${live ? `<div class="ts"><span class="${d < 0 ? "dn" : "up"}">${d > 0 ? "+" : ""}${esc(money(d))} (${d > 0 ? "+" : ""}${esc(fmt.pct(dp, 1))})</span> ${t("с даты выписки", "since the statement date")}<span class="when"> · ${t("цены на", "prices at")} ${esc(when)}</span></div>
       <div class="ts muted">${t(`по выписке ${esc(dates)}: ${esc(money(m.total))}`, `per statement ${esc(dates)}: ${esc(money(m.total))}`)}</div>`
-      : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>`}`;
+      : `<div class="ts muted">${t(`по текущим ценам на ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`, `at current prices at ${esc(when)}: ${esc(money(m.mkt.nowTotal))}`)}</div>
+      <div class="ts muted">${t(`по выписке ${esc(dates)}`, `per statement ${esc(dates)}`)}</div>`}</div>`;
 }
 /* Насколько итог полный — прямо под ним: сколько выписок учтено, что не вошло и почему, что не прочитано и не сошлось с
    банком. Подробности — в разделе «Файлы» внизу. Тот же текст — на первом листе Excel. */
