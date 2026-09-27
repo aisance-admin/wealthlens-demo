@@ -246,7 +246,7 @@ WL.onUnlocked = () => {
   const s = WL.state;
   if(WL.pay.locked()) return;
   const need = s.files.filter(f => f.status === "done" && s.docs.some(d => d.fileId === f.id && d.preview));
-  if(!need.length) return;
+  if(!need.length){ if(WL.model && !WL.reading) requestReview(); return; }     // всё прочитано целиком — остаётся сводка ИИ
   const pages = need.reduce((k, f) => { const d = s.docs.find(x => x.fileId === f.id); return k + Math.max(0, (d.preview.total || 0) - (d.preview.pages || []).length); }, 0);
   need.forEach(f => { f.status = "queued"; });
   WL.toast(t(`Читаем полный отчёт: ещё ${pages} ${WL.pl(pages, ["страница", "страницы", "страниц"], ["", ""])} — около минуты`, `Reading the full report: ${pages} more ${pages === 1 ? "page" : "pages"} — about a minute`));
@@ -266,10 +266,12 @@ function cancelFile(id){
 function quotaMessage(){
   const paid = !WL.pay.locked();
   WL.dialog({eyebrow: t("Лимит чтения", "Reading limit"), title: t("На сегодня страницы закончились", "No more pages for today"),
-    body: `<p>${WL.quotaHit === "free" && !paid ? t("Бесплатно мы читаем ограниченное число страниц в сутки. Прочитанное сохранено — откройте полный отчёт (лимит станет больше) или дочитайте файлы завтра кнопкой «Дочитать».",
+    body: `<p>${WL.quotaHit === "budget" && !paid ? t("Сегодня бесплатных предпросмотров было больше обычного, и бесплатная часть на сегодня закрыта. Полный отчёт открывается как обычно — оплата и чтение работают; или загляните завтра.",
+        "There were more free previews than usual today, so the free part is closed until tomorrow. The full report works as usual — payment and reading are open; or come back tomorrow.")
+      : WL.quotaHit === "free" && !paid ? t("Бесплатно мы читаем ограниченное число страниц в сутки. Прочитанное сохранено — откройте полный отчёт (лимит станет больше) или дочитайте файлы завтра кнопкой «Дочитать».",
       "We read a limited number of pages per day for free. What was read is saved — unlock the full report for a higher limit, or finish tomorrow with “Read again”.")
       : t("Сервис сегодня перегружен. Прочитанное сохранено — дочитайте файлы позже кнопкой «Дочитать».", "The service is at capacity today. What was read is saved — finish later with “Read again”.")}</p>`,
-    buttons: WL.quotaHit === "free" && !paid && WL.pay.PAYWALL ? [{id: "buy", label: t("Открыть полный отчёт", "Unlock the full report"), primary: true}, {id: "cancel", label: t("Позже", "Later")}] : [{id: "cancel", label: "OK", primary: true}]})
+    buttons: (WL.quotaHit === "free" || WL.quotaHit === "budget") && !paid && WL.pay.PAYWALL ? [{id: "buy", label: t("Открыть полный отчёт", "Unlock the full report"), primary: true}, {id: "cancel", label: t("Позже", "Later")}] : [{id: "cancel", label: "OK", primary: true}]})
     .then(({choice}) => { if(choice === "buy") WL.pay.open("quota"); });
 }
 
@@ -279,7 +281,7 @@ function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([m
 async function requestReview(force){
   const s = WL.state, m = WL.model;
   if(s.demo || !m || !m.positions.length || WL.reading) return;
-  if(s.docs.some(d => d.preview)) return;                  // предпросмотр: сводку ИИ делаем после оплаты, по полному отчёту
+  if(WL.pay.locked()) return;                              // не оплачено: сводку ИИ делаем после оплаты, по полному отчёту
   const key = reviewKey(), comp = WL.reviewComp(m, s);
   if(!force && s.review && s.review.key === key && !s.review.error) return;
   const seq = ++reviewSeq;

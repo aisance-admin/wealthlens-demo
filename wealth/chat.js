@@ -239,7 +239,9 @@ async function turn(topic, text){
   if(r && r.reply){ ch.messages.push({role: "assistant", text: r.reply, at: Date.now()}); ch.suggestions = r.suggestions || []; ch.updated = Date.now(); }
   else if(r && r.error === "no_credits"){ if(text){ ch.messages.pop(); C.draft = text; } }
   else if(r && r.error === "no_opens"){ C.errors[id] = {text: t("Ассистент уже открыл много тем в этом отчёте — задайте вопрос сами, внизу.", "The assistant has already opened many topics in this report — ask your question below.")}; }
-  else if(r && r.error === "quota"){ if(text){ ch.messages.pop(); C.draft = text; } C.errors[id] = {text: t("Слишком много вопросов за час — попробуйте чуть позже.", "Too many questions this hour — try again a little later.")}; }
+  else if(r && r.error === "quota"){ if(text){ ch.messages.pop(); C.draft = text; } C.errors[id] = {text: r.scope === "budget"
+    ? t("Бесплатные сообщения ассистента на сегодня закончились. В полном отчёте их 20, и они работают как обычно.", "Free assistant messages are over for today. The full report includes 20, and they work as usual.")
+    : t("Слишком много вопросов за час — попробуйте чуть позже.", "Too many questions this hour — try again a little later.")}; }
   else {
     if(text){ ch.messages.pop(); C.draft = text; }       // вопрос возвращается в поле ввода — набирать заново не нужно
     const why = {busy: t("Сервис сейчас перегружен — повторите через минуту.", "The service is busy right now — try again in a minute."),

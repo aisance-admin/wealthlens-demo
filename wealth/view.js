@@ -435,7 +435,7 @@ function mix(m){
 }
 
 function brief(){
-  if(M().preview) return "";                               // предпросмотр: сводка ИИ — в полном отчёте, приманка — в блоке оплаты
+  if(M().preview || locked()) return "";                   // не оплачено: сводка ИИ — в полном отчёте, приманка — в блоке оплаты
   const s = S(), r = WL.reviewNow(), old = !r && s.review && s.review.summary, m = M();
   let body;
   if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
