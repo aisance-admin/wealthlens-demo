@@ -274,7 +274,7 @@ WL.build = S => {
   for(const x of chosen){
     const d = x.d, info = {id: d.id, file: d.file, institution: d.institution || "", type: d.type, as_of: d.as_of, ref_ccy: d.ref_ccy, pageCount: d.pageCount,
       accounts: d.accounts, notes: d.notes, failed: d.failed, truncated: d.truncated, fullPages: d.fullPages, use: x.use, why: x.why, by: x.by, forced: !!x.forced,
-      rowsRead: d.rows.length, pages: d.pages};
+      rowsRead: d.rows.length, pages: d.pages, preview: d.preview || null};
     docs.push(info);
     if(!x.use && x.why === "older" && d.rows.length){            // выписка из истории: своя сверка и стоимость на свою дату
       const hr = docRows(d);
@@ -329,6 +329,10 @@ WL.build = S => {
     .map(p => ({p, days: fmt.days(p.date)})).filter(x => x.days != null && x.days >= -3 && x.days <= 366).sort((a, b) => a.days - b.days);
 
   const M = {base, total, accrued, gross, positions, docs, byCat, byCcy, byInst, dates, timeline, missingFx: [...missingFx]};
+  // бесплатный предпросмотр: сколько выписок прочитано по страницам-сводкам, сколько страниц и бумаг (ISIN) откроет полный отчёт
+  const pv = docs.filter(i => i.use && i.preview);
+  M.preview = pv.length ? {files: pv.length, read: pv.reduce((k, i) => k + i.preview.pages.length, 0), total: pv.reduce((k, i) => k + i.preview.total, 0),
+    isins: pv.reduce((k, i) => k + (i.preview.isins || 0), 0)} : null;
   M.hist = historyOf(chosen, conv);
   M.alerts = alerts(M, S);
   return M;
@@ -406,7 +410,7 @@ function historyOf(chosen, conv){
 /* Выводы о долях — крупная бумага и много денег — зависят от оценки: по выпискам или по текущим ценам. */
 function shareAlerts(M, w, v, byCat){
   const out = [], money = x => fmt.money(x, M.base), name = p => p.name || p.isin || p.ticker || "—";
-  const big = M.positions.filter(p => ["stock", "bond", "note", "alt", "crypto", "other"].includes(p.cls) && w(p) >= 0.1).sort((a, b) => w(b) - w(a));
+  const big = M.positions.filter(p => p.table !== "S" && ["stock", "bond", "note", "alt", "crypto", "other"].includes(p.cls) && w(p) >= 0.1).sort((a, b) => w(b) - w(a));   // строка сводки — класс, а не бумага
   if(big.length) out.push({level: w(big[0]) >= 0.2 ? "high" : "watch", id: "conc", title: t("Крупная доля в одной бумаге", "Large share in a single holding"),
     text: big.slice(0, 4).map(p => `${name(p)} — ${fmt.pct(w(p))} (${money(v(p))})`).join("; ") + ".", refs: big.map(p => p.id), auto: true});
   const cash = byCat.find(c => c.key === "cash");
@@ -442,7 +446,7 @@ function alerts(M, S){
         t(`«${d.file}»${d.as_of ? " на " + fmt.date(d.as_of) : ""} и «${c.byFile}»${c.byDate ? " на " + fmt.date(c.byDate) : ""}${more > 0 ? ` (и ещё ${more})` : ""}. В старой выписке строки не удалось разнести по счетам, поэтому она учтена целиком — итог может учитывать счёт дважды. Если в ней нет других счетов, нажмите у файла «Не учитывать».`,
           `“${d.file}”${d.as_of ? " as of " + fmt.date(d.as_of) : ""} and “${c.byFile}”${c.byDate ? " as of " + fmt.date(c.byDate) : ""}${more > 0 ? ` (and ${more} more)` : ""}. The older statement's rows could not be split by account, so it is counted in full — the total may count the account twice. If it holds no other accounts, use “Exclude” on the file.`), [d.id]);
     }
-    if(!d.use || !d.recon) continue;
+    if(!d.use || !d.recon || d.preview) continue;              // предпросмотр: сверка и сводные таблицы — после полного чтения
     if(d.recon.status === "mismatch" || d.recon.status === "partial"){
       const c = d.recon.checks.filter(x => !x.ok).sort((a, b) => (a.scope === "total" ? -1 : 0) - (b.scope === "total" ? -1 : 0))[0];
       if(c) add(d.recon.status === "mismatch" ? "high" : "watch", "recon-" + d.id,

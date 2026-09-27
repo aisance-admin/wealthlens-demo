@@ -175,7 +175,7 @@ const grow = ta => { ta.style.height = "auto"; ta.style.height = Math.min(140, t
 /* Кнопка «Обсудить портфель» и ненавязчивая подсказка, когда есть что обсудить. */
 function launcher(){
   let b = $("#chatFab");
-  const ready = !!(M() && M().positions.length) && !WL.printing && !WL.reading;
+  const ready = !!(M() && M().positions.length && !M().preview) && !WL.printing && !WL.reading;   // предпросмотр — без ассистента
   if(!b){ b = document.createElement("button"); b.id = "chatFab"; b.type = "button"; b.className = "chat-fab no-print"; b.dataset.chatOpen = ""; document.body.appendChild(b); }
   b.hidden = !ready || C.open;
   const fresh = ready ? topics().filter(x => x.kind === "alert" && (x.level === "high" || x.level === "watch") && !talked(x.id)) : [];

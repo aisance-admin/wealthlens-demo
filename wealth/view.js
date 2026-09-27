@@ -99,7 +99,7 @@ const sgn = v => v > 0 ? "+" : v < 0 ? "−" : "";
    Саша (24.09.2026) — «очень много слов, страница перегружена». Оценка по позициям помечена знаком «≈». */
 function dynamics(m){
   const r = per();
-  if(!r) return "";
+  if(!r || m.preview) return "";
   const id = r.id, abs = v => money(Math.abs(v)), stmtEnd = m.dates[m.dates.length - 1];
   const since = id === "all" ? r.start : r.change != null ? r.startDate : r.start;
   const chips = `<div class="chips per no-print" role="group" aria-label="${t("Период", "Period")}">${WL.WINDOWS.map(([k, l]) => `<button type="button" data-per="${k}" aria-pressed="${id === k}">${esc(l)}</button>`).join("")}</div>`;
@@ -307,7 +307,8 @@ function hero(){
       ${valuation(m, dates)}
       ${dynamics(m)}
       <div class="ts">${esc([m.positions.some(p => WL.market.keyOf(p) || WL.market.occOf(p)) ? "" : dates, `${m.byInst.length} ${WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"])}`, `${nAcc} ${WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"])}`,
-        `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
+        m.preview ? (m.preview.isins ? `${m.preview.isins} ${WL.pl(m.preview.isins, ["бумага", "бумаги", "бумаг"], ["security", "securities"])}` : "")
+          : `${m.positions.length} ${WL.pl(m.positions.length, ["позиция", "позиции", "позиций"], ["position", "positions"])}`].filter(Boolean).join(" · "))}</div>
       ${m.accrued ? `<div class="ts muted">${t(`в т.ч. накопленный купон ${money(m.accrued)}`, `incl. accrued interest ${money(m.accrued)}`)}</div>` : ""}
       ${coverage(m)}
       ${mix(agg(m))}
@@ -317,7 +318,7 @@ function hero(){
       <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
         const open = worst === "ok" ? i.docs.reduce((k, d) => k + ((d.recon && d.recon.open) || 0), 0) : 0;
         return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
-          <div class="iv"><b>${esc(money(i.value))}</b>${recBadge(worst, open)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
+          <div class="iv"><b>${esc(money(i.value))}</b>${i.docs.some(d => d.preview) ? "" : recBadge(worst, open)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
     </div>
   </section>`;
 }
@@ -399,6 +400,7 @@ function coverageOf(m){
   return {text: files.length ? parts.join(" · ") : "", warn};
 }
 function coverage(m){
+  if(m.preview) return `<div class="cover ok">${ICON.check}<span>${esc(t(`Предпросмотр по сводным страницам выписок: прочитано ${m.preview.read} из ${m.preview.total}`, `Preview from the summary pages: ${m.preview.read} of ${m.preview.total} pages read`))}</span></div>`;
   const c = coverageOf(m);
   if(!c.text) return "";
   return `<div class="cover ${c.warn ? "warn" : "ok"}">${c.warn ? ICON.warn : ICON.check}<span>${esc(c.text)}
@@ -433,6 +435,7 @@ function mix(m){
 }
 
 function brief(){
+  if(M().preview) return "";                               // предпросмотр: сводка ИИ — в полном отчёте, приманка — в блоке оплаты
   const s = S(), r = WL.reviewNow(), old = !r && s.review && s.review.summary, m = M();
   let body;
   if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
@@ -460,7 +463,7 @@ function alertList(){
   return (liveMode(m) ? WL.alertsNow(m) : m.alerts).concat(extra).filter(a => a && a.title).map((a, i) => [a, i]).sort((x, y) => ((rank[x[0].level] ?? 3) - (rank[y[0].level] ?? 3)) || x[1] - y[1]).map(x => x[0]);
 }
 WL.alertList = alertList;
-const topicOf = a => WL.topicId ? WL.topicId(a) : "";
+const topicOf = a => WL.topicId && !(M() && M().preview) ? WL.topicId(a) : "";      // предпросмотр: обсуждение — после оплаты
 function alertsBlock(){
   const all = alertList();
   if(!all.length) return "";
@@ -469,7 +472,7 @@ function alertsBlock(){
   const cards = all.map((a, i) => alertCard(a, i, lock));
   return `<section class="sec" id="alerts"><div class="keep"><div class="sh"><h2>${t("На что обратить внимание", "What needs attention")}</h2><span class="muted">${all.length}</span>
       ${updating ? `<span class="muted small no-print">${t("выводы ИИ обновляются…", "AI findings are updating…")}</span>`
-        : WL.topicId && !WL.printing ? `<span class="muted small no-print sh-hint">${t("нажмите на карточку, чтобы обсудить, что делать", "tap a card to discuss what to do")}</span>` : ""}</div>
+        : WL.topicId && !WL.printing && !M().preview ? `<span class="muted small no-print sh-hint">${t("нажмите на карточку, чтобы обсудить, что делать", "tap a card to discuss what to do")}</span>` : ""}</div>
     <div class="alerts">${cards.slice(0, 2).join("")}</div></div>${cards.length > 2 ? `<div class="alerts more">${cards.slice(2).join("")}</div>` : ""}
   </section>`;
 }
@@ -512,6 +515,26 @@ function paywall(){
   const pay = WL.pay, gift = pay.promo();
   if(pay.pending()) return `<section class="card paywall checking" id="paywall" aria-live="polite"><div><div class="eyebrow gold">${t("Полный отчёт", "Full report")}</div>
     <h2><i class="spin"></i>${t("Проверяем доступ…", "Checking access…")}</h2><p class="muted">${t("Этот отчёт оплачен в этом браузере — сверяем оплату, это пара секунд.", "This report was paid for in this browser — verifying the payment, it takes a couple of seconds.")}</p></div></section>`;
+  const pv = M().preview;
+  if(pv){
+    const left = Math.max(0, pv.total - pv.read), banks = M().byInst.length;
+    const items = [
+      pv.isins ? t(`${pv.isins} ${WL.pl(pv.isins, ["бумага", "бумаги", "бумаг"], ["", ""])} — каждая с ценой, стоимостью и изменением`, `${pv.isins} ${pv.isins === 1 ? "security" : "securities"} — each with price, value and change`)
+        : t("Каждая позиция — с ценой, стоимостью и изменением", "Every position with price, value and change"),
+      t(`Сверка с итогом ${banks === 1 ? "банка" : `каждого из ${banks} банков`}`, `Totals checked against ${banks === 1 ? "the bank" : `each of the ${banks} banks`}`),
+      t("Прибыль и убыток за любой период, стоимость по дням", "Profit and loss for any period, value by day"),
+      t("Риски: концентрация, опционы, сроки — и разбор портфеля", "Risks: concentration, options, maturities — and a portfolio review"),
+      t("PDF и Excel", "PDF and Excel")];
+    return `<section class="card paywall hook" id="paywall">
+    <div><div class="eyebrow gold">${t("Полный отчёт", "Full report")}</div>
+      <h2>${gift ? t("Откройте полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Всё по вашим выпискам — ${pay.PRICE.label}`, `Everything in your statements — ${pay.PRICE.label}`)}</h2>
+      <ul class="hook-list">${items.map(x => `<li>${ICON.check}<span>${esc(x)}</span></li>`).join("")}</ul>
+      <p class="muted">${left ? t(`Откроется сразу после оплаты: дочитаем ${left} ${WL.pl(left, ["страницу", "страницы", "страниц"], ["", ""])} — около минуты. Разовая оплата, без подписки.`, `Opens right after payment: we read the remaining ${left} ${left === 1 ? "page" : "pages"} — about a minute. One-off payment, no subscription.`)
+        : t("Разовая оплата, без подписки.", "One-off payment, no subscription.")}</p></div>
+    <div class="pa"><button class="btn primary big" type="button" data-buy="paywall">${gift ? t("Открыть за €0", "Unlock for €0") : t(`Открыть полный отчёт — ${pay.PRICE.label}`, `Unlock the full report — ${pay.PRICE.label}`)}</button>
+      <button class="link" type="button" data-restore>${t("Уже оплатили? Восстановить доступ", "Already paid? Restore access")}</button></div>
+  </section>`;
+  }
   return `<section class="card paywall" id="paywall">
     <div><div class="eyebrow gold">${t("Полный отчёт", "Full report")}</div>
       <h2>${gift ? t("Откройте полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Все позиции, выводы, PDF и Excel — ${pay.PRICE.label}`, `Every position, all findings, PDF and Excel — ${pay.PRICE.label}`)}</h2>
@@ -590,7 +613,7 @@ function holdings(){
         <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td>${PH}<td></td><td></td><td></td></tr>` : ""}</tbody>`;
   }).join("");
   return `<section class="sec" id="holdings"><div class="sh"><h2>${t("Все позиции", "All positions")}</h2><span class="muted">${m.positions.length}</span></div>
-    <div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.WINDOWS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "all") === id}">${esc(l)}</button>`).join("")}</div></div>
+    ${m.preview ? "" : `<div class="tools no-print"><div class="chips per" role="group" aria-label="${t("Период изменения", "Change period")}">${WL.WINDOWS.map(([id, l]) => `<button type="button" data-per="${id}" aria-pressed="${(WL.ui.per || "all") === id}">${esc(l)}</button>`).join("")}</div></div>`}
     <div class="tools no-print">
       <div class="chips" role="group">${[{key: "all", label: t("Все", "All")}].concat(m.byCat).map(c => `<button type="button" data-cat="${c.key}" aria-pressed="${f === c.key}">${esc(c.label)}</button>`).join("")}</div>
       <input class="search" id="search" type="search" value="${esc(WL.ui.search || "")}" placeholder="${t("Найти бумагу, ISIN, банк", "Find a security, ISIN, bank")}" aria-label="${t("Поиск по позициям", "Search positions")}">
@@ -599,14 +622,18 @@ function holdings(){
     <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l mh">${t("Где", "Where")}</th><th class="mh mt">${t("Кол-во", "Qty")}</th><th class="mh mt">${t("Цена", "Price")}</th>
       <th class="mh">${t("Стоимость", "Value")}</th><th class="mh mt">${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.windowLabel(WL.ui.per || "all").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
       ${groups || `<tbody><tr><td colspan="9" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
+      ${m.preview && lock ? `<tbody><tr class="lockrow"><td>${ICON.lock}${m.preview.isins ? t(`${m.preview.isins} ${WL.pl(m.preview.isins, ["бумага", "бумаги", "бумаг"], ["", ""])} по отдельности — в полном отчёте`, `${m.preview.isins} individual ${m.preview.isins === 1 ? "security" : "securities"} in the full report`)
+        : t("Позиции по бумагам — в полном отчёте", "Individual positions are in the full report")}
+        <button class="link" type="button" data-buy="holdings">${t("Открыть", "Unlock")}</button></td>${PH}<td></td><td></td><td></td></tr></tbody>` : ""}
       <tfoot><tr><td>${t("Итого", "Total")}</td>${PH}<td class="n">${(r => r && (r.exact || r.coverage > 0) ? `<b class="${r.earned < 0 ? "dn" : "up"}" title="${esc(r.exact ? t("Прибыль / убыток за период без учёта пополнений и снятий — по выпискам", "Profit / loss for the period net of deposits and withdrawals — from the statements") : t("Прибыль / убыток за период — оценка по позициям", "Profit / loss for the period — estimate from positions"))}">${r.earnedPct != null && isFinite(r.earnedPct) ? sgn(r.earnedPct) + esc(fmt.pct(Math.abs(r.earnedPct), 1)) : ""}</b><span class="sub">${r.exact ? "" : "≈ "}${sgn(r.earned)}${esc(money(Math.abs(r.earned)))}</span>` : "")(per())}</td>
         <td class="n strong">${esc(money(liveMode(m) ? m.mkt.nowTotal : m.total))}</td><td class="n w">100%</td></tr></tfoot></table></div>
-    ${m.mkt ? `<p class="fine">${t(`«Сейчас» — биржевые цены на ${new Date(m.mkt.at).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}, акции с задержкой до 15 минут. Облигации, ноты и деньги без биржевой котировки — по выписке; у нот показан базовый актив.`,
+    ${m.mkt && !m.preview ? `<p class="fine">${t(`«Сейчас» — биржевые цены на ${new Date(m.mkt.at).toLocaleTimeString("ru-RU", {hour: "2-digit", minute: "2-digit"})}, акции с задержкой до 15 минут. Облигации, ноты и деньги без биржевой котировки — по выписке; у нот показан базовый актив.`,
       `“Now” — market prices at ${new Date(m.mkt.at).toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit"})}, stocks delayed up to 15 minutes. Bonds, notes and cash without a listed price stay at statement values; notes show their underlying.`)}</p>` : ""}
   </section>`;
 }
 
 function currenciesAndDates(){
+  if(M().preview) return "";                 // предпросмотр: валюты позиций и сроки погашений известны только после полного чтения
   const m = M(), lock = locked() && !WL.printing;
   const cc = agg(m).byCcy.filter(c => Math.abs(c.value) > 0.5);
   const tl = m.timeline.slice(0, 14);
@@ -635,11 +662,12 @@ function fileCard(f, s, m, notes){
   return `<article class="card doc${d && !d.use && !d.history ? " off" : ""}">
     <div class="dh"><span class="di">${ICON.file}</span><div class="dn"><b>${esc(f.name)}</b>
       <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
-      ${d && (d.use || d.history) && d.recon ? recBadge(d.recon.status, d.recon.open) : ""}</div>
+      ${d && (d.use || d.history) && d.recon && !d.preview ? recBadge(d.recon.status, d.recon.open) : ""}</div>
+    ${d && d.preview ? `<p class="dst">${esc(t(`Предпросмотр: прочитаны сводные страницы ${d.preview.pages.join(", ")} из ${d.preview.total}; остальные — после оплаты`, `Preview: summary pages ${d.preview.pages.join(", ")} of ${d.preview.total} read; the rest after payment`))}</p>` : ""}
     ${status ? `<p class="dst">${esc(status)}</p>` : ""}
     ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
       `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
-    ${d && (d.use || d.history) && d.recon && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
+    ${d && (d.use || d.history) && d.recon && !d.preview && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
       ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
         "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
     ${raw && raw.recheck && raw.recheck.after ? `<p class="dst">${esc(raw.recheck.kept === "new" && raw.recheck.after.status === "ok"

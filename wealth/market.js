@@ -11,6 +11,7 @@ const LIVE = ["stock", "etf", "fund", "metal", "crypto", "alt", "other"];
 const RESOLVE_TTL = 7 * 864e5;
 
 const keyOf = p => {
+  if(p.table === "S") return null;                 // строка сводной таблицы (класс активов, итог раздела) — не бумага, котировки у неё нет
   if(p.cls === "note") return "note|" + String(p.under || p.name || "").slice(0, 80);
   if(!LIVE.includes(p.cls)) return null;
   if(!p.isin && !p.ticker && !p.name) return null;

@@ -94,6 +94,7 @@ async function unlockWith(sid, r, restored){
   WL.store.del(PENDING);
   if(r.amount === 0) WL.store.del(PROMO_KEY);
   await primeGrant();
+  if(WL.onUnlocked) setTimeout(() => WL.onUnlocked(), 0);          // выписки, прочитанные по сводкам, — дочитать целиком
   if(restored) return;
   const seen = "wl_purchase_" + String(sid).slice(-16);
   if(!WL.store.get(seen)){ WL.store.set(seen, 1); track("Purchase", {value: typeof r.amount === "number" ? r.amount : PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); }

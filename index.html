@@ -167,6 +167,12 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
   border-color:rgba(243,189,88,.35); background:radial-gradient(80% 140% at 100% 0%, rgba(243,189,88,.12), transparent 60%), linear-gradient(180deg, #121B28, #0D131B)}
 .paywall h2{margin:6px 0 4px; font-size:18px} .paywall p{margin:0; font-size:13.5px; max-width:62ch}
 .pa{display:flex; flex-direction:column; align-items:flex-end; gap:8px}
+/* Приманка в предпросмотре: что откроет полный отчёт — с числами из выписок клиента */
+.paywall.hook{padding:22px 26px; border-color:rgba(243,189,88,.45); box-shadow:0 0 0 1px rgba(243,189,88,.12), var(--shadow); align-items:flex-end}
+.paywall.hook h2{font-size:22px; letter-spacing:-.01em}
+.hook-list{list-style:none; margin:12px 0 12px; padding:0; display:grid; gap:7px}
+.hook-list li{display:flex; gap:9px; align-items:flex-start; font-size:14.5px; color:var(--ink)}
+.hook-list svg{flex:none; width:16px; height:16px; margin-top:3px; color:var(--accent)}
 
 /* Сводка */
 .brief{margin-top:18px; padding:20px 22px}
@@ -574,15 +580,15 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/config.js?v=b54925549ce3"></script>
 <script src="wealth/track.js?v=689876582aab"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
-<script src="wealth/read.js?v=7a84e6edd872"></script>
-<script src="wealth/report.js?v=a49f5719d760"></script>
-<script src="wealth/market.js?v=75b336d2bdf2"></script>
+<script src="wealth/read.js?v=531d2c626b66"></script>
+<script src="wealth/report.js?v=fef19be6f8f7"></script>
+<script src="wealth/market.js?v=18509df8b319"></script>
 <script src="wealth/period.js?v=f1a477c3fdab"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=d5482dcb642b"></script>
-<script src="wealth/view.js?v=909cb47fbe87"></script>
-<script src="wealth/chat.js?v=f0e886576145"></script>
+<script src="wealth/pay.js?v=373cd327b526"></script>
+<script src="wealth/view.js?v=fe3bc1bce12d"></script>
+<script src="wealth/chat.js?v=34ddb0700a16"></script>
 <script src="wealth/demo.js?v=eb3620067d4a"></script>
-<script src="wealth/app.js?v=ad844ffc7e16"></script>
+<script src="wealth/app.js?v=d3a77490914c"></script>
 </body>
 </html>

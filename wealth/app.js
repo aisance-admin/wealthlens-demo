@@ -112,7 +112,8 @@ async function runQueue(){
       const queued = WL.state.files.filter(f => f.status === "queued");
       if(!queued.length) break;
       queued.forEach(f => { f.status = "reading"; });
-      await Promise.all(queued.map(f => filePool(() => readOne(f, partPool))));
+      const preview = WL.pay.locked();                 // не оплачено — бесплатно читаются только страницы-сводки (read.js)
+      await Promise.all(queued.map(f => filePool(() => readOne(f, partPool, undefined, preview))));
     }
     await autoFix(partPool);
   }finally{
@@ -133,7 +134,7 @@ function errText(e){
 }
 /* У каждого файла своя остановка чтения (кнопка «×» в панели чтения); «Новый отчёт» останавливает все. */
 const fileAborts = {};
-async function readOne(f, pool, only){
+async function readOne(f, pool, only, preview){
   const s = WL.state, gen = s.rid;
   if(!s.files.includes(f)) return;                       // файл отменили, пока он ждал очереди
   f.status = "reading"; f.done = 0; f.total = 0; f.reason = ""; f.found = 0;
@@ -145,8 +146,8 @@ async function readOne(f, pool, only){
   fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
   try{
     const prev = only ? s.docs.find(d => d.fileId === f.id) : null;
-    const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only,
-      ctx: prev ? {institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts} : undefined,
+    const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only, preview,
+      ctx: prev ? Object.assign({institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts}, prev.preview ? {preview: true} : {}) : undefined,
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); },
       onPart: d => { f.found = (f.found || 0) + (d.rows || []).filter(r => r.table !== "S").length; if(!f.inst && d.doc && d.doc.institution) f.inst = d.doc.institution; renderReadingSoon(); }});
     if(WL.state.rid !== gen || ctl.signal.aborted) return;   // пока читали, начали новый отчёт или отменили файл
@@ -186,7 +187,7 @@ async function autoFix(pool){
   if(!m) return;
   for(const info of m.docs.filter(x => (x.use || x.history) && x.recon && (x.recon.status === "mismatch" || x.recon.status === "partial"))){
     const d = s.docs.find(x => x.id === info.id), f = s.files.find(x => x.id === info.id);
-    if(WL.quotaHit || !d || !f || d.recheck) continue;
+    if(WL.quotaHit || !d || !f || d.recheck || d.preview) continue;
     const c = info.recon.checks.filter(x => !x.ok && !x.unchecked).sort((a, b) => (b.scope === "total") - (a.scope === "total"))[0];
     if(c) await recheck(f, d, c, pool);
   }
@@ -235,9 +236,22 @@ async function reread(id){
   const d = s.docs.find(x => x.fileId === id);
   WL.quotaHit = null;
   WL.reading = true; WL.render();
-  try{ await readOne(f, WL.makePool(PART_PARALLEL), d && d.failed && d.failed.length && f.status === "done" ? d.failed.map(x => ({from: x.from, to: x.to})) : undefined); }
+  const full = d && d.preview && !WL.pay.locked();
+  try{ await readOne(f, WL.makePool(PART_PARALLEL), !full && d && d.failed && d.failed.length && f.status === "done" ? d.failed.map(x => ({from: x.from, to: x.to})) : undefined, WL.pay.locked()); }
   finally{ WL.reading = false; await WL.rebuild(); if(WL.quotaHit) quotaMessage(); requestReview(); }
 }
+/* Оплата прошла (или доступ восстановлен): выписки, прочитанные по страницам-сводкам, дочитываются целиком — сами, сразу.
+   Прежний документ предпросмотра заменяется полным (readOne без диапазонов). */
+WL.onUnlocked = () => {
+  const s = WL.state;
+  if(WL.pay.locked()) return;
+  const need = s.files.filter(f => f.status === "done" && s.docs.some(d => d.fileId === f.id && d.preview));
+  if(!need.length) return;
+  const pages = need.reduce((k, f) => { const d = s.docs.find(x => x.fileId === f.id); return k + Math.max(0, (d.preview.total || 0) - (d.preview.pages || []).length); }, 0);
+  need.forEach(f => { f.status = "queued"; });
+  WL.toast(t(`Читаем полный отчёт: ещё ${pages} ${WL.pl(pages, ["страница", "страницы", "страниц"], ["", ""])} — около минуты`, `Reading the full report: ${pages} more ${pages === 1 ? "page" : "pages"} — about a minute`));
+  WL.save(); WL.render(); runQueue();
+};
 /* Отмена файла во время чтения: ещё не прочитанный файл убирается из отчёта; у прочитанного останавливается только
    дочитывание, прочитанное остаётся. */
 function cancelFile(id){
@@ -265,6 +279,7 @@ function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([m
 async function requestReview(force){
   const s = WL.state, m = WL.model;
   if(s.demo || !m || !m.positions.length || WL.reading) return;
+  if(s.docs.some(d => d.preview)) return;                  // предпросмотр: сводку ИИ делаем после оплаты, по полному отчёту
   const key = reviewKey(), comp = WL.reviewComp(m, s);
   if(!force && s.review && s.review.key === key && !s.review.error) return;
   const seq = ++reviewSeq;
@@ -413,6 +428,7 @@ window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.
   const access = WL.pay.returnFromStripe().then(() => WL.pay.check());   // проверка оплаты — сразу, параллельно с курсами и котировками
   if(WL.state.docs.length){ await WL.rebuild(); WL.refreshMarket(); }
   await access;
+  WL.onUnlocked();
   if(WL.chatReturn) await WL.chatReturn();
   if(WL.model && !WL.state.demo && (!WL.reviewNow() || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
   if(WL.track) WL.track("ViewContent", {content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"});

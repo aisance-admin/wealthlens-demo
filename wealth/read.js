@@ -237,7 +237,7 @@ async function openSource(file, kind, askPassword){
       const text = (await pageText(page)).slice(0, 60000);
       texts.push(text); chars.push(text.length); page.cleanup();
     }
-    return {kind, name: file.name, total, truncated: pdf.numPages > MAX_PAGES, fullPages: pdf.numPages, parts: planParts(chars),
+    return {kind, name: file.name, total, truncated: pdf.numPages > MAX_PAGES, fullPages: pdf.numPages, parts: planParts(chars), texts,
       pages: async (from, to) => { const out = [];
         for(let n = from; n <= to; n++){ const page = await pdf.getPage(n); out.push({n, img: await renderPage(page), type: "image/jpeg", text: texts[n - 1]}); page.cleanup(); }
         return out; },
@@ -251,6 +251,69 @@ async function openSource(file, kind, askPassword){
   if(!sheets.length || !sheets.join("").trim()) throw Object.assign(new Error("empty"), {code: "empty"});
   return {kind: "sheet", name: file.name, total: sheets.length, sheets, parts: sheets.map((_, i) => ({from: i + 1, to: i + 1})), close(){}};
 }
+
+/* Бесплатный предпросмотр (владелец, 27.09.2026): пока отчёт не оплачен, ИИ читает только страницы-сводки — первую (банк,
+   счёт, дата) и одну-две самые «сводные» по тексту страницы (итоги, обзор, распределение по классам). Выбор — здесь, по тексту
+   страниц, бесплатно. Короткие файлы (до 3 страниц), фото и таблицы читаются целиком — это и так дёшево. Номера ISIN в тексте
+   всех страниц считаются здесь же: сколько бумаг откроет полный отчёт. После оплаты файл перечитывается целиком (app.js). */
+const STRONG = /summary|overview|allocation|portfolio value|net assets?|account value|total assets|asset mix|сводк|обзор|структур|распределени|стоимость портфеля|итого по портфелю|übersicht|vermögensaufstellung|zusammenfassung|récapitulatif|synthèse|répartition|riepilogo|resumen/gi;
+const WEAK = /total|итог|всего|gesamt|totale/gi;
+const ISIN_RE = /\b[A-Z]{2}[A-Z0-9]{9}\d\b/g;
+function isinOk(v){
+  const digits = v.slice(0, 11).split("").map(c => /\d/.test(c) ? c : String(c.charCodeAt(0) - 55)).join("") + v[11];
+  let sum = 0, dbl = false;
+  for(let i = digits.length - 1; i >= 0; i--){ let n = +digits[i]; if(dbl){ n *= 2; if(n > 9) n -= 9; } sum += n; dbl = !dbl; }
+  return sum % 10 === 0;
+}
+WL.countIsins = texts => { const set = new Set(); for(const t of texts || []) for(const m of String(t).matchAll(ISIN_RE)) if(isinOk(m[0])) set.add(m[0]); return set.size; };
+function previewPlan(src){
+  if(src.kind !== "pdf" || src.total <= 4) return null;                    // до 4 страниц полное чтение стоит как предпросмотр
+  const texts = src.texts || [];
+  const score = texts.map((t, i) => ({n: i + 1, s: (t.match(STRONG) || []).length * 4 + (t.match(WEAK) || []).length
+    - (t.match(ISIN_RE) || []).length * 0.5 - i * 0.2}));                 // страницы позиций (много ISIN) и дальние — ниже
+  const pick = new Set([1]);
+  for(const x of score.filter(x => x.n !== 1 && x.s >= 2).sort((a, b) => b.s - a.s).slice(0, 2)) pick.add(x.n);
+  if(pick.size === 1) pick.add(2);                                       // скан без текста или сводки не нашлось — первые две
+  return {pages: [...pick].sort((a, b) => a - b), total: src.total, isins: WL.countIsins(texts)};
+}
+WL.previewPlan = previewPlan;
+/* Класс по подписи итога раздела («Stocks», «Облигации», «Liquidités»…) — только для строк предпросмотра. */
+const CLS_WORDS = [["cash", /cash|liquid|money market|денежн|деньги|наличн|geld|espèces|contanti|efectivo/i], ["option", /option|future|derivat|опцион|фьючерс/i],
+  ["note", /structured|struktur|структурн|\bnotes?\b|certificat|zertifikat/i], ["bond", /bond|fixed income|облигац|anleihe|obligation|obbligazion|bono|renten/i],
+  ["fund", /etf|fund|фонд|fonds|fondi/i], ["stock", /stock|equit|share|акци|aktie|actions|azion|accion/i],
+  ["alt", /alternative|hedge|private|real estate|недвиж|commodit|metal|gold|золот/i]];
+const clsOfLabel = label => (CLS_WORDS.find(([, re]) => re.test(label || "")) || ["other"])[0];
+WL.clsOfLabel = clsOfLabel;
+const ranges = ps => ps.reduce((out, p) => { const last = out[out.length - 1]; if(last && last.to === p - 1) last.to = p; else out.push({from: p, to: p}); return out; }, []);
+
+/* Строки предпросмотра — по итогам и сводным строкам, которые вернуло чтение страниц-сводок (без ИИ, здесь). */
+function previewRows(doc){
+  // Итог предпросмотра — всегда итог банка. Разбивка на страницах-сводках бывает неполной (у Schwab на первых страницах —
+  // только деньги: $1,25 млн из $48,3 млн, живая проверка 27.09): недостающее — строкой «Остальное — по итогу выписки»;
+  // разбивки нет, она в другой валюте или больше итога — одна строка «итог по выписке».
+  const grand = doc.totals.filter(x => x.scope === "total" && isFinite(x.amount)).sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+  const accts = doc.totals.filter(x => x.scope === "account" && isFinite(x.amount));
+  const tot = grand || (accts.length && accts.every(x => x.currency === accts[0].currency) ? {amount: accts.reduce((k, x) => k + x.amount, 0), currency: accts[0].currency, page: accts[0].page} : null);
+  // разбивка пришла итогами разделов (scope class), а не строками — как у IB: из них и строки, если сходятся с итогом (±2%);
+  // одинаковые суммы («Options» и «Total Short Positions») — один раз
+  if(tot && !doc.rows.length){
+    const seen = new Set(), cl = doc.totals.filter(x => x.scope === "class" && isFinite(x.amount) && (x.currency || doc.ref_ccy || "") === (tot.currency || doc.ref_ccy || ""))
+      .filter(x => { const k = x.amount.toFixed(2); if(seen.has(k)) return false; seen.add(k); return true; });
+    const sum = cl.reduce((k, x) => k + x.amount, 0);
+    if(cl.length >= 2 && Math.abs(sum - tot.amount) <= Math.abs(tot.amount) * 0.02)
+      doc.rows = cl.map(x => ({id: "", doc: doc.id, cls: clsOfLabel(x.label), name: x.label, value: x.amount, ccy: x.currency || doc.ref_ccy || "", page: x.page || 1, table: "S", synthetic: true}));
+  }
+  if(tot){
+    const ccy = tot.currency || doc.ref_ccy || "", same = doc.rows.every(r => (r.ccy || doc.ref_ccy || "") === ccy);
+    const sum = doc.rows.reduce((k, r) => k + (isFinite(r.value) ? r.value : 0), 0), gap = tot.amount - sum;
+    const row = (name, value) => ({id: "", doc: doc.id, cls: "other", name, value: Math.round(value * 100) / 100, ccy, page: tot.page || 1, table: "S", synthetic: true});
+    if(!doc.rows.length || !same || gap < -Math.max(1, Math.abs(tot.amount) * 0.005)) doc.rows = [row(t("Портфель — итог по выписке", "Portfolio — statement total"), tot.amount)];
+    else if(gap > Math.max(1, Math.abs(tot.amount) * 0.005)) doc.rows.push(row(t("Остальное — по итогу выписки", "The rest — per the statement total"), gap));
+    doc.rows.forEach((r, i) => { r.id = `${doc.id}:${i + 1}`; r.doc = doc.id; });
+  }
+  return doc;
+}
+WL.previewRows = previewRows;
 
 /* Слияние частей в документ. Сведения о документе — из первой части, где они есть; счета, итоги и курсы — без повторов. */
 const TYPE_RANK = {portfolio: 5, brokerage: 4, bank: 3, transactions: 2, other_financial: 1, not_financial: 0};
@@ -307,6 +370,8 @@ WL.readFile = async (file, blob, env) => {
     const lim = src.kind === "sheet" ? 1 : PART_PAGES;
     src.parts = env.only.flatMap(r => { const out = []; for(let a = r.from; a <= Math.min(r.to, src.total); a += lim) out.push({from: a, to: Math.min(r.to, a + lim - 1, src.total)}); return out; });
   }
+  const plan = env.preview && !(env.only && env.only.length) ? previewPlan(src) : null;
+  if(plan) src.parts = ranges(plan.pages);
   const want = src.parts.reduce((s, x) => s + x.to - x.from + 1, 0);
   let done = 0;
   const progress = n => { done += n; env.onProgress && env.onProgress(done, want); };
@@ -314,15 +379,21 @@ WL.readFile = async (file, blob, env) => {
   try{
     const partEnv = {auth: env.auth, signal: env.signal, onPages: progress, onPart: env.onPart};
     const [first, ...rest] = src.parts;
-    if(env.ctx) partEnv.ctx = env.ctx;
+    const pv = plan || (env.ctx && env.ctx.preview) ? {preview: true} : {};
+    if(env.ctx || plan) partEnv.ctx = Object.assign({}, env.ctx || {}, pv);
     const r1 = await env.pool(() => readPart(src, first, partEnv));
     const firstOk = !env.ctx && r1.find(r => r.data);
     if(firstOk){
       const d = firstOk.data, m = d.doc || {};
-      partEnv.ctx = {institution: m.institution || "", as_of: m.as_of || "", ref_ccy: m.ref_ccy || "", type: m.type || "", accounts: d.accounts || []};
+      partEnv.ctx = Object.assign({institution: m.institution || "", as_of: m.as_of || "", ref_ccy: m.ref_ccy || "", type: m.type || "", accounts: d.accounts || []}, pv);
     }
     const more = await Promise.all(rest.map(p => env.pool(() => readPart(src, p, partEnv))));
-    return merge(file, src, r1.concat(...more));
+    const doc = merge(file, src, r1.concat(...more));
+    if(plan){
+      doc.preview = {pages: plan.pages, total: plan.total, isins: plan.isins};
+      previewRows(doc);
+    }
+    return doc;
   }finally{ try{ src.close(); }catch(e){} }
 };
 
