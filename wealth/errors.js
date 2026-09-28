@@ -31,6 +31,9 @@ s.onload = () => {
   if(!S || !S.init) return;
   try{
     S.init({dsn: DSN, environment: ENV, release: "wealthlens-web@" + String(window.WL_RELEASE || "dev"), sendDefaultPii: false, maxBreadcrumbs: 30,
+      // Sentry 11 по умолчанию собирает почти всё (IP, cookies, заголовки, тела запросов) — здесь всё выключено явно
+      dataCollection: {userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false, graphQL: {document: false, variables: false},
+        genAI: {inputs: false, outputs: false}, databaseQueryData: false, queues: false, stackFrameVariables: false, frameContextLines: 0},
       integrations: all => all.filter(i => i.name !== "Breadcrumbs").concat([S.breadcrumbsIntegration({console: false, dom: true, fetch: true, xhr: true, history: true})]),
       ignoreErrors: [/ResizeObserver loop/i],
       denyUrls: [/^(chrome|moz|safari-web)-extension:/i, /^chrome:\/\//i],
@@ -45,6 +48,7 @@ s.onload = () => {
         if(ev.message) ev.message = mask(ev.message);
         ev.request = ev.request ? {url: bare(ev.request.url)} : undefined;
         delete ev.extra; delete ev.user;
+        ev.sdk = Object.assign({}, ev.sdk, {settings: Object.assign({}, ev.sdk && ev.sdk.settings, {infer_ip: "never"})});   // сервер Sentry не выводит IP сам
         const where = hint && hint.originalException && hint.originalException.wlWhere;
         ev.tags = Object.assign({}, ev.tags, {stage: stage(), lang: WL.lang || "", paid: !!(WL.pay && WL.pay.locked && !WL.pay.locked())}, where ? {where} : {});
         return ev;
