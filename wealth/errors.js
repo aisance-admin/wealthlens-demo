@@ -1,6 +1,7 @@
 /* WealthLens · отчёты о сбоях приложения — в Sentry (проект wealthlens-web, регион ЕС). Уходят тип ошибки, место в коде,
    начало текста ошибки (числа, ISIN, почта скрыты), браузер и шаг отчёта (загрузка, чтение, предпросмотр, отчёт). Не уходят:
-   содержимое выписок и отчёта, названия файлов, адрес страницы с параметрами, вывод консоли, запись экрана.
+   IP-адрес (Sentry сам вычисляет по нему только страну и город), содержимое выписок и отчёта, названия файлов, адрес страницы
+   с параметрами, вывод консоли, запись экрана.
    Cookies Sentry не ставит, это защита работы сервиса — согласия не ждёт. Ключ — из настроек страницы (сборка сайта берёт
    его с сервера); на локальном стенде выключено, для проверок — ?sentry=http://<ключ>@127.0.0.1:<порт>/<проект>.
    Библиотека — со своего адреса (wealth/vendor/sentry); ошибки до её загрузки копятся и уходят после. */
@@ -50,7 +51,7 @@ s.onload = () => {
         delete ev.extra; delete ev.user;
         ev.sdk = Object.assign({}, ev.sdk, {settings: Object.assign({}, ev.sdk && ev.sdk.settings, {infer_ip: "never"})});   // сервер Sentry не выводит IP сам
         const where = hint && hint.originalException && hint.originalException.wlWhere;
-        ev.tags = Object.assign({}, ev.tags, {stage: stage(), lang: WL.lang || "", paid: !!(WL.pay && WL.pay.locked && !WL.pay.locked())}, where ? {where} : {});
+        ev.tags = Object.assign({}, ev.tags, {stage: stage(), lang: WL.lang || "", paid: !(WL.state || {}).demo && !!(WL.pay && WL.pay.locked && !WL.pay.locked())}, where ? {where} : {});
         return ev;
       }});
     removeEventListener("error", onError); removeEventListener("unhandledrejection", onReject);
