@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://www.facebook.com https://*.facebook.com; connect-src 'self' https://api.euroaff.eu https://www.facebook.com https://*.facebook.com https://connect.facebook.net; worker-src 'self' blob:; frame-src https://www.facebook.com; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://www.facebook.com https://*.facebook.com; connect-src 'self' https://api.euroaff.eu https://api-eu.mixpanel.com https://o4512164079730688.ingest.de.sentry.io https://www.facebook.com https://*.facebook.com https://connect.facebook.net; worker-src 'self' blob:; frame-src https://www.facebook.com; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E %3Cdefs%3E %3ClinearGradient id=%22fl%22 x1=%2224%22 y1=%2217%22 x2=%2240%22 y2=%2247%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFF3D1%22/%3E%3Cstop offset=%22.48%22 stop-color=%22%23F3BD58%22/%3E%3Cstop offset=%221%22 stop-color=%22%23B27A26%22/%3E%3C/linearGradient%3E %3ClinearGradient id=%22fr%22 x1=%224%22 y1=%2210%22 x2=%2260%22 y2=%2254%22 gradientUnits=%22userSpaceOnUse%22%3E%3Cstop offset=%220%22 stop-color=%22%23FFE2A3%22/%3E%3Cstop offset=%221%22 stop-color=%22%23C8913A%22/%3E%3C/linearGradient%3E %3C/defs%3E %3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%230B111A%22/%3E %3Ccircle cx=%2223.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Ccircle cx=%2240.5%22 cy=%2232%22 r=%2214.5%22 fill=%22none%22 stroke=%22url(%23fr)%22 stroke-width=%224%22/%3E %3Cpath d=%22M32 20.25A14.5 14.5 0 0 1 32 43.75A14.5 14.5 0 0 1 32 20.25Z%22 fill=%22url(%23fl)%22/%3E %3C/svg%3E">
 <title>WealthLens · отчёт по портфелю</title>
@@ -509,6 +509,21 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .pos tr.gh td:first-child,.pos .nm b{-webkit-hyphens:auto; hyphens:auto}   /* «Альтернатив-ные активы» на 320 px */
 }
 
+/* Согласие на cookies (карточку создаёт track.js): маленькая, в левом углу, страницу не перекрывает и не сдвигает */
+.consent{position:fixed; left:16px; bottom:16px; z-index:90; width:min(360px, calc(100vw - 32px)); display:grid; gap:8px;
+  padding:12px 14px 10px; border-radius:14px; font:13px/1.45 var(--sans); background:rgba(14,20,29,.94); border:1px solid var(--line-2);
+  box-shadow:var(--shadow); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
+  opacity:0; transform:translateY(8px); transition:opacity .25s ease, transform .25s ease}
+.consent.in{opacity:1; transform:none}
+.consent p{margin:0; color:var(--ink-2)}
+.consent a{color:var(--accent)}
+.consent div{display:flex; gap:6px; justify-content:flex-end}
+.consent button{border:0; background:none; color:var(--muted); border-radius:8px; padding:7px 9px; font:500 13px/1 var(--sans); cursor:pointer}
+.consent button:hover{color:var(--ink)}
+.consent button.primary{background:var(--accent-soft); color:var(--accent); box-shadow:inset 0 0 0 1px rgba(243,189,88,.35); padding:7px 13px}
+.consent button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.consent{transition:none}}
+
 /* Печать: светлая бумага, всё раскрыто, без кнопок */
 @media print{
   :root{--ground:#fff; --surface:#fff; --ink:#111; --ink-2:#333; --muted:#666; --line:#ddd; --line-2:#bbb; --accent:#9A6A12; --good:#0F7A5C; --risk:#B42318; --info:#1F5FBF; --watch:#9A6A12;
@@ -576,19 +591,20 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Позиция"></aside>
 <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.csv,.tsv,.txt,.xlsx,.xlsm,.xls,.ods,.htm,.html,application/pdf,image/*">
 <input type="file" id="folderInput" multiple hidden webkitdirectory directory>
+<script src="wealth/config.js?v=57d5e010027f"></script>
+<script src="wealth/errors.js?v=956ff37dca68"></script>
 <script src="wealth/boot.js?v=85ca2c787c9a"></script>
-<script src="wealth/config.js?v=b54925549ce3"></script>
-<script src="wealth/track.js?v=689876582aab"></script>
+<script src="wealth/track.js?v=24e544864638"></script>
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=531d2c626b66"></script>
 <script src="wealth/report.js?v=fef19be6f8f7"></script>
 <script src="wealth/market.js?v=18509df8b319"></script>
 <script src="wealth/period.js?v=f1a477c3fdab"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=373cd327b526"></script>
-<script src="wealth/view.js?v=eba453049827"></script>
-<script src="wealth/chat.js?v=ad01aacfd385"></script>
+<script src="wealth/pay.js?v=a9c628c98593"></script>
+<script src="wealth/view.js?v=e2ff02048758"></script>
+<script src="wealth/chat.js?v=9a21d4f7e00a"></script>
 <script src="wealth/demo.js?v=eb3620067d4a"></script>
-<script src="wealth/app.js?v=fdb2f22025f7"></script>
+<script src="wealth/app.js?v=f42aa9c17ac5"></script>
 </body>
 </html>

@@ -83,6 +83,7 @@ async function addFiles(list){
   if(WL.state.demo) leaveDemo(false);
   const s = WL.state;
   let dup = 0;
+  const kinds = [];
   for(const f of files){
     const kind = WL.fileKind(f);
     const entry = {id: WL.uid(), name: f.name, path: f.relPath || "", size: f.size, kind: kind || "", status: kind ? "queued" : "skipped",
@@ -92,8 +93,9 @@ async function addFiles(list){
       if(entry.hash && s.files.some(x => x.hash === entry.hash)){ dup++; continue; }
       WL.blobs[entry.id] = f; WL.files.put(entry.id, f);
     }
-    s.files.push(entry);
+    s.files.push(entry); kinds.push(kind || "unsupported");
   }
+  if(WL.track && kinds.length) WL.track("Files Added", {files: kinds.length, kinds: [...new Set(kinds)].sort().join("+"), duplicates: dup, in_report: s.files.length});
   if(dup) WL.toast(dup === 1 ? t("Этот файл уже в отчёте", "This file is already in the report") : t(`${dup} файла уже в отчёте`, `${dup} files are already in the report`));
   WL.save(); WL.render(); runQueue();
 }
@@ -105,6 +107,7 @@ let abort = new AbortController();
 async function runQueue(){
   if(WL.reading) return;
   WL.reading = true; WL.quotaHit = null;
+  const t0 = Date.now();
   const partPool = WL.makePool(PART_PARALLEL), filePool = WL.makePool(FILE_PARALLEL);
   WL.render();
   try{
@@ -119,10 +122,21 @@ async function runQueue(){
   }finally{
     WL.reading = false;
     await WL.rebuild();
+    trackRead(t0);
     if(WL.quotaHit) quotaMessage();
     await WL.refreshMarket();
     requestReview();
   }
+}
+/* Итог чтения — в аналитику: только счётчики (файлы, страницы, позиции, сверка) и время, без сумм и названий. */
+function trackRead(t0){
+  if(!WL.track || WL.state.demo) return;
+  const s = WL.state, m = WL.model, files = s.files.filter(f => f.kind), pv = m && m.preview;
+  const ok = files.filter(f => f.status === "done").length, recon = m ? m.docs.filter(x => x.recon).map(x => x.recon.status) : [];
+  WL.track(!ok ? "Read Failed" : pv ? "Preview Ready" : "Report Ready", {files: files.length, read: ok, failed: files.filter(f => f.status === "error").length,
+    pages: pv ? pv.read : s.docs.reduce((k, d) => k + (d.pages || []).length, 0), pages_total: pv ? pv.total : s.docs.reduce((k, d) => k + (d.pageCount || 0), 0),
+    securities: pv ? pv.isins || 0 : m ? m.positions.length : 0, recon_ok: recon.filter(x => x === "ok").length,
+    recon_off: recon.filter(x => x === "mismatch" || x === "partial").length, seconds: Math.round((Date.now() - t0) / 1000), limit: WL.quotaHit || "none"});
 }
 function errText(e){
   const c = e && e.code;
@@ -161,7 +175,7 @@ async function readOne(f, pool, only, preview){
     WL.pay.extendPaid();
   }catch(e){
     if(WL.state.rid !== gen || ctl.signal.aborted) return;
-    if(!(e && e.code)) console.error("WealthLens: файл не прочитан", e);
+    if(!(e && e.code)){ console.error("WealthLens: файл не прочитан", e); if(WL.reportError) WL.reportError(e, "read"); }
     f.status = e && e.code === "password" ? "skipped" : "error"; f.reason = errText(e);
   }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); }
   WL.save();
@@ -228,7 +242,7 @@ async function recheck(f, d, c, pool){
     const after = recScore(WL.reconOf(cand, s)), better = after.rank > before.rank || (after.rank === before.rank && after.diff < before.diff * 0.5);
     Object.assign(d.recheck, {after, kept: better ? "new" : "old"});
     if(better) s.docs[s.docs.indexOf(d)] = Object.assign(cand, {recheck: d.recheck});
-  }catch(e){ if(!(e && e.code)) console.error("WealthLens: самопроверка", e); }
+  }catch(e){ if(!(e && e.code)){ console.error("WealthLens: самопроверка", e); if(WL.reportError) WL.reportError(e, "recheck"); } }
   finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); f.status = "done"; f.checking = false; WL.save(); await WL.rebuild(); }
 }
 async function reread(id){
@@ -249,6 +263,7 @@ WL.onUnlocked = () => {
   if(!need.length){ if(WL.model && !WL.reading) requestReview(); return; }     // всё прочитано целиком — остаётся сводка ИИ
   const pages = need.reduce((k, f) => { const d = s.docs.find(x => x.fileId === f.id); return k + Math.max(0, (d.preview.total || 0) - (d.preview.pages || []).length); }, 0);
   need.forEach(f => { f.status = "queued"; });
+  if(WL.track) WL.track("Report Unlocked", {files: need.length, pages_left: pages});
   WL.toast(t(`Читаем полный отчёт: ещё ${pages} ${WL.pl(pages, ["страница", "страницы", "страниц"], ["", ""])} — около минуты`, `Reading the full report: ${pages} more ${pages === 1 ? "page" : "pages"} — about a minute`));
   WL.save(); WL.render(); runQueue();
 };
@@ -265,6 +280,7 @@ function cancelFile(id){
 }
 function quotaMessage(){
   const paid = !WL.pay.locked();
+  if(WL.track) WL.track("Limit Reached", {scope: WL.quotaHit || "service", paid});
   WL.dialog({eyebrow: t("Лимит чтения", "Reading limit"), title: t("На сегодня страницы закончились", "No more pages for today"),
     body: `<p>${WL.quotaHit === "budget" && !paid ? t("Сегодня бесплатных предпросмотров было больше обычного, и бесплатная часть на сегодня закрыта. Полный отчёт открывается как обычно — оплата и чтение работают; или загляните завтра.",
         "There were more free previews than usual today, so the free part is closed until tomorrow. The full report works as usual — payment and reading are open; or come back tomorrow.")
@@ -291,6 +307,7 @@ async function requestReview(force){
   WL.reviewing = false;
   s.review = r && !r.error && r.summary ? {summary: r.summary, alerts: r.alerts || [], documents: r.documents || [], questions: r.questions || [], key, comp, base: m.base, lang: WL.lang, at: Date.now()}
     : {error: (r && r.error) || "failed", key, comp};
+  if(WL.track) WL.track(s.review.error ? "Summary Failed" : "Summary Ready", s.review.error ? {error: String(s.review.error).slice(0, 30)} : {alerts: s.review.alerts.length, questions: s.review.questions.length});
   WL.save(); WL.render();
 }
 const reviewSoon = () => { clearTimeout(reviewTimer); reviewTimer = setTimeout(() => requestReview(), 1500); };
@@ -387,12 +404,12 @@ document.addEventListener("click", async e => {
   if(el.id === "newBtn") return WL.state.demo ? leaveDemo() : newReport();
   if(el.id === "langBtn"){ const u = new URL(location.href); u.searchParams.set("lang", WL.EN ? "ru" : "en"); location.href = u.toString(); return; }
   if(el.id === "dlBtn"){ if(WL.pay.locked()) return WL.pay.pending() ? undefined : WL.pay.open("bar"); const m = $("#dlMenu"); m.hidden = !m.hidden; e.stopPropagation(); return; }
-  if(d.dl){ $("#dlMenu").hidden = true; return d.dl === "pdf" ? WL.printReport() : WL.excel(); }
+  if(d.dl){ $("#dlMenu").hidden = true; if(WL.track) WL.track("Export", {format: d.dl}); return d.dl === "pdf" ? WL.printReport() : WL.excel(); }
   const menu = $("#dlMenu"); if(menu && !menu.hidden && !el.closest("#dlMenu")) menu.hidden = true;
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
-  if(d.per){ WL.ui.per = d.per; return WL.render(); }
+  if(d.per){ if(WL.track && WL.ui.per !== d.per) WL.track("Period Changed", {period: d.per}); WL.ui.per = d.per; return WL.render(); }
   if(d.navAll !== undefined){ WL.ui.navAll = !WL.ui.navAll; return WL.render(); }
-  if(d.tab){ WL.ui.tab = d.tab; WL.render(); const b = document.querySelector(".tabs"); if(b && b.getBoundingClientRect().top < 0) b.scrollIntoView({block: "start"}); return; }
+  if(d.tab){ if(WL.track && WL.ui.tab !== d.tab) WL.track("Tab Opened", {tab: d.tab}); WL.ui.tab = d.tab; WL.render(); const b = document.querySelector(".tabs"); if(b && b.getBoundingClientRect().top < 0) b.scrollIntoView({block: "start"}); return; }
   if(d.val){ WL.ui.val = d.val; return WL.render(); }
   if(d.bench){ WL.ui.bench = d.bench; return WL.render(); }
   if(d.refreshMarket !== undefined) return WL.refreshMarket();
@@ -424,7 +441,7 @@ window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.
 
 /* ── Запуск ─────────────────────────────────────────────────────────── */
 (async () => {
-  if(WL.state.docs.length){ try{ WL.model = WL.build(WL.state); }catch(e){ console.error(e); WL.model = null; } }
+  if(WL.state.docs.length){ try{ WL.model = WL.build(WL.state); }catch(e){ console.error(e); if(WL.reportError) WL.reportError(e, "build"); WL.model = null; } }
   if(WL.state.docs.length) await Promise.race([WL.pay.prime(), new Promise(r => setTimeout(r, 400))]);   // оплаченный отчёт открывается сразу открытым
   WL.render();
   const access = WL.pay.returnFromStripe().then(() => WL.pay.check());   // проверка оплаты — сразу, параллельно с курсами и котировками

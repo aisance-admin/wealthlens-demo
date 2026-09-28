@@ -179,6 +179,7 @@ pay.open = async source => {
   if(u0 && !confirmed(u0)){ busy = true; await pay.check(); busy = false; if(!pay.locked() || unlockOf(s.rid)) return; }
   const gift = pay.promo();
   busy = true;
+  track("Paywall Opened", {source: String(source || ""), gift: !!gift});
   const {choice} = await WL.dialog({
     eyebrow: gift ? t("Подарочный код", "Gift code") : t("Полный отчёт", "Full report"),
     title: gift ? t("Открыть полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),

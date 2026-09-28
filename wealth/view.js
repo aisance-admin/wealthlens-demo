@@ -45,7 +45,7 @@ function upload(){
     </ol>
     <p class="privacy">${ICON.lock}<span>${t("Выписки читает наша технология на основе ИИ. Мы не храним ни файлы, ни результат: отчёт остаётся в этом браузере.",
       "Statements are read by our AI-based technology. We store neither the files nor the result: the report stays in this browser.")}
-      ${WL.pay.ON_SITE ? `<a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Подробнее", "Details")}</a>` : ""}</span></p>
+      ${WL.pay.ON_SITE ? `<a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Подробнее", "Details")}</a>` : ""}${WL.pay.ON_SITE && (window.WL_MP_TOKEN || window.WL_PIXEL_ID) ? ` · <a href="#" data-cookies>${t("Cookies", "Cookies")}</a>` : ""}</span></p>
   </section>`;
 }
 

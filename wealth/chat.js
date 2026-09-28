@@ -233,6 +233,7 @@ async function turn(topic, text){
   const body = Object.assign({lang: WL.lang, rid: rid(), topic: {kind: topic.kind, title: topic.title, text: topic.text, level: topic.level, positions: topic.refs || []},
     messages: ch.messages.map(m => ({role: m.role, text: m.text})), report: reportFor(topic.refs), preview: !S().demo && WL.pay.locked(),
     tally: tally() || undefined, packs: packs()}, auth());
+  if(WL.track) WL.track("Assistant Message", {topic: String(topic.kind || ""), typed: !!text, preview: !!body.preview, demo: !!S().demo});
   const r = await WL.api("/chat", body, {timeout: 285000});
   C.pending.delete(id);
   if(r && r.credits){ C.credits = Object.assign(r.credits, {rid: rid()}); keepTally(r.credits); }
