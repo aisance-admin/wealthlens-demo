@@ -43,8 +43,8 @@ function upload(){
       <li><b>${t("Читаем каждую страницу", "We read every page")}</b><span>${t("Как человек: таблицы, итоги, валюты — с помощью ИИ.", "Like a person would: tables, totals, currencies — with AI.")}</span></li>
       <li><b>${t("Получаете отчёт", "You get the report")}</b><span>${t("Здесь в браузере, в PDF и в Excel.", "Here in the browser, as PDF and as Excel.")}</span></li>
     </ol>
-    <p class="privacy">${ICON.lock}<span>${t("Выписки читает наша технология на основе ИИ. Мы не храним ни файлы, ни результат: отчёт остаётся в этом браузере.",
-      "Statements are read by our AI-based technology. We store neither the files nor the result: the report stays in this browser.")}
+    <p class="privacy">${ICON.lock}<span>${t("Выписки читает наша технология на основе ИИ. Страницы хранятся зашифрованными, только пока их читают, — потом удаляются. Отчёт остаётся в этом браузере.",
+      "Statements are read by our AI-based technology. Pages are kept encrypted only while they are read, then deleted. The report stays in this browser.")}
       ${WL.pay.ON_SITE ? `<a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Подробнее", "Details")}</a>` : ""}${WL.pay.ON_SITE && (window.WL_MP_TOKEN || window.WL_PIXEL_ID) ? ` · <a href="#" data-cookies>${t("Cookies", "Cookies")}</a>` : ""}</span></p>
   </section>`;
 }
@@ -54,7 +54,9 @@ function fileLine(f){
   const d = S().docs.find(x => x.fileId === f.id), m = M() && M().docs.find(x => x.id === f.id);
   let meta = "", st = f.status;
   if(f.status === "reading" && f.checking) meta = t(`перепроверяю: сумма не сошлась с итогом${f.total ? ` · ${f.done || 0} из ${f.total} стр.` : ""}`, `re-checking: the sum didn't match the total${f.total ? ` · ${f.done || 0} of ${f.total} pages` : ""}`);
-  else if(f.status === "reading") meta = f.total ? [f.inst, f.found ? t(`найдено ${f.found} ${WL.pl(f.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${f.found} ${f.found === 1 ? "position" : "positions"} found`) : "",
+  else if(f.status === "reading" && f.phase === "upload") meta = t(`отправляем страницы на сервер · ${f.up || 0} из ${f.upTotal} частей`, `sending pages to the server · ${f.up || 0} of ${f.upTotal} parts`);
+  else if(f.status === "reading") meta = f.total ? [f.phase === "server" ? t("читаем на сервере", "reading on the server") : "", f.inst,
+      f.found ? t(`найдено ${f.found} ${WL.pl(f.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${f.found} ${f.found === 1 ? "position" : "positions"} found`) : "",
       t(`${f.done || 0} из ${f.total} стр.`, `${f.done || 0} of ${f.total} pages`)].filter(Boolean).join(" · ") : t("открываю файл…", "opening the file…");
   else if(f.status === "queued") meta = t("в очереди", "queued");
   else if(f.status === "skipped" || f.status === "error") meta = f.reason || t("не прочитан", "not read");
@@ -97,7 +99,7 @@ function readWait(){
   const virt = files.reduce((k, f) => k + (f.status === "reading" ? fileWait(f).virt : f.total && /done|error|skipped/.test(f.status) ? f.total : 0), 0);
   const left = (w.length ? Math.max(...w.map(x => x.left || 0)) : 0) + (queued ? partS(6) * Math.ceil(queued / 3) : 0);
   const over = active.some(f => (f.fly || []).some(p => (now - p.t0) / 1000 > 1.3 * partS(p.pages)));   // порция дольше обычного
-  const stage = active.some(f => f.checking) ? 2 : active.length && active.every(f => !f.total) && !files.some(f => f.status === "done") ? 0 : 1;
+  const stage = active.some(f => f.checking) ? 2 : active.some(f => f.phase === "upload") || (active.length && active.every(f => !f.total) && !files.some(f => f.status === "done")) ? 0 : 1;
   return {pages, done: files.reduce((k, f) => k + (f.done || 0), 0), pct: pages ? Math.min(99, Math.round(100 * virt / pages)) : 0, left, over, stage,
     found: files.reduce((k, f) => k + (f.found || 0), 0), banks: [...new Set(files.map(f => f.inst).filter(Boolean))],
     secs: Math.max(0, (now - (WL.readT0 || now)) / 1000)};
@@ -132,10 +134,22 @@ function readingPanel(){
     <div class="rbar" data-w="bar" aria-hidden="true"><i style="width:${w.pct}%"></i></div>
     <ol class="steps" data-w="steps" aria-label="${t("Шаги", "Steps")}">${stepsHtml(w.stage)}</ol>
     <p class="rinfo"><span data-w="found">${esc(foundText(w))}</span><span class="tip" data-w="tip">${esc(tipAt(w.secs))}</span></p>
-    ${w.left > 90 ? `<p class="rnote">${coarse ? t("Не уходите со страницы — экран не погаснет, пока читаем. Закроете — продолжим при следующем открытии.", "Stay on this page — the screen stays on while we read. If you close it, reading resumes next time.")
-      : t("Можно переключиться на другую вкладку — процент виден в её заголовке.", "You can switch tabs — progress shows in the tab title.")}</p>` : ""}
+    ${noteHtml(active, w, coarse)}
     <ul class="files" aria-live="polite">${files.map(fileLine).join("")}</ul>
   </section>`;
+}
+/* Что можно делать во время ожидания. Фоновое чтение (30.09): пока страницы уходят на сервер — не закрывать; когда ушли — можно
+   закрыть страницу или телефон, сервер дочитает сам. Чтение из браузера (предпросмотр) — прежние слова, только при долгом ожидании. */
+function noteHtml(active, w, coarse){
+  const reading = active.filter(f => f.status === "reading");
+  if(reading.some(f => f.phase === "upload"))
+    return `<p class="rnote">${t("Отправляем страницы на сервер — не закрывайте страницу, это быстро.", "Sending the pages to the server — keep this page open, it's quick.")}</p>`;
+  if(reading.length && reading.every(f => f.phase === "server"))
+    return `<p class="rnote ok">${ICON.check}<span>${t("Можно закрыть страницу или телефон — выписки дочитаются на сервере. Откройте сайт позже, отчёт будет здесь.",
+      "You can close this page or lock your phone — the statements finish reading on the server. Come back later, the report will be here.")}</span></p>`;
+  if(w.left <= 90) return "";
+  return `<p class="rnote">${coarse ? t("Не уходите со страницы — экран не погаснет, пока читаем. Закроете — продолжим при следующем открытии.", "Stay on this page — the screen stays on while we read. If you close it, reading resumes next time.")
+    : t("Можно переключиться на другую вкладку — процент виден в её заголовке.", "You can switch tabs — progress shows in the tab title.")}</p>`;
 }
 /* Раз в секунду (app.js): время, оценка, полосы, шаги, найденное, подсказка и процент в заголовке вкладки — без перерисовки панели,
    чтобы не сбивать анимацию и фокус. */

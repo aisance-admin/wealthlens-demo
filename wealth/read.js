@@ -408,6 +408,90 @@ WL.readFile = async (file, blob, env) => {
   }finally{ try{ src.close(); }catch(e){} }
 };
 
+/* Фоновое чтение (30.09.2026, владелец: «закрыл телефон — всё должно дочитаться»). Страницы часть за частью уходят на сервер
+   (/jobs/part, по две сразу), дальше сервер читает их сам — вкладку можно закрыть; браузер забирает готовое по мере чтения, в том
+   числе при следующем открытии (задание запомнено в отчёте, env.job). Сервер без фонового чтения или отчёт без права на него
+   (не оплачен) — {fallback}, и файл читается как раньше. env: как у readFile плюс job, onJob(job|null), onUpload(отправлено, всего). */
+const JOB_POLL = 4000;
+WL.readFileBg = async (file, blob, env) => {
+  const kind = kindOf(blob);
+  if(!kind) throw Object.assign(new Error("unsupported"), {code: "unsupported"});
+  const src = await openSource(blob, kind, env.askPassword);
+  const opt = t => ({timeout: t, signal: env.signal});
+  try{
+    const parts = src.parts.map(p => [p.from, p.to]);
+    let job = env.job && Array.isArray(env.job.parts) && env.job.parts.length === parts.length ? env.job : null;
+    let st = null;
+    for(let round = 0; round < 2; round++){
+      if(!job){
+        const r = await WL.api("/jobs/new", Object.assign({file: src.name, total: src.total, parts, lang: WL.lang}, env.auth ? env.auth() : {}), opt(30000));
+        if(!r || r.error || !r.job) return {fallback: true, reason: (r && r.error) || "no job"};
+        job = {id: r.job, token: r.token, parts, at: Date.now()};
+        env.onJob && env.onJob(job);
+      }
+      st = await WL.api(`/jobs/status?job=${job.id}&token=${encodeURIComponent(job.token)}`, undefined, opt(30000));
+      if(st && st.error === "gone"){ job = null; env.onJob && env.onJob(null); continue; }    // задание истекло или удалено — заново
+      break;
+    }
+    if(env.signal && env.signal.aborted) return {aborted: true};
+    if(!job || !st || !st.parts) return {fallback: true, reason: (st && st.error) || "status"};
+    const q = `job=${job.id}&token=${encodeURIComponent(job.token)}`;
+    // 1) отправить части, которых на сервере ещё нет (после перезагрузки — только недостающие)
+    const have = new Set(Object.keys(st.parts).map(p => p.split("-")[0]));
+    const missing = parts.map((p, i) => i).filter(i => !have.has(String(i)));
+    let sent = parts.length - missing.length;
+    env.onUpload && env.onUpload(sent, parts.length);
+    const upPool = WL.makePool(2);
+    await Promise.all(missing.map(i => upPool(async () => {
+      if(env.signal && env.signal.aborted) return;
+      const [from, to] = parts[i], body = {job: job.id, token: job.token, n: i};
+      if(src.kind === "sheet") body.sheet = src.sheets[from - 1]; else body.pages = await src.pages(from, to);
+      for(let attempt = 0; ; attempt++){
+        if(env.signal && env.signal.aborted) return;
+        const r = await WL.api("/jobs/part", body, opt(120000));
+        if(r && r.ok) break;
+        if(r && ["gone", "forbidden", "bad part", "too_many_pages"].includes(r.error)) throw Object.assign(new Error("job " + r.error), {code: "job"});
+        if(attempt >= 3) throw Object.assign(new Error("upload failed"), {code: "upload"});
+        await WL.sleep([2000, 5000, 12000][attempt]);
+      }
+      body.pages = null;
+      env.onUpload && env.onUpload(++sent, parts.length);
+    })));
+    if(env.signal && env.signal.aborted) return {aborted: true};
+    // 2) ждать; готовые части забирать сразу — позиции появляются в отчёте по мере чтения
+    const got = {};
+    for(;;){
+      if(env.signal && env.signal.aborted) return {aborted: true};
+      if(st && st.error === "gone") throw Object.assign(new Error("job gone"), {code: "job"});
+      if(st && st.parts){
+        const ps = st.parts, now = Date.now(), ids = Object.keys(ps);
+        const fresh = ids.filter(p => ps[p].s === "done" && !(p in got));
+        for(let i = 0; i < fresh.length; i += 40){
+          const r = await WL.api(`/jobs/result?${q}&ids=${fresh.slice(i, i + 40).join(",")}`, undefined, opt(60000));
+          Object.assign(got, (r && r.results) || {});
+        }
+        fresh.forEach(p => { if(got[p] && got[p].data && env.onPart) env.onPart(got[p].data); });
+        const pagesOf = p => ps[p].r[1] - ps[p].r[0] + 1, leaf = p => !(got[p] && got[p].split);
+        env.onProgress && env.onProgress(ids.filter(p => ps[p].s === "done" && leaf(p) && got[p]).reduce((k, p) => k + pagesOf(p), 0), src.total);
+        env.onFlight && env.onFlight(ids.filter(p => ps[p].s === "work").map(p => ({pages: pagesOf(p), t0: now - (ps[p].age || 0) * 1000})), 0);
+        const uploaded = parts.every((_, i) => ids.some(p => p.split("-")[0] === String(i)));
+        if(uploaded && ids.every(p => ps[p].s === "done" && got[p])) break;
+      }
+      await WL.sleep(JOB_POLL);
+      st = await WL.api(`/jobs/status?${q}`, undefined, opt(30000));
+    }
+    // 3) документ — из листьев: часть, поделённая на сервере, заменена своими половинами
+    const results = Object.keys(got).filter(p => !got[p].split).map(p => {
+      const part = {from: st.parts[p].r[0], to: st.parts[p].r[1]};
+      return got[p].data ? {part, data: got[p].data} : {part, error: got[p].error || "failed"};
+    }).sort((a, b) => a.part.from - b.part.from);
+    const doc = merge(file, src, results);
+    WL.api("/jobs/done", {job: job.id, token: job.token}, {timeout: 20000});      // удалить задание на сервере сразу, не ждать суток
+    env.onJob && env.onJob(null);
+    return doc;
+  }finally{ try{ src.close(); }catch(e){} }
+};
+
 /* Пул: не больше n частей одновременно на весь отчёт (лимиты сервера и распознавания). */
 WL.makePool = n => {
   let active = 0; const q = [];

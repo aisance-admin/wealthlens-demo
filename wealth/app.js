@@ -14,7 +14,9 @@ function load(){
   // на телефоне вкладку легко закрыть). Файл, прерванный дважды подряд, не мучаем — помечаем, его можно повторить.
   delete s.qa;
   s.files.forEach(f => { if(!/queued|reading/.test(f.status)) return;
-    f.resumes = (f.resumes || 0) + 1; delete f.fly; delete f.plan; delete f.started; f.checking = false;
+    delete f.fly; delete f.plan; delete f.started; delete f.phase; f.checking = false;
+    if(f.job){ f.status = "queued"; f.done = 0; f.total = 0; return; }     // читается на сервере — забрать готовое, прерыванием не считается
+    f.resumes = (f.resumes || 0) + 1;
     if(f.resumes > 2){ f.status = "error"; f.reason = t("чтение прервалось — нажмите «Повторить»", "reading was interrupted — use “Try again”"); }
     else { f.status = "queued"; f.done = 0; f.total = 0; } });
   return Object.assign(fresh(), s);
@@ -165,13 +167,28 @@ async function readOne(f, pool, only, preview){
   fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
   try{
     const prev = only ? s.docs.find(d => d.fileId === f.id) : null;
-    const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only, preview,
-      ctx: prev ? Object.assign({institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts}, prev.preview ? {preview: true} : {}) : undefined,
+    const common = {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword,
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); },
       onFlight: (fl, n) => { f.fly = fl; f.started = n; renderReadingSoon(); },
       onPlan: pl => { f.plan = pl; },
       onPartTime: (pages, sec) => { if(WL.notePart) WL.notePart(pages, sec); },
-      onPart: d => { f.found = (f.found || 0) + (d.rows || []).filter(r => r.table !== "S").length; if(!f.inst && d.doc && d.doc.institution) f.inst = d.doc.institution; renderReadingSoon(); }});
+      onPart: d => { f.found = (f.found || 0) + (d.rows || []).filter(r => r.table !== "S").length; if(!f.inst && d.doc && d.doc.institution) f.inst = d.doc.institution; renderReadingSoon(); }};
+    // Полное чтение — фоновое, на сервере (30.09.2026): после отправки страниц вкладку можно закрыть. Предпросмотр, дочитывание
+    // частей и перепроверка — как раньше, из браузера; сервер без фонового чтения — тоже как раньше.
+    let doc = null;
+    if(!preview && !only && WL.bgRead !== false){
+      const t1 = Date.now();
+      const r = await WL.readFileBg(f, blob, Object.assign({}, common, {job: f.job,
+        onJob: j => { if(j){ f.job = j; if(WL.track) WL.track("Background Started", {parts: j.parts.length}); } else delete f.job; WL.save(); },
+        onUpload: (k, n) => { const was = f.phase; f.phase = k < n ? "upload" : "server"; f.up = k; f.upTotal = n;
+          if(was === "upload" && f.phase === "server" && WL.track) WL.track("Pages Sent", {parts: n, seconds: Math.round((Date.now() - t1) / 1000)});
+          renderReadingSoon(); }}));
+      if(r && r.fallback){ if(r.reason === "jobs_off") WL.bgRead = false; }
+      else if(r && r.aborted) return;
+      else doc = r;
+    }
+    if(!doc) doc = await WL.readFile(f, blob, Object.assign({}, common, {only, preview,
+      ctx: prev ? Object.assign({institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts}, prev.preview ? {preview: true} : {}) : undefined}));
     if(WL.state.rid !== gen || ctl.signal.aborted) return;   // пока читали, начали новый отчёт или отменили файл
     const merged = prev ? WL.mergeDocs(prev, doc) : doc;
     merged.accts = await WL.acctPrints(merged);
@@ -186,7 +203,8 @@ async function readOne(f, pool, only, preview){
     if(WL.state.rid !== gen || ctl.signal.aborted) return;
     if(!(e && e.code)){ console.error("WealthLens: файл не прочитан", e); if(WL.reportError) WL.reportError(e, "read"); }
     f.status = e && e.code === "password" ? "skipped" : "error"; f.reason = errText(e);
-  }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); delete f.fly; delete f.plan; delete f.started; if(f.status === "done") delete f.resumes; }
+  }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); delete f.fly; delete f.plan; delete f.started; delete f.phase; delete f.up; delete f.upTotal;
+    if(f.status === "done") delete f.resumes; }
   WL.save();
   if(!WL.quotaHit) await WL.rebuild();
 }
@@ -462,7 +480,11 @@ async function awake(on){
   }catch(e){}
 }
 document.addEventListener("visibilitychange", () => { if(WL.reading && document.visibilityState === "visible") awake(true); });
-window.addEventListener("beforeunload", e => { if(WL.reading){ e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => {
+  // переспрашиваем, только пока страницы ещё не на сервере: дальше сервер дочитает сам
+  if(WL.reading && WL.state.files.some(f => /queued|reading/.test(f.status) && f.phase !== "server")){ e.preventDefault(); e.returnValue = ""; }
+});
+if(params.get("jobs") === "0") WL.bgRead = false;          // проверки: читать из браузера, как раньше
 const TITLE = document.title;
 WL.titleBase = TITLE;
 function readDone(){
