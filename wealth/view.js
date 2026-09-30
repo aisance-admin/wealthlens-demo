@@ -645,6 +645,7 @@ function detailOf(p){
     if(p.right) bits.push(`${p.right === "C" ? t("колл", "call") : t("пут", "put")}${p.strike != null ? " " + fmt.num(p.strike, p.strike % 1 ? 2 : 0) : ""}`);
     if(p.date){ const d = fmt.days(p.date); bits.push(t("до ", "exp. ") + fmt.date(p.date) + (d != null && d >= 0 && d <= 60 ? ` · ${d} ${WL.pl(d, ["день", "дня", "дней"], ["day", "days"])}` : "")); }
     if(p.qty < 0) bits.push(t("продан", "short"));
+    if(p.cls === "future" && p.notional) bits.push(t("номинал ", "notional ") + fmt.short(Math.abs(p.notional), p.ccy || "USD"));
   } else if(["bond", "note", "deposit"].includes(p.cls)){
     if(p.coupon != null) bits.push(`${t("купон", "coupon")} ${fmt.num(p.coupon, p.coupon % 1 ? 2 : 0)}%`);
     if(p.date) bits.push(t("погашение ", "matures ") + fmt.date(p.date));
@@ -749,6 +750,7 @@ function files(){
     <div class="docs">${cards.slice(0, 2).join("")}</div></div>${cards.length > 2 ? `<div class="docs more">${cards.slice(2).join("")}</div>` : ""}
   </section>`;
 }
+const futNotional = fu => Object.entries(fu.notional).map(([c, v]) => fmt.short(v, c || "USD")).join(" + ");
 /* Карточка файла: что это за документ, вошёл ли он в отчёт и почему, сверка с итогом банка. */
 function fileCard(f, s, m, notes){
   const d = m.docs.find(x => x.id === f.id), raw = s.docs.find(x => x.fileId === f.id), note = notes.find(n => n.id === f.id);
@@ -765,6 +767,8 @@ function fileCard(f, s, m, notes){
     ${d && (d.use || d.history) && d.recon && !d.preview && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
       ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
         "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
+    ${d && d.fut && !d.preview ? `<p class="dst">${esc(t(`Фьючерсы учтены, как в итоге банка: ${d.fut.mode === "pnl" ? "по результату" : "без стоимости контракта"}. Полная стоимость контрактов — номинал ${futNotional(d.fut)} — показана в позициях.`,
+      `Futures are counted as in the bank's total: ${d.fut.mode === "pnl" ? "by their profit or loss" : "without the contract value"}. The full contract value — notional ${futNotional(d.fut)} — is shown in the positions.`))}</p>` : ""}
     ${raw && raw.recheck && raw.recheck.after ? `<p class="dst">${esc(raw.recheck.kept === "new" && raw.recheck.after.status === "ok"
     ? t("Сумма сначала не сошлась с итогом — выписку перечитали, теперь совпадает.", "The sum first didn't match the total — the statement was re-read and now it matches.")
     : raw.recheck.kept === "new" ? t("Выписку перечитали: расхождение с итогом уменьшилось, но осталось.", "The statement was re-read: the difference shrank but remains.")

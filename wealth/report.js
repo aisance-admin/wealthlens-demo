@@ -106,7 +106,7 @@ function sameHolding(a, b){
   const na = wa.join(" "), nb = wb.join(" ");
   return na.includes(nb) || nb.includes(na) || (wa[0] === wb[0] && (wa[1] || "") === (wb[1] || ""));
 }
-function docRows(d, drop = []){
+function rowsOf(d, drop = []){
   const full = d.rows.some(r => r.table !== "S");
   const out = [], byQv = new Map(), list = accts(d);
   let summaryDropped = 0, dupDropped = 0, acctDropped = 0, unattributed = 0;
@@ -131,6 +131,57 @@ function docRows(d, drop = []){
     out.push(x);
   }
   return {rows: out, summaryDropped, dupDropped, acctDropped, conflict: !!(drop.length && unattributed), summaryOnly: !full && d.rows.length > 0};
+}
+/* Фьючерсы (30.09.2026, выписка IB PortfolioAnalyst у Саши: сумма позиций вдвое больше итога банка). В колонке «Value» у
+   фьючерса банк часто печатает полную стоимость контракта (количество × множитель × цена), а в итог счёта её не включает:
+   там только результат, который банк к тому же обычно каждый день зачисляет деньгами. Как банк считает фьючерсы, видно по
+   его итогу: пробуем «как прочитано», «без стоимости» (0) и «по результату» (стоимость − себестоимость) и берём вариант, при
+   котором сумма сходится с итогом, а если не сходится ни один — заметно более близкий. Итога нет — стоимость считается полной
+   стоимостью контракта, если себестоимость рядом с ней. Полная стоимость контракта остаётся в позиции как номинал (notional):
+   это объём обязательств, а не деньги клиента. */
+function futVariant(r, mode){
+  if(r.cls !== "future" || r.value == null || !isFinite(r.value)) return r;
+  const sep = r.notional != null && isFinite(r.notional);          // номинал записан отдельно — value уже результат
+  if(mode === "read" && !sep) return r;
+  const hasCost = r.cost != null && isFinite(r.cost);
+  const pnl = sep ? r.value : hasCost ? Math.round((r.value - r.cost) * 100) / 100 : null;
+  const value = mode === "zero" ? 0 : mode === "pnl" ? pnl ?? 0 : r.value;
+  // себестоимость фьючерса — стоимость контракта при открытии: рядом с результатом она дала бы бессмысленное «с покупки»
+  return Object.assign({}, r, {value, pnl, notional: sep ? r.notional : r.value, ncost: hasCost ? r.cost : null, cost: null, fut: mode,
+    value_ref: r.value_ref != null && isFinite(r.value_ref) && r.value ? Math.round(r.value_ref * value / r.value * 100) / 100 : null});
+}
+const futMemo = new WeakMap();
+function futMode(d, rows, S){
+  const futs = rows.filter(r => r.cls === "future" && r.value && isFinite(r.value));
+  if(!futs.length) return "read";
+  const sig = [rows.length, d.totals.length, (d.flows || []).length, S.base || "", Object.keys(S.fx || {}).length].concat(futs.map(r => `${r.value}:${r.notional}:${r.cost}`)).join("|");
+  const memo = futMemo.get(d);
+  if(memo && memo.sig === sig) return memo.mode;
+  const score = mode => {
+    const rc = reconcile(d, mode === "read" ? rows : rows.map(r => futVariant(r, mode)), S);
+    const live = rc.checks.filter(c => !c.unchecked), grand = live.filter(c => c.scope === "total"), use = grand.length ? grand : live;
+    return {mode, ok: rc.status === "ok", none: !live.length, diff: use.length ? Math.min(...use.map(c => Math.abs(c.diff))) : Infinity};
+  };
+  const a = score("read");
+  let mode = "read";
+  if(a.none){
+    if(futs.every(r => r.notional == null && r.cost != null && isFinite(r.cost) && Math.abs(r.value - r.cost) <= 0.2 * Math.abs(r.value))) mode = "zero";
+  } else if(!a.ok){
+    const vs = ["zero", "pnl"].map(score).sort((x, y) => (y.ok - x.ok) || (x.diff - y.diff));
+    if(vs[0].ok || vs[0].diff < a.diff * 0.5) mode = vs[0].mode;
+  }
+  futMemo.set(d, {sig, mode});
+  return mode;
+}
+/* Для карточки файла: как учтены фьючерсы и какова полная стоимость их контрактов (в валютах позиций). */
+const futInfo = res => { const fs = res.rows.filter(r => r.fut && r.fut !== "read");
+  return fs.length ? {mode: res.fut, n: fs.length, notional: fs.reduce((m, r) => (m[r.ccy || ""] = (m[r.ccy || ""] || 0) + Math.abs(r.notional || 0), m), {})} : null; };
+function docRows(d, drop = [], S = {}){
+  const res = rowsOf(d, drop);
+  if(!res.rows.some(r => r.cls === "future")) return res;
+  res.fut = futMode(d, drop.length ? rowsOf(d).rows : res.rows, S || {});
+  res.rows = res.rows.map(r => futVariant(r, res.fut));
+  return res;
 }
 
 /* Курсы: rates[ВАЛЮТА] — единиц валюты за 1 единицу валюты отчёта, на дату выписки. */
@@ -264,7 +315,7 @@ function reconcile(doc, rows, S){
 }
 
 /* Сверка одной выписки — для самопроверки после чтения (сравнить прочитанное до и после повторного чтения). */
-WL.reconOf = (d, S) => reconcile(d, docRows(d).rows, S);
+WL.reconOf = (d, S) => reconcile(d, docRows(d, [], S).rows, S);
 
 /* Модель отчёта */
 WL.build = S => {
@@ -277,13 +328,13 @@ WL.build = S => {
       rowsRead: d.rows.length, pages: d.pages, preview: d.preview || null};
     docs.push(info);
     if(!x.use && x.why === "older" && d.rows.length){            // выписка из истории: своя сверка и стоимость на свою дату
-      const hr = docRows(d);
-      info.recon = reconcile(d, hr.rows, S); info.positions = hr.rows.length; info.history = true;
+      const hr = docRows(d, [], S);
+      info.recon = reconcile(d, hr.rows, S); info.positions = hr.rows.length; info.history = true; info.fut = futInfo(hr);
       info.value = hr.rows.reduce((sum, r) => { const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0}; return sum + (a.v || 0) + (b.v || 0); }, 0);
     }
     if(!x.use) continue;
-    const all = docRows(d), pr = x.drop.length ? docRows(d, x.drop) : all;
-    info.summaryDropped = pr.summaryDropped; info.dupDropped = pr.dupDropped; info.summaryOnly = pr.summaryOnly;
+    const all = docRows(d, [], S), pr = x.drop.length ? docRows(d, x.drop, S) : all;
+    info.summaryDropped = pr.summaryDropped; info.dupDropped = pr.dupDropped; info.summaryOnly = pr.summaryOnly; info.fut = futInfo(all);
     info.recon = reconcile(d, all.rows, S);                   // сверка — по всему прочитанному, даже если часть счетов заменена
     if(x.drop.length){
       const byFile = id => (S.docs.find(z => z.id === id) || {});
@@ -333,7 +384,7 @@ WL.build = S => {
   const pv = docs.filter(i => i.use && i.preview);
   M.preview = pv.length ? {files: pv.length, read: pv.reduce((k, i) => k + i.preview.pages.length, 0), total: pv.reduce((k, i) => k + i.preview.total, 0),
     isins: pv.reduce((k, i) => k + (i.preview.isins || 0), 0)} : null;
-  M.hist = historyOf(chosen, conv);
+  M.hist = historyOf(chosen, conv, S);
   M.alerts = alerts(M, S);
   return M;
 };
@@ -364,14 +415,14 @@ function flowsOf(d, conv){
 }
 const posKey = (r, d) => ident(r) + "|" + (r.ccy || d.ref_ccy || "");
 WL.posKey = p => ident(p) + "|" + (p.ccy || "");
-function historyOf(chosen, conv){
+function historyOf(chosen, conv, S){
   const lines = [];
   for(const x of chosen){
     const d = x.d;
     if(!d.as_of || !d.rows.length || d.type === "not_financial" || !(x.use || x.why === "older")) continue;
     const pos = [];
     let value = 0, missing = 0;
-    for(const r of docRows(d).rows){
+    for(const r of docRows(d, [], S).rows){
       const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0};
       if(a.v == null){ missing++; continue; }
       const v = a.v + (b.v || 0); value += v;
@@ -539,14 +590,17 @@ WL.compact = (M, S, opts = {}) => {
     documents: M.docs.map(d => ({id: d.id, file: d.file, institution: d.institution, type: d.type, as_of: d.as_of, reference_currency: d.ref_ccy,
       included: d.use, history: d.history || undefined, excluded_reason: d.use || d.history ? undefined : d.why, accounts: d.accounts.map(a => a.id + (a.label ? " " + a.label : "")),
       positions: d.positions, value_in_report_currency: r2(d.value), pages: d.pageCount, unread_pages: (d.failed || []).map(f => `${f.from}-${f.to}`),
-      summary_rows_ignored: d.summaryDropped || 0, reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
+      summary_rows_ignored: d.summaryDropped || 0, futures_counted_as: d.fut ? (d.fut.mode === "pnl" ? "profit or loss only, as in the bank's total; the contract value is the notional" : "0, as in the bank's total; the contract value is the notional") : undefined,
+      futures_notional: d.fut ? Object.fromEntries(Object.entries(d.fut.notional).map(([c, v]) => [c || d.ref_ccy || "?", r2(v)])) : undefined,
+      reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
         checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
           positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx}))} : undefined,
       reader_notes: d.notes})),
     positions: top.map(p => ({id: p.id, doc: p.doc, class: p.cls, name: p.name, isin: p.isin || undefined, ticker: p.ticker || undefined, qty: p.qty ?? undefined,
       price: p.price ?? undefined, price_in_percent: p.unit === "%" || undefined, value: r2(p.value), currency: p.ccy, value_report_ccy: r2(p.vb),
       accrued_report_ccy: p.ab ? r2(p.ab) : undefined, weight_pct: r2(p.w * 100), date: p.date || undefined, coupon: p.coupon ?? undefined,
-      option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, cost: p.cost ?? undefined, account: p.acct || undefined, institution: p.inst})),
+      option: p.right ? `${p.right} ${p.strike ?? ""} ${p.under || ""}`.trim() : undefined, cost: p.cost ?? undefined, notional: p.notional != null ? r2(p.notional) : undefined,
+      account: p.acct || undefined, institution: p.inst})),
     positions_not_listed: rest.length ? {count: rest.length, value: r2(rest.reduce((s, p) => s + (p.vb || 0), 0))} : undefined,
     automatic_alerts_already_shown: M.alerts.map(a => ({level: a.level, title: a.title})),
     // динамика за периоды (модель Саши): «заработано» без пополнений и снятий, изменение стоимости, как посчитано
