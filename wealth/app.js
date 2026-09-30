@@ -229,9 +229,66 @@ async function autoFix(pool){
   for(const info of m.docs.filter(x => (x.use || x.history) && x.recon && (x.recon.status === "mismatch" || x.recon.status === "partial"))){
     const d = s.docs.find(x => x.id === info.id), f = s.files.find(x => x.id === info.id);
     if(WL.quotaHit || !d || !f || d.recheck || d.preview) continue;
+    if((info.recon.sections || []).some(x => !x.ok && !x.unchecked)){ await repairSections(f, d, pool); continue; }
     const c = info.recon.checks.filter(x => !x.ok && !x.unchecked).sort((a, b) => (b.scope === "total") - (a.scope === "total"))[0];
     if(c) await recheck(f, d, c, pool);
   }
+}
+/* Документ, где страницы `on` заменены новым чтением `fresh`. replace — итоги с этих страниц тоже берутся из нового чтения
+   (прицельная перепроверка раздела), иначе к старым только добавляются новые. */
+function withFresh(d, fresh, on, replace){
+  return Object.assign({}, d, {rows: d.rows.filter(r => !on.has(r.page)).concat(fresh.rows).map((r, i) => Object.assign({}, r, {id: `${d.id}:${i + 1}`, doc: d.id})),
+    totals: replace ? d.totals.filter(x => !on.has(x.page)).concat(fresh.totals) : d.totals.concat(fresh.totals.filter(x => !d.totals.some(y => y.label === x.label && y.amount === x.amount))),
+    flows: (d.flows || []).concat((fresh.flows || []).filter(x => !(d.flows || []).some(y => y.kind === x.kind && y.amount === x.amount))),
+    notes: d.notes.concat(fresh.notes.filter(n => !d.notes.includes(n))),
+    usage: {in: (d.usage.in || 0) + (fresh.usage.in || 0), out: (d.usage.out || 0) + (fresh.usage.out || 0), model: fresh.usage.model || d.usage.model, key: fresh.usage.key || d.usage.key}});
+}
+/* Прицельная перепроверка (30.09.2026, владелец: «официальная выписка IB должна сходиться на 100%, чтение — как часики»). Банк
+   печатает итог каждого раздела позиций; не сошлись разделы — перечитываются страницы именно этих разделов, с подсказкой: какой
+   итог напечатан, сколько получилось и какие строки уже прочитаны. Две попытки: кусками по 4 страницы, потом по 2. Новое чтение
+   раздела остаётся, только если общая сумма стала ближе к итогу банка или раздел сошёлся, а общая сумма не хуже. Числа не
+   подгоняются: не сошлось и после двух попыток — так и показано. */
+async function repairSections(f, d, pool){
+  const s = WL.state, id = d.id;
+  const blob = WL.blobs[f.id] || await WL.files.get(f.id);
+  if(!blob) return;
+  WL.blobs[f.id] = blob;
+  const cur = () => s.docs.find(x => x.id === id) || d;
+  const rec = {at: Date.now(), before: recScore(WL.reconOf(d, s)), kept: "old", sections: []};
+  d.recheck = rec;                                                    // отметка сразу: второй раз не перечитываем
+  f.status = "reading"; f.checking = true; f.done = 0; f.total = 0; renderReadingSoon();
+  const ctl = new AbortController(), stop = () => ctl.abort();
+  fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
+  try{
+    for(const size of [4, 2]){
+      const rc = WL.reconOf(cur(), s);
+      if(rc.status === "ok") break;
+      const bad = (rc.sections || []).filter(c => !c.ok && !c.unchecked && c.pages.length).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff)).slice(0, 6);
+      if(!bad.length) break;
+      for(const c of bad){
+        if(ctl.signal.aborted) return;
+        const lo = c.pages[0], hi = c.pages[c.pages.length - 1];
+        if(hi - lo + 1 > 24) continue;                                // раздел на десятки страниц целиком не перечитываем
+        const pages = Array.from({length: hi - lo + 1}, (_, i) => lo + i), ranges = [];
+        for(let i = 0; i < pages.length; i += size) ranges.push({from: pages[i], to: pages[Math.min(i + size, pages.length) - 1]});
+        const doc = cur(), mine = doc.rows.filter(r => r.table !== "S" && WL.secKey(r.sec) === c.key);
+        const fresh = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only: ranges, onFlight: fl => { f.fly = fl; renderReadingSoon(); },
+          ctx: {institution: doc.institution, as_of: doc.as_of, ref_ccy: doc.ref_ccy, type: doc.type, accounts: doc.accounts,
+            check: {label: c.label, section: c.section, printed: c.amount, read: c.sum, ccy: c.ccy, rows: mine.slice(0, 150).map(r => `${r.name} = ${r.value}`)}},
+          onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); }});
+        if(ctl.signal.aborted) return;
+        if(!fresh.rows.length || fresh.failed.length) continue;       // часть не дочиталась — старое не трогаем
+        const cand = withFresh(doc, fresh, new Set(pages), true);
+        const was = recScore(WL.reconOf(doc, s)), now = WL.reconOf(cand, s), after = recScore(now);
+        const fixed = (now.sections || []).some(x => x.key === c.key && x.ok);
+        const better = after.rank > was.rank || (after.rank === was.rank && (after.diff < was.diff - 0.005 || (fixed && after.diff <= was.diff + 0.005)));
+        rec.sections.push({section: c.section, pages: [lo, hi], size, fixed, kept: better ? "new" : "old"});
+        if(better){ s.docs[s.docs.indexOf(doc)] = Object.assign(cand, {recheck: rec}); rec.kept = "new"; }
+      }
+    }
+    rec.after = recScore(WL.reconOf(cur(), s));
+  }catch(e){ if(!(e && e.code)){ console.error("WealthLens: перепроверка разделов", e); if(WL.reportError) WL.reportError(e, "repair"); } }
+  finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); delete f.fly; f.status = "done"; f.checking = false; WL.save(); await WL.rebuild(); }
 }
 function recheckPages(d){
   const n = d.pageCount || 1;
@@ -260,12 +317,7 @@ async function recheck(f, d, c, pool){
       ctx: {institution: d.institution, as_of: d.as_of, ref_ccy: d.ref_ccy, type: d.type, accounts: d.accounts, check: {label: c.label, printed: c.amount, read: c.shown ?? c.sum, ccy: c.ccy}},
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); }});
     if(ctl.signal.aborted || !fresh.rows.length) return;
-    const on = new Set(pages);
-    const cand = Object.assign({}, d, {rows: d.rows.filter(r => !on.has(r.page)).concat(fresh.rows).map((r, i) => Object.assign({}, r, {id: `${d.id}:${i + 1}`, doc: d.id})),
-      totals: d.totals.concat(fresh.totals.filter(x => !d.totals.some(y => y.label === x.label && y.amount === x.amount))),
-      flows: (d.flows || []).concat((fresh.flows || []).filter(x => !(d.flows || []).some(y => y.kind === x.kind && y.amount === x.amount))),
-      notes: d.notes.concat(fresh.notes.filter(n => !d.notes.includes(n))),
-      usage: {in: (d.usage.in || 0) + (fresh.usage.in || 0), out: (d.usage.out || 0) + (fresh.usage.out || 0), model: fresh.usage.model || d.usage.model, key: fresh.usage.key || d.usage.key}});
+    const cand = withFresh(d, fresh, new Set(pages), false);
     const after = recScore(WL.reconOf(cand, s)), better = after.rank > before.rank || (after.rank === before.rank && after.diff < before.diff * 0.5);
     Object.assign(d.recheck, {after, kept: better ? "new" : "old"});
     if(better) s.docs[s.docs.indexOf(d)] = Object.assign(cand, {recheck: d.recheck});

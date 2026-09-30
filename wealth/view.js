@@ -53,7 +53,7 @@ function upload(){
 function fileLine(f){
   const d = S().docs.find(x => x.fileId === f.id), m = M() && M().docs.find(x => x.id === f.id);
   let meta = "", st = f.status;
-  if(f.status === "reading" && f.checking) meta = t(`перепроверяю: сумма не сошлась с итогом${f.total ? ` · ${f.done || 0} из ${f.total} стр.` : ""}`, `re-checking: the sum didn't match the total${f.total ? ` · ${f.done || 0} of ${f.total} pages` : ""}`);
+  if(f.status === "reading" && f.checking) meta = t(`сверяем с итогами банка${f.total ? ` · ${f.done || 0} из ${f.total} стр.` : ""}`, `checking against the bank's totals${f.total ? ` · ${f.done || 0} of ${f.total} pages` : ""}`);
   else if(f.status === "reading" && f.phase === "upload") meta = t(`отправляем страницы на сервер · ${f.up || 0} из ${f.upTotal} частей`, `sending pages to the server · ${f.up || 0} of ${f.upTotal} parts`);
   else if(f.status === "reading") meta = f.total ? [f.phase === "server" ? t("читаем на сервере", "reading on the server") : "", f.inst,
       f.found ? t(`найдено ${f.found} ${WL.pl(f.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${f.found} ${f.found === 1 ? "position" : "positions"} found`) : "",
@@ -407,7 +407,7 @@ function hero(){
       <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
         const open = worst === "ok" ? i.docs.reduce((k, d) => k + ((d.recon && d.recon.open) || 0), 0) : 0;
         return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
-          <div class="iv"><b>${esc(money(i.value))}</b>${i.docs.some(d => d.preview) ? "" : recBadge(worst, open)}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
+          <div class="iv"><b>${esc(money(i.value))}</b>${i.docs.some(d => d.preview) ? "" : recBadge(worst, open, i.docs.some(d => S().files.some(f => f.id === d.id && /queued|reading/.test(f.status))))}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
     </div>
   </section>`;
 }
@@ -446,12 +446,13 @@ function coverageOf(m){
   const n = (k, one, few, many, en1, enN) => t(`${k} ${WL.pl(k, [one, few, many], ["", ""])}`, `${k} ${k === 1 ? en1 : enN}`);
   const why = {};
   docs.filter(d => !d.use && !d.history).forEach(d => { why[d.why] = (why[d.why] || 0) + 1; });
-  const hist = docs.filter(d => d.history), histBad = hist.filter(d => d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
+  const busy = new Set(files.filter(f => /queued|reading/.test(f.status)).map(f => f.id));     // перепроверяется — вывод по её итогу
+  const hist = docs.filter(d => d.history), histBad = hist.filter(d => !busy.has(d.id) && d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
   const reading = files.filter(f => /queued|reading/.test(f.status)).length;
   const broken = files.filter(f => (f.status === "error" || f.status === "skipped") && !docs.some(d => d.id === f.id)).length;
   const pages = used.reduce((k, d) => k + (d.failed || []).reduce((q, x) => q + x.to - x.from + 1, 0), 0);
   const cut = used.filter(d => d.truncated).length;
-  const bad = used.filter(d => d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
+  const bad = used.filter(d => !busy.has(d.id) && d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
   const checked = used.filter(d => d.recon && d.recon.status === "ok").length;
   const open = used.filter(d => d.recon && d.recon.status === "ok" && d.recon.open).length;
   const twice = used.filter(d => d.conflict && d.conflict.length).length;
@@ -508,7 +509,17 @@ function checkLine(c){
   const got = (c.group && c.group !== c.ccy ? t(`по позициям в ${c.group}`, `positions in ${c.group}`) : t("прочитано", "read")) + (c.shownAcc ? t(" с НКД", " incl. accrued") : "");
   return `<li class="bad">${ICON.warn}<span>${what} — ${got}: ${esc(fmt.money(c.shown ?? c.sum, c.ccy, 2))}</span></li>`;
 }
-function recBadge(st, open){
+/* Строки сверки в карточке. Сошлось — одна строка общего итога и «ещё N итогов выписки совпали» (у PortfolioAnalyst их десяток,
+   30.09.2026), плюс частичные итоги, которые не сошлись; «не проверено» без причины не показываем. Не сошлось — все проверки. */
+function checkLines(rc){
+  if(rc.status !== "ok") return rc.checks.slice(0, 8).map(checkLine).join("") + (rc.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${rc.checks.length - 8}`, `and ${rc.checks.length - 8} more`)}</span></li>` : "");
+  const main = rc.checks.find(c => c.ok && c.scope === "total" && !c.part) || rc.checks.find(c => c.ok), more = rc.checks.filter(c => c.ok && c !== main).length;
+  const bad = rc.checks.filter(c => !c.ok && !c.unchecked), na = rc.checks.filter(c => c.unchecked && c.unchecked !== "other");
+  return [main].map(checkLine).join("") + (more ? `<li class="ok">${ICON.check}<span>${t(`ещё ${more} ${WL.pl(more, ["итог", "итога", "итогов"], ["", ""])} выписки ${more === 1 ? "совпал" : "совпали"}`, `${more} more ${more === 1 ? "total matches" : "totals match"}`)}</span></li>` : "")
+    + bad.concat(na).slice(0, 6).map(checkLine).join("");
+}
+function recBadge(st, open, busy){
+  if(busy) return `<span class="badge none" title="${t("Сумма позиций сверяется с итогами, напечатанными в выписке", "The positions are being checked against the totals printed in the statement")}">${t("проверяем", "checking")}</span>`;
   if(st === "ok" && open) return `<span class="badge part" title="${t(`Общий итог совпал с итогом в выписке, но ${open} ${WL.pl(open, ["частичный итог", "частичных итога", "частичных итогов"], ["", ""])} (по валютам или счетам) — нет`,
     `The grand total matches the statement, but ${open} ${open === 1 ? "subtotal" : "subtotals"} (by currency or account) ${open === 1 ? "doesn't" : "don't"}`)}">${ICON.warn}${t(`сошлось · ${open} уточнить`, `matches · ${open} to check`)}</span>`;
   if(st === "ok") return `<span class="badge ok" title="${t("Сумма позиций совпала с итогом, напечатанным в выписке", "The positions add up to the total printed in the statement")}">${ICON.check}${t("сошлось", "matches")}</span>`;
@@ -759,12 +770,12 @@ function fileCard(f, s, m, notes){
   return `<article class="card doc${d && !d.use && !d.history ? " off" : ""}">
     <div class="dh"><span class="di">${ICON.file}</span><div class="dn"><b>${esc(f.name)}</b>
       <span class="muted">${esc([d && d.institution, d && TYPE[d.type], d && d.as_of && fmt.date(d.as_of), raw && `${raw.pageCount} ${WL.pl(raw.pageCount, ["стр.", "стр.", "стр."], ["page", "pages"])}`].filter(Boolean).join(" · "))}</span></div>
-      ${d && (d.use || d.history) && d.recon && !d.preview ? recBadge(d.recon.status, d.recon.open) : ""}</div>
+      ${d && (d.use || d.history) && d.recon && !d.preview ? recBadge(d.recon.status, d.recon.open, /queued|reading/.test(f.status)) : ""}</div>
     ${d && d.preview ? `<p class="dst">${esc(t(`Предпросмотр: прочитаны сводные страницы ${d.preview.pages.join(", ")} из ${d.preview.total}; остальные — после оплаты`, `Preview: summary pages ${d.preview.pages.join(", ")} of ${d.preview.total} read; the rest after payment`))}</p>` : ""}
     ${status ? `<p class="dst">${esc(status)}</p>` : ""}
     ${d && d.use && d.replaced && d.replaced.length ? `<p class="dst">${esc(d.replaced.map(z => t(`Счёт ${z.acct} — учтена более свежая выписка «${z.byFile}»${z.byDate ? " на " + fmt.date(z.byDate) : ""}`,
       `Account ${z.acct} — the newer statement “${z.byFile}”${z.byDate ? " as of " + fmt.date(z.byDate) : ""} is used`)).join("; ") + t(". Остальные счета — из этой выписки.", ". The other accounts come from this statement."))}</p>` : ""}
-    ${d && (d.use || d.history) && d.recon && !d.preview && d.recon.checks.length ? `<ul class="checks">${d.recon.checks.slice(0, 8).map(checkLine).join("")}${d.recon.checks.length > 8 ? `<li class="na"><span>${t(`и ещё ${d.recon.checks.length - 8}`, `and ${d.recon.checks.length - 8} more`)}</span></li>` : ""}</ul>
+    ${d && (d.use || d.history) && d.recon && !d.preview && d.recon.checks.length ? `<ul class="checks">${checkLines(d.recon)}</ul>
       ${d.recon.status === "ok" && d.recon.open ? `<p class="dst">${t("Общий итог сошёлся с банком. Частичные итоги, отмеченные ⚠, — нет: возможно, у части позиций неверно прочитаны валюта или счёт. Итог отчёта от этого не меняется, но разбивка по валютам и счетам может быть неточной.",
         "The grand total matches the bank's. The subtotals marked ⚠ don't: the currency or account of some positions may have been read wrong. The report total is unaffected, but the split by currency and account may be off.")}</p>` : ""}` : ""}
     ${d && d.fut && !d.preview ? `<p class="dst">${esc(t(`Фьючерсы учтены, как в итоге банка: ${d.fut.mode === "pnl" ? "по результату" : "без стоимости контракта"}. Полная стоимость контрактов — номинал ${futNotional(d.fut)} — показана в позициях.`,
@@ -774,7 +785,7 @@ function fileCard(f, s, m, notes){
     : raw.recheck.kept === "new" ? t("Выписку перечитали: расхождение с итогом уменьшилось, но осталось.", "The statement was re-read: the difference shrank but remains.")
     : t("Выписку перечитали — расхождение с итогом осталось: похоже, в самой выписке суммы не согласованы.", "The statement was re-read — the difference remains: the statement's own figures seem inconsistent."))}</p>` : ""}
   ${note ? `<p class="dnote">${ICON.spark}<span>${esc(note.text)}</span></p>` : ""}
-    ${raw && raw.notes && raw.notes.length ? (note
+    ${raw && raw.notes && raw.notes.length ? (note || (d && d.recon && d.recon.status === "ok")
       ? `<details class="rn no-print"><summary>${t(`Заметки при чтении страниц · ${raw.notes.length}`, `Notes made while reading pages · ${raw.notes.length}`)}</summary><ul class="rnotes">${raw.notes.slice(0, 8).map(n => `<li>${esc(n)}</li>`).join("")}</ul></details>`
       : `<ul class="rnotes">${raw.notes.slice(0, 5).map(n => `<li>${esc(n)}</li>`).join("")}</ul>`) : ""}
     ${d && (d.summaryDropped || d.dupDropped) ? `<p class="fine">${[d.summaryDropped ? t(`Сводные таблицы (${d.summaryDropped} строк) не учтены — позиции взяты из полного списка.`, `Summary tables (${d.summaryDropped} rows) were ignored — positions come from the complete list.`) : "",

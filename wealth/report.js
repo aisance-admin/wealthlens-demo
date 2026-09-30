@@ -258,6 +258,59 @@ function groupCcy(tot, rows, doc, ccy){
   const other = named.filter(c => c !== ccy);
   return other.length === 1 ? other[0] : named.length === 1 ? named[0] : ccy;
 }
+/* Сумма строк в валюте итога: в своей валюте — как есть; в валюте выписки — стоимость, которую напечатал банк, или его курс;
+   иначе — курс ЕЦБ на дату выписки (приблизительно). val — какое число строки складывать (номинал фьючерсов для итога раздела). */
+function sumIn(pool, ccy, doc, S, val = r => r.value){
+  let sum = 0, acc = 0, approx = false, missing = false;
+  for(const r of pool){
+    const v = val(r);
+    if(v == null || !isFinite(v)) continue;
+    const rc = r.ccy || doc.ref_ccy;
+    if(rc === ccy){ sum += v; acc += r.accrued || 0; continue; }
+    if(ccy === doc.ref_ccy && r.value_ref != null && r.value){ const k = r.value_ref / r.value; sum += v * k; acc += (r.accrued || 0) * k; continue; }
+    const fx = ccy === doc.ref_ccy && doc.fx.find(x => x.currency === rc);
+    if(fx){ sum += v * fx.rate; acc += (r.accrued || 0) * fx.rate; continue; }
+    // через курс ЕЦБ на дату выписки: переводим в валюту итога
+    const base = S.base, tb = (S.fx || {})[fxKey(base, doc.as_of && doc.as_of <= WL.today() ? doc.as_of : "")];
+    if(tb && tb.rates[rc] && (ccy === base || tb.rates[ccy])){
+      const k = (ccy === base ? 1 : tb.rates[ccy]) / tb.rates[rc];
+      sum += v * k; acc += (r.accrued || 0) * k; approx = true; continue;
+    }
+    missing = true;
+  }
+  return {sum, acc, approx, missing};
+}
+/* Разделы (30.09.2026, владелец: «официальная выписка IB должна сходиться на 100%»). Банк печатает итог каждой группы позиций
+   («Total Stocks», «Total Futures»); модель помечает у строки её раздел (sec), у промежуточного итога — тот же раздел
+   (section). Сверка каждого раздела показывает, где именно чтение ошиблось, — страницы этого раздела перечитываются
+   прицельно. Итог раздела бывает с НКД и без, у фьючерсов — полной стоимостью контрактов (номинал): пробуем все варианты. */
+const secKey = s => String(s || "").toLowerCase()
+  .replace(/\((?:cont(?:inued|\.|d\.?)?|fortsetzung|suite|продолжение)\)|\b(?:continued|contd?\.)(?=\s|$)/g, " ")
+  .replace(/^\s*(?:total|subtotal|sub-total|итого|всего|gesamt|summe)\s+/, "")
+  .replace(/[^a-z0-9а-яё%]+/g, " ").trim();
+WL.secKey = secKey;
+function sectionChecks(doc, rows, S){
+  const subs = doc.totals.filter(x => x.section && isFinite(x.amount));
+  if(!subs.length) return [];
+  const groups = new Map();
+  for(const r of rows){ const k = secKey(r.sec); if(k){ if(!groups.has(k)) groups.set(k, []); groups.get(k).push(r); } }
+  const out = [], seen = new Set();
+  for(const tot of subs){
+    const k = secKey(tot.section), ccy = (tot.currency || doc.ref_ccy || "").toUpperCase(), key = [k, tot.account || "", ccy, tot.amount].join("|");
+    if(!k || seen.has(key)) continue;
+    seen.add(key);
+    const pool = (groups.get(k) || []).filter(r => !tot.account || !r.acct || r.acct === tot.account);
+    const pages = [...new Set(pool.map(r => r.page).concat(tot.page).filter(p => p > 0))].sort((a, b) => a - b);
+    if(!pool.length){ out.push({label: tot.label, section: tot.section, key: k, ccy, amount: tot.amount, sum: 0, diff: -tot.amount, ok: false, unchecked: "empty", pages, rows: 0}); continue; }
+    const a = sumIn(pool, ccy, doc, S), n = sumIn(pool, ccy, doc, S, r => r.cls === "future" && r.notional != null ? r.notional : r.value);
+    const tol = a.approx ? Math.max(2, Math.abs(tot.amount) * 0.006) : Math.max(1.01, Math.abs(tot.amount) * 0.0005);
+    const vs = [a.sum, a.sum + a.acc, n.sum].map(v => v - tot.amount), best = vs.reduce((m, v) => Math.abs(v) < Math.abs(m) ? v : m);
+    out.push({label: tot.label, section: tot.section, key: k, ccy, amount: tot.amount, sum: tot.amount + best, diff: best, ok: Math.abs(best) <= tol,
+      unchecked: a.missing ? "fx" : "", pages, rows: pool.length});
+  }
+  return out;
+}
+WL.sectionsOf = (d, S) => sectionChecks(d, docRows(d, [], S).rows, S);
 function reconcile(doc, rows, S){
   let totals = doc.totals.filter(x => ["total", "account", "currency"].includes(x.scope) && isFinite(x.amount));
   // Итог на конец периода банк часто печатает только в сводке периода («Ending Account Value», «Closing balance») — это тот
@@ -281,30 +334,33 @@ function reconcile(doc, rows, S){
       else if(nAcct > 1 || (doc.accounts || []).length > 1) unchecked = "acct";   // счёт не найден среди строк — сравнить не с чем
     }
     if(tot.scope === "currency"){ group = groupCcy(tot, rows, doc, ccy); pool = pool.filter(r => (r.ccy || doc.ref_ccy) === group); }
-    let sum = 0, acc = 0, approx = false, missing = false;
-    for(const r of pool){
-      if(r.value == null) continue;
-      const rc = r.ccy || doc.ref_ccy;
-      if(rc === ccy){ sum += r.value; acc += r.accrued || 0; continue; }
-      if(ccy === doc.ref_ccy && r.value_ref != null){ sum += r.value_ref; acc += r.value && r.accrued ? r.accrued * r.value_ref / r.value : 0; continue; }
-      const fx = ccy === doc.ref_ccy && doc.fx.find(x => x.currency === rc);
-      if(fx){ sum += r.value * fx.rate; acc += (r.accrued || 0) * fx.rate; continue; }
-      // через курс ЕЦБ на дату выписки: переводим в валюту итога
-      const tab = (S.fx || {})[fxKey(ccy, doc.as_of)] || null;
-      const base = S.base, tb = (S.fx || {})[fxKey(base, doc.as_of && doc.as_of <= WL.today() ? doc.as_of : "")];
-      if(tb && tb.rates[rc] && (ccy === base || tb.rates[ccy])){
-        const inBase = r.value / tb.rates[rc], k = ccy === base ? 1 : tb.rates[ccy];
-        sum += inBase * k; acc += (r.accrued || 0) / tb.rates[rc] * k; approx = true; continue;
-      }
-      missing = true;
-    }
+    const {sum, acc, approx, missing} = sumIn(pool, ccy, doc, S);
     if(missing && !unchecked) unchecked = "fx";
     const tol = approx ? Math.max(2, Math.abs(tot.amount) * 0.006) : Math.max(1.01, Math.abs(tot.amount) * 0.0005);
     const d0 = sum - tot.amount, d1 = sum + acc - tot.amount;
     const ok = !unchecked && (Math.abs(d0) <= tol || Math.abs(d1) <= tol);
     const nearAcc = acc !== 0 && Math.abs(d1) < Math.abs(d0);   // что ближе к итогу банка — с НКД или без; разница и показанная сумма — из одного варианта
     checks.push({label: tot.label, scope: tot.scope, account: tot.account, ccy, group, amount: tot.amount, sum, sumAcc: sum + acc,
-      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: nearAcc ? d1 : d0, shown: nearAcc ? sum + acc : sum, shownAcc: nearAcc, ok, approx, missing, unchecked, page: tot.page});
+      withAccrued: ok && Math.abs(d1) <= tol && Math.abs(d0) > tol, diff: nearAcc ? d1 : d0, shown: nearAcc ? sum + acc : sum, shownAcc: nearAcc, ok, approx, missing, unchecked, page: tot.page, tol});
+  }
+  // Итог выписки сошёлся — другие «итоги», которые с ним расходятся, общими быть не могут (30.09.2026, IB PortfolioAnalyst: модель
+  // пометила как итог суммы длинных и коротких позиций, итог облигаций, итог одной таблицы — клиент видел «не сошлось» при верном
+  // чтении). Такой итог объясняем суммой части позиций — длинных, коротких, класса, раздела, валюты: сошёлся как частичный. Не
+  // объясняется и меньше сошедшегося общего — это часть портфеля, «не проверено». Больший общий итог, который не объясняется, так
+  // и остаётся «не сошлось»: за ним могут стоять непрочитанные позиции.
+  if(checks.some(c => c.scope === "total" && c.ok)){
+    const grandAmt = Math.max(...checks.filter(c => c.scope === "total" && c.ok).map(c => Math.abs(c.amount)));
+    const pools = [["long", rows.filter(r => r.value > 0)], ["short", rows.filter(r => r.value < 0)]];
+    for(const k of new Set(rows.map(r => r.cls))) pools.push(["cls:" + k, rows.filter(r => r.cls === k)]);
+    for(const k of new Set(rows.map(r => secKey(r.sec)).filter(Boolean))) pools.push(["sec:" + k, rows.filter(r => secKey(r.sec) === k)]);
+    for(const k of new Set(rows.map(r => r.ccy || doc.ref_ccy).filter(Boolean))) pools.push(["ccy:" + k, rows.filter(r => (r.ccy || doc.ref_ccy) === k)]);
+    for(const c of checks){
+      if(c.ok || c.unchecked) continue;
+      const hit = pools.find(([, pool]) => { const x = sumIn(pool, c.ccy, doc, S);
+        return !x.missing && (Math.abs(x.sum - c.amount) <= c.tol || Math.abs(x.sum + x.acc - c.amount) <= c.tol); });
+      if(hit) Object.assign(c, {ok: true, part: hit[0]});
+      else if(c.scope === "total" && Math.abs(c.amount) < grandAmt - c.tol) c.unchecked = "other";
+    }
   }
   const live = checks.filter(c => !c.unchecked), grand = live.filter(c => c.scope === "total");
   let status;
@@ -315,7 +371,7 @@ function reconcile(doc, rows, S){
 }
 
 /* Сверка одной выписки — для самопроверки после чтения (сравнить прочитанное до и после повторного чтения). */
-WL.reconOf = (d, S) => reconcile(d, docRows(d, [], S).rows, S);
+WL.reconOf = (d, S) => { const rows = docRows(d, [], S).rows, rc = reconcile(d, rows, S); rc.sections = sectionChecks(d, rows, S); return rc; };
 
 /* Модель отчёта */
 WL.build = S => {
@@ -329,13 +385,14 @@ WL.build = S => {
     docs.push(info);
     if(!x.use && x.why === "older" && d.rows.length){            // выписка из истории: своя сверка и стоимость на свою дату
       const hr = docRows(d, [], S);
-      info.recon = reconcile(d, hr.rows, S); info.positions = hr.rows.length; info.history = true; info.fut = futInfo(hr);
+      info.recon = reconcile(d, hr.rows, S); info.recon.sections = sectionChecks(d, hr.rows, S); info.positions = hr.rows.length; info.history = true; info.fut = futInfo(hr);
       info.value = hr.rows.reduce((sum, r) => { const a = conv(d, r, "value"), b = r.accrued ? conv(d, r, "accrued") : {v: 0}; return sum + (a.v || 0) + (b.v || 0); }, 0);
     }
     if(!x.use) continue;
     const all = docRows(d, [], S), pr = x.drop.length ? docRows(d, x.drop, S) : all;
     info.summaryDropped = pr.summaryDropped; info.dupDropped = pr.dupDropped; info.summaryOnly = pr.summaryOnly; info.fut = futInfo(all);
     info.recon = reconcile(d, all.rows, S);                   // сверка — по всему прочитанному, даже если часть счетов заменена
+    info.recon.sections = sectionChecks(d, all.rows, S);
     if(x.drop.length){
       const byFile = id => (S.docs.find(z => z.id === id) || {});
       const items = x.drop.map(z => ({acct: z.acct.id, by: z.by, byFile: byFile(z.by).file || "", byDate: byFile(z.by).as_of || "", why: z.why}));
@@ -595,7 +652,9 @@ WL.compact = (M, S, opts = {}) => {
       reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
         checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
           positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx}))} : undefined,
-      reader_notes: d.notes})),
+      // выписка сошлась с итогом — заметки чтения по частям файла («таблица продолжается», «здесь только аналитика») сводке не
+      // нужны, она пересказывала их как расхождения (30.09.2026); предупреждение о постороннем тексте в документе — всегда
+      reader_notes: d.recon && d.recon.status === "ok" ? (d.notes || []).filter(n => /инструкц|instruction|ignor|проигнорир/i.test(n)) : d.notes})),
     positions: top.map(p => ({id: p.id, doc: p.doc, class: p.cls, name: p.name, isin: p.isin || undefined, ticker: p.ticker || undefined, qty: p.qty ?? undefined,
       price: p.price ?? undefined, price_in_percent: p.unit === "%" || undefined, value: r2(p.value), currency: p.ccy, value_report_ccy: r2(p.vb),
       accrued_report_ccy: p.ab ? r2(p.ab) : undefined, weight_pct: r2(p.w * 100), date: p.date || undefined, coupon: p.coupon ?? undefined,
