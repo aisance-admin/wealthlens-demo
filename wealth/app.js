@@ -171,6 +171,7 @@ async function readOne(f, pool, only, preview){
     if(i >= 0) s.docs[i] = merged; else s.docs.push(merged);
     const quota = merged.failed.some(x => x.error === "quota"), readAny = merged.pages.length || merged.rows.length;
     f.status = readAny ? "done" : "error";
+    f.quota = !readAny && quota;                           // упёрся в бесплатный лимит — после оплаты дочитается сам (WL.onUnlocked)
     if(!readAny) f.reason = quota ? t("лимит бесплатного чтения на сегодня исчерпан", "today's free reading limit is used up") : t("файл не удалось прочитать — попробуйте ещё раз", "the file could not be read — try again");
     WL.pay.extendPaid();
   }catch(e){
@@ -260,11 +261,15 @@ WL.onUnlocked = () => {
   const s = WL.state;
   if(WL.pay.locked()) return;
   const need = s.files.filter(f => f.status === "done" && s.docs.some(d => d.fileId === f.id && d.preview));
-  if(!need.length){ if(WL.model && !WL.reading) requestReview(); return; }     // всё прочитано целиком — остаётся сводка ИИ
-  const pages = need.reduce((k, f) => { const d = s.docs.find(x => x.fileId === f.id); return k + Math.max(0, (d.preview.total || 0) - (d.preview.pages || []).length); }, 0);
-  need.forEach(f => { f.status = "queued"; });
-  if(WL.track) WL.track("Report Unlocked", {files: need.length, pages_left: pages});
-  WL.toast(t(`Читаем полный отчёт: ещё ${pages} ${WL.pl(pages, ["страница", "страницы", "страниц"], ["", ""])} — около минуты`, `Reading the full report: ${pages} more ${pages === 1 ? "page" : "pages"} — about a minute`));
+  // и файлы, которые до оплаты упёрлись в бесплатный лимит страниц и не прочитались совсем (много выписок разом, с историей)
+  const held = s.files.filter(f => f.status === "error" && f.quota);
+  if(!need.length && !held.length){ if(WL.model && !WL.reading) requestReview(); return; }     // всё прочитано целиком — остаётся сводка ИИ
+  const pages = need.reduce((k, f) => { const d = s.docs.find(x => x.fileId === f.id); return k + Math.max(0, (d.preview.total || 0) - (d.preview.pages || []).length); }, 0)
+    + held.reduce((k, f) => k + (f.total || 0), 0);
+  need.concat(held).forEach(f => { f.status = "queued"; f.quota = false; f.reason = ""; });
+  if(WL.track) WL.track("Report Unlocked", {files: need.length + held.length, pages_left: pages});
+  WL.toast(pages ? t(`Читаем полный отчёт: ещё ${pages} ${WL.pl(pages, ["страница", "страницы", "страниц"], ["", ""])} — около минуты`, `Reading the full report: ${pages} more ${pages === 1 ? "page" : "pages"} — about a minute`)
+    : t("Читаем полный отчёт — около минуты", "Reading the full report — about a minute"));
   WL.save(); WL.render(); runQueue();
 };
 /* Отмена файла во время чтения: ещё не прочитанный файл убирается из отчёта; у прочитанного останавливается только
