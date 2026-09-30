@@ -200,6 +200,7 @@ class Quota extends Error { constructor(scope){ super("quota"); this.scope = sco
 WL.Quota = Quota;
 
 /* Одна часть: до трёх повторов при перегрузке, деление пополам при слишком длинном ответе. */
+const slow = res => res.error === "timeout" || (res.error === "http" && res.status === 504);
 async function readPart(src, part, env, depth = 0){
   if(env.signal && env.signal.aborted) return [{part, error: "aborted"}];      // файл отменён — страницы не рисуем и не отправляем
   const body = Object.assign({file: src.name, lang: WL.lang, part: {from: part.from, to: part.to, total: src.total}, ctx: env.ctx || undefined}, env.auth ? env.auth() : {});
@@ -209,14 +210,16 @@ async function readPart(src, part, env, depth = 0){
   if(WL.quotaHit) return [{part, error: "quota"}];
   for(let attempt = 0; attempt < 4; attempt++){
     if(env.signal && env.signal.aborted) return [{part, error: "aborted"}];
-    res = await WL.api("/read", body, {signal: env.signal});
+    res = await WL.api("/read", body, {signal: env.signal, timeout: 250000});
     // Лимит бесплатного чтения: остальные части не отправляем, прочитанное сохраняется — дочитать можно позже.
     if(res.error === "quota"){ WL.quotaHit = res.scope || "free"; return [{part, error: "quota"}]; }
+    // Часть не успела (срок сервера, обрыв функции 504, таймаут): не повторять ту же — сразу делить пополам (30.09: «зависло на 78-й»)
+    if(slow(res) && part.to > part.from && depth < 3) break;
     if(!["busy", "network", "timeout", "http"].includes(res.error) || attempt === 3) break;
     await WL.sleep([2500, 7000, 16000][attempt] + Math.random() * 1500);
   }
   body.pages = null;
-  if((res.error === "too_large" || res.error === "timeout") && part.to > part.from && depth < 3){
+  if((res.error === "too_large" || slow(res)) && part.to > part.from && depth < 3){
     const mid = Math.floor((part.from + part.to) / 2);
     const a = await readPart(src, {from: part.from, to: mid}, env, depth + 1), b = await readPart(src, {from: mid + 1, to: part.to}, env, depth + 1);
     return [].concat(a, b);
@@ -360,7 +363,8 @@ WL.mergeDocs = (a, b) => {
   return out;
 };
 
-/* Чтение файла целиком. env: {pool, auth, signal, askPassword, onProgress(done, total)} */
+/* Чтение файла целиком. env: {pool, auth, signal, askPassword, onProgress(done, total), onPlan([страниц в порции]),
+   onFlight([{pages, t0}], начато порций), onPartTime(страниц, секунд)} */
 WL.readFile = async (file, blob, env) => {
   const kind = kindOf(blob);
   if(!kind) throw Object.assign(new Error("unsupported"), {code: "unsupported"});
@@ -381,13 +385,20 @@ WL.readFile = async (file, blob, env) => {
     const [first, ...rest] = src.parts;
     const pv = plan || (env.ctx && env.ctx.preview) ? {preview: true} : {};
     if(env.ctx || plan) partEnv.ctx = Object.assign({}, env.ctx || {}, pv);
-    const r1 = await env.pool(() => readPart(src, first, partEnv));
+    // порции «в работе» — для полосы и оценки времени на экране чтения (сколько страниц и с какого момента читаются)
+    const flying = new Map(); let seq = 0;
+    const flight = () => env.onFlight && env.onFlight([...flying.values()], seq);
+    env.onPlan && env.onPlan(src.parts.map(p => p.to - p.from + 1));
+    const run = p => env.pool(async () => { const id = ++seq, pages = p.to - p.from + 1, t0 = Date.now(); flying.set(id, {pages, t0}); flight();
+      try{ return await readPart(src, p, partEnv); }
+      finally{ flying.delete(id); flight(); env.onPartTime && env.onPartTime(pages, (Date.now() - t0) / 1000); } });
+    const r1 = await run(first);
     const firstOk = !env.ctx && r1.find(r => r.data);
     if(firstOk){
       const d = firstOk.data, m = d.doc || {};
       partEnv.ctx = Object.assign({institution: m.institution || "", as_of: m.as_of || "", ref_ccy: m.ref_ccy || "", type: m.type || "", accounts: d.accounts || []}, pv);
     }
-    const more = await Promise.all(rest.map(p => env.pool(() => readPart(src, p, partEnv))));
+    const more = await Promise.all(rest.map(run));
     const doc = merge(file, src, r1.concat(...more));
     if(plan){
       doc.preview = {pages: plan.pages, total: plan.total, isins: plan.isins};

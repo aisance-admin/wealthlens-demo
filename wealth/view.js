@@ -64,22 +64,97 @@ function fileLine(f){
     if(d.failed.length) st = "warn";
     else if(m && m.use && m.recon && m.recon.status === "mismatch") st = "warn";
   }
-  const pct = f.total ? Math.round(100 * (f.done || 0) / f.total) : 0;
+  const pct = fileWait(f).pct;
   return `<li class="fl st-${esc(st)}"><span class="fi">${st === "done" ? ICON.check : st === "warn" || st === "error" ? ICON.warn : st === "skipped" ? ICON.dash : '<i class="spin"></i>'}</span>
     <span class="fn">${esc(f.name)}</span><span class="fm">${esc(meta)}</span>
-    ${f.status === "reading" ? `<span class="fb"><i style="width:${pct}%"></i></span>` : ""}
+    ${f.status === "reading" ? `<span class="fb live" data-w="file" data-f="${esc(f.id)}"><i style="width:${pct}%"></i></span>` : ""}
     ${/queued|reading/.test(f.status) ? `<button type="button" class="fx" data-cancel="${esc(f.id)}" title="${t("Остановить чтение и убрать файл", "Stop reading and remove the file")}" aria-label="${t("Отменить", "Cancel")} ${esc(f.name)}">×</button>` : ""}</li>`;
 }
+/* Ожидание (владелец, 30.09: «визуально непонятно, что сейчас обрабатывается — покажи, сколько ждать»; «сидим больше 5 минут, а может
+   быть и все 20 — это время нужно правильно заполнить»). Порция страниц читается 30–60 с (замер 30.09: 3 стр. — 39 с, 7 стр. — 43 с,
+   плотные выписки IB — дольше); оценка подстраивается под фактическую скорость порций этого чтения. Полоса движется по времени
+   внутри порции, а не прыжком; на экране — время с начала, оценка остатка, шаги, что уже найдено, и короткие подсказки. */
+const PART_PAR = 4;                                        // порций одновременно на весь отчёт (app.js PART_PARALLEL)
+const PART_S = pages => 26 + 2.5 * pages;
+const partS = pages => PART_S(pages) * (WL.readPace || 1);
+WL.notePart = (pages, sec) => { const r = Math.max(0.5, Math.min(4, sec / PART_S(pages))); WL.readPace = WL.readPace ? WL.readPace * 0.6 + r * 0.4 : r; };
+const mmss = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
+function fileWait(f){
+  const total = f.total || 0, done = f.done || 0, fly = f.fly || [], now = Date.now();
+  if(!total) return {pct: 0, left: f.status === "reading" ? partS(6) : null, total: 0, virt: 0};
+  const share = p => Math.min(0.92, (now - p.t0) / 1000 / partS(p.pages));
+  const virt = Math.min(total, done + fly.reduce((k, p) => k + p.pages * share(p), 0));
+  const flyLeft = fly.reduce((m, p) => Math.max(m, partS(p.pages) - (now - p.t0) / 1000), 0);
+  const plan = f.plan || [], wait = plan.slice(f.started || 0);                     // порции, до которых очередь ещё не дошла
+  const restPages = plan.length ? wait.reduce((k, x) => k + x, 0) : Math.max(0, total - done - fly.reduce((k, p) => k + p.pages, 0));
+  const restParts = plan.length ? wait.length : Math.ceil(restPages / 8);
+  const restLeft = restParts ? partS(restPages / restParts) * Math.ceil(restParts / PART_PAR) : 0;
+  return {pct: Math.min(99, Math.round(100 * virt / total)), left: Math.max(0, flyLeft) + restLeft, total, virt};
+}
+function readWait(){
+  const files = S().files, active = files.filter(f => f.status === "reading"), queued = files.filter(f => f.status === "queued").length, now = Date.now();
+  const w = active.map(fileWait), pages = files.reduce((k, f) => k + (f.total || 0), 0);
+  const virt = files.reduce((k, f) => k + (f.status === "reading" ? fileWait(f).virt : f.total && /done|error|skipped/.test(f.status) ? f.total : 0), 0);
+  const left = (w.length ? Math.max(...w.map(x => x.left || 0)) : 0) + (queued ? partS(6) * Math.ceil(queued / 3) : 0);
+  const over = active.some(f => (f.fly || []).some(p => (now - p.t0) / 1000 > 1.3 * partS(p.pages)));   // порция дольше обычного
+  const stage = active.some(f => f.checking) ? 2 : active.length && active.every(f => !f.total) && !files.some(f => f.status === "done") ? 0 : 1;
+  return {pages, done: files.reduce((k, f) => k + (f.done || 0), 0), pct: pages ? Math.min(99, Math.round(100 * virt / pages)) : 0, left, over, stage,
+    found: files.reduce((k, f) => k + (f.found || 0), 0), banks: [...new Set(files.map(f => f.inst).filter(Boolean))],
+    secs: Math.max(0, (now - (WL.readT0 || now)) / 1000)};
+}
+const etaText = (left, over) => left < 8 ? (over ? t("плотные страницы — ещё немного", "dense pages — a little longer") : t("почти готово", "almost done"))
+  : left < 60 ? t(`осталось ≈ ${Math.ceil(left / 5) * 5} с`, `≈ ${Math.ceil(left / 5) * 5} s left`) : t(`осталось ≈ ${Math.round(left / 60)} мин`, `≈ ${Math.round(left / 60)} min left`);
+const STEPS = () => [t("Файлы", "Files"), t("Страницы", "Pages"), t("Сверка", "Checks"), t("Сводка", "Summary")];
+const TIPS = () => locked() ? [
+  t("Сейчас читаем только сводные страницы — это бесплатно", "Only the summary pages are read now — for free"),
+  t("В полном отчёте — каждая бумага с ценой и изменением", "The full report lists every security with its price and change"),
+  t("Суммы сверим с итогами банка", "Totals are checked against the bank's"),
+] : [
+  t("Отчёт собирается ниже по мере чтения", "The report builds up below as it reads"),
+  t("Каждую сумму сверяем с итогом банка", "Every total is checked against the bank's"),
+  t("Стоимость по дням — на вкладке над отчётом", "Value by day — in the tab above the report"),
+  t("Старые выписки добавят историю — их можно загрузить и потом", "Older statements add history — upload them any time"),
+  t("Готовый отчёт скачивается в PDF и Excel", "The finished report downloads as PDF and Excel"),
+  t("Вопросы по портфелю — ассистенту, кнопка внизу справа", "Questions about the portfolio — the assistant, bottom right"),
+];
+const tipAt = secs => { const a = TIPS(); return a[Math.floor(secs / 9) % a.length]; };
+const foundText = w => [w.found ? t(`найдено ${w.found} ${WL.pl(w.found, ["позиция", "позиции", "позиций"], ["", "", ""])}`, `${w.found} ${w.found === 1 ? "position" : "positions"} found`) : "",
+  w.banks.slice(0, 3).join(", ")].filter(Boolean).join(" · ");
+const stepsHtml = stage => STEPS().map((s, i) => `<li class="${i < stage ? "done" : i === stage ? "now" : ""}">${i < stage ? ICON.check : "<i></i>"}<span>${esc(s)}</span></li>`).join("");
 function readingPanel(){
   const files = S().files, active = files.filter(f => /queued|reading/.test(f.status));
   if(!WL.reading && !active.length) return "";
-  const pages = files.reduce((s, f) => s + (f.total || 0), 0), done = files.reduce((s, f) => s + (f.done || 0), 0);
-  return `<section class="reading card" id="reading" aria-live="polite">
-    <div class="rh"><span class="orb">${ICON.spark}</span><div><h2>${t("Читаем выписки", "Reading your statements")}</h2>
-      <p class="muted">${pages ? t(`${done} из ${pages} страниц · отчёт собирается ниже по мере чтения`, `${done} of ${pages} pages · the report builds up below as it reads`) : t("готовлю страницы…", "preparing pages…")}</p></div></div>
-    <ul class="files">${files.map(fileLine).join("")}</ul>
+  const w = readWait(), coarse = window.matchMedia && matchMedia("(pointer: coarse)").matches;
+  return `<section class="reading card" id="reading">
+    <div class="rh"><span class="orb">${ICON.spark}</span><div class="rt"><h2>${t("Читаем выписки", "Reading your statements")}</h2>
+      <p class="muted">${w.pages ? `<span data-w="pages">${t(`${w.done} из ${w.pages} стр.`, `${w.done} of ${w.pages} pages`)}</span> · ` : ""}<span data-w="eta" title="${t("Порция страниц читается 30–60 секунд, порции идут параллельно. Оценка уточняется по ходу чтения.", "A batch of pages takes 30–60 seconds; batches run in parallel. The estimate adjusts as reading goes on.")}">${w.pages ? etaText(w.left, w.over) : t("готовим страницы…", "preparing pages…")}</span></p></div>
+      <b class="rtime" data-w="time" role="timer" aria-label="${t("Прошло", "Elapsed")}">${mmss(w.secs)}</b></div>
+    <div class="rbar" data-w="bar" aria-hidden="true"><i style="width:${w.pct}%"></i></div>
+    <ol class="steps" data-w="steps" aria-label="${t("Шаги", "Steps")}">${stepsHtml(w.stage)}</ol>
+    <p class="rinfo"><span data-w="found">${esc(foundText(w))}</span><span class="tip" data-w="tip">${esc(tipAt(w.secs))}</span></p>
+    ${w.left > 90 ? `<p class="rnote">${coarse ? t("Не уходите со страницы — экран не погаснет, пока читаем. Закроете — продолжим при следующем открытии.", "Stay on this page — the screen stays on while we read. If you close it, reading resumes next time.")
+      : t("Можно переключиться на другую вкладку — процент виден в её заголовке.", "You can switch tabs — progress shows in the tab title.")}</p>` : ""}
+    <ul class="files" aria-live="polite">${files.map(fileLine).join("")}</ul>
   </section>`;
 }
+/* Раз в секунду (app.js): время, оценка, полосы, шаги, найденное, подсказка и процент в заголовке вкладки — без перерисовки панели,
+   чтобы не сбивать анимацию и фокус. */
+WL.tickWait = () => {
+  const el = $("#reading");
+  if(el && WL.reading){
+    const w = readWait(), q = s => el.querySelector(`[data-w="${s}"]`);
+    if(q("time")) q("time").textContent = mmss(w.secs);
+    if(q("eta") && w.pages) q("eta").textContent = etaText(w.left, w.over);
+    if(q("bar")) q("bar").firstElementChild.style.width = w.pct + "%";
+    if(q("steps")) q("steps").innerHTML = stepsHtml(w.stage);
+    if(q("found")) q("found").textContent = foundText(w);
+    if(q("tip")) q("tip").textContent = tipAt(w.secs);
+    el.querySelectorAll('[data-w="file"]').forEach(b => { const f = S().files.find(x => x.id === b.dataset.f); if(f) b.firstElementChild.style.width = fileWait(f).pct + "%"; });
+    if(w.pages) document.title = `${w.pct}% · ${t("Читаем выписки", "Reading statements")} · WealthLens`;
+  }
+  const rv = document.querySelector('[data-w="rtime"]');
+  if(rv && WL.reviewing) rv.textContent = mmss(Math.max(0, (Date.now() - (WL.reviewT0 || Date.now())) / 1000));
+};
 WL.renderReading = () => { const el = $("#reading"); if(!el){ if(WL.reading) WL.render(); return; } const html = readingPanel(); if(!html){ WL.render(); return; }
   const tmp = document.createElement("div"); tmp.innerHTML = html; el.replaceWith(tmp.firstElementChild); };
 
@@ -400,6 +475,10 @@ function coverageOf(m){
   return {text: files.length ? parts.join(" · ") : "", warn};
 }
 function coverage(m){
+  if(m.preview && WL.reading && !locked()){              // оплачено, выписки дочитываются: не «предпросмотр», а ход полного чтения
+    const fs = S().files, all = fs.reduce((k, f) => k + (f.total || 0), 0), dn = fs.reduce((k, f) => k + (f.done || 0), 0);
+    return `<div class="cover"><i class="spin"></i><span>${esc(all ? t(`Читаем полный отчёт: ${dn} из ${all} стр.`, `Reading the full report: ${dn} of ${all} pages`) : t("Читаем полный отчёт…", "Reading the full report…"))}</span></div>`;
+  }
   if(m.preview) return `<div class="cover ok">${ICON.check}<span>${esc(t(`Предпросмотр по сводным страницам выписок: прочитано ${m.preview.read} из ${m.preview.total}`, `Preview from the summary pages: ${m.preview.read} of ${m.preview.total} pages read`))}</span></div>`;
   const c = coverageOf(m);
   if(!c.text) return "";
@@ -439,7 +518,9 @@ function brief(){
   const s = S(), r = WL.reviewNow(), old = !r && s.review && s.review.summary, m = M();
   let body;
   if(WL.reading && !r) body = `<p class="muted">${t("Сводка появится, когда все файлы будут прочитаны.", "The summary appears once all files are read.")}</p>`;
-  else if(WL.reviewing) body = `${old ? `<p class="muted small">${t("Состав отчёта изменился — обновляю сводку и выводы…", "The report has changed — updating the summary and findings…")}</p>` : ""}<div class="skel"><i></i><i></i><i style="width:62%"></i></div>`;
+  else if(WL.reviewing) body = `<p class="wait"><i class="spin"></i><span>${old ? t("Обновляем сводку", "Updating the summary") : t("Готовим сводку", "Preparing the summary")}</span>
+      <b data-w="rtime" role="timer">${mmss(Math.max(0, (Date.now() - (WL.reviewT0 || Date.now())) / 1000))}</b><span class="muted">${t("обычно около минуты", "usually about a minute")}</span></p>
+    <div class="skel"><i></i><i></i><i style="width:62%"></i></div>`;
   else if(r && r.summary) body = `<p class="summary">${esc(r.summary)}</p>${r.base && r.base !== m.base ? `<p class="fine">${t(`Суммы в сводке — в ${r.base}.`, `Amounts in the summary are in ${r.base}.`)}</p>` : ""}`;
   else if(old) body = `<p class="muted">${t("Состав отчёта изменился — прежняя сводка к нему не относится.", "The report has changed — the previous summary no longer applies.")} <button class="link" type="button" data-review>${t("Обновить сводку", "Update the summary")}</button></p>`;
   else if(r && r.error) body = `<p class="muted">${t("Сводку получить не удалось.", "Could not get the summary.")} <button class="link" type="button" data-review>${t("Повторить", "Try again")}</button></p>`;

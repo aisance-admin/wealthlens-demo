@@ -10,9 +10,13 @@ const fresh = () => ({v: 2, rid: WL.uid(), client: t("Мой портфель", 
 function load(){
   const s = WL.store.get(STORE);
   if(!s || s.v !== 2 || !Array.isArray(s.files) || !Array.isArray(s.docs)) return fresh();
-  // Чтение, прерванное закрытием вкладки, не продолжается само: файл помечается, его можно повторить.
+  // Чтение, прерванное закрытием или перезагрузкой вкладки, продолжается само при следующем открытии (30.09: ожидание 5–20 минут,
+  // на телефоне вкладку легко закрыть). Файл, прерванный дважды подряд, не мучаем — помечаем, его можно повторить.
   delete s.qa;
-  s.files.forEach(f => { if(/queued|reading/.test(f.status)){ f.status = "error"; f.reason = t("чтение прервалось — нажмите «Повторить»", "reading was interrupted — use “Try again”"); } });
+  s.files.forEach(f => { if(!/queued|reading/.test(f.status)) return;
+    f.resumes = (f.resumes || 0) + 1; delete f.fly; delete f.plan; delete f.started; f.checking = false;
+    if(f.resumes > 2){ f.status = "error"; f.reason = t("чтение прервалось — нажмите «Повторить»", "reading was interrupted — use “Try again”"); }
+    else { f.status = "queued"; f.done = 0; f.total = 0; } });
   return Object.assign(fresh(), s);
 }
 const params = new URLSearchParams(location.search);
@@ -107,7 +111,8 @@ let abort = new AbortController();
 async function runQueue(){
   if(WL.reading) return;
   WL.reading = true; WL.quotaHit = null;
-  const t0 = Date.now();
+  const t0 = WL.readT0 = Date.now();                      // таймер на экране чтения
+  awake(true);
   const partPool = WL.makePool(PART_PARALLEL), filePool = WL.makePool(FILE_PARALLEL);
   WL.render();
   try{
@@ -120,7 +125,7 @@ async function runQueue(){
     }
     await autoFix(partPool);
   }finally{
-    WL.reading = false;
+    WL.reading = false; awake(false); readDone();
     await WL.rebuild();
     trackRead(t0);
     if(WL.quotaHit) quotaMessage();
@@ -151,7 +156,7 @@ const fileAborts = {};
 async function readOne(f, pool, only, preview){
   const s = WL.state, gen = s.rid;
   if(!s.files.includes(f)) return;                       // файл отменили, пока он ждал очереди
-  f.status = "reading"; f.done = 0; f.total = 0; f.reason = ""; f.found = 0;
+  f.status = "reading"; f.done = 0; f.total = 0; f.reason = ""; f.found = 0; f.fly = [];
   renderReadingSoon();
   let blob = WL.blobs[f.id] || await WL.files.get(f.id);
   if(!blob){ f.status = "error"; f.reason = t("файла нет в этом браузере — добавьте его снова", "the file isn't in this browser — add it again"); return; }
@@ -163,6 +168,9 @@ async function readOne(f, pool, only, preview){
     const doc = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only, preview,
       ctx: prev ? Object.assign({institution: prev.institution, as_of: prev.as_of, ref_ccy: prev.ref_ccy, type: prev.type, accounts: prev.accounts}, prev.preview ? {preview: true} : {}) : undefined,
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); },
+      onFlight: (fl, n) => { f.fly = fl; f.started = n; renderReadingSoon(); },
+      onPlan: pl => { f.plan = pl; },
+      onPartTime: (pages, sec) => { if(WL.notePart) WL.notePart(pages, sec); },
       onPart: d => { f.found = (f.found || 0) + (d.rows || []).filter(r => r.table !== "S").length; if(!f.inst && d.doc && d.doc.institution) f.inst = d.doc.institution; renderReadingSoon(); }});
     if(WL.state.rid !== gen || ctl.signal.aborted) return;   // пока читали, начали новый отчёт или отменили файл
     const merged = prev ? WL.mergeDocs(prev, doc) : doc;
@@ -178,7 +186,7 @@ async function readOne(f, pool, only, preview){
     if(WL.state.rid !== gen || ctl.signal.aborted) return;
     if(!(e && e.code)){ console.error("WealthLens: файл не прочитан", e); if(WL.reportError) WL.reportError(e, "read"); }
     f.status = e && e.code === "password" ? "skipped" : "error"; f.reason = errText(e);
-  }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); }
+  }finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); delete f.fly; delete f.plan; delete f.started; if(f.status === "done") delete f.resumes; }
   WL.save();
   if(!WL.quotaHit) await WL.rebuild();
 }
@@ -230,7 +238,7 @@ async function recheck(f, d, c, pool){
   const ctl = new AbortController(), stop = () => ctl.abort();
   fileAborts[f.id] = ctl; abort.signal.addEventListener("abort", stop, {once: true});
   try{
-    const fresh = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only: toRanges(pages),
+    const fresh = await WL.readFile(f, blob, {pool, auth: WL.pay.auth, signal: ctl.signal, askPassword, only: toRanges(pages), onFlight: fl => { f.fly = fl; renderReadingSoon(); },
       ctx: {institution: d.institution, as_of: d.as_of, ref_ccy: d.ref_ccy, type: d.type, accounts: d.accounts, check: {label: c.label, printed: c.amount, read: c.shown ?? c.sum, ccy: c.ccy}},
       onProgress: (done, total) => { f.done = done; f.total = total; renderReadingSoon(); }});
     if(ctl.signal.aborted || !fresh.rows.length) return;
@@ -244,13 +252,13 @@ async function recheck(f, d, c, pool){
     Object.assign(d.recheck, {after, kept: better ? "new" : "old"});
     if(better) s.docs[s.docs.indexOf(d)] = Object.assign(cand, {recheck: d.recheck});
   }catch(e){ if(!(e && e.code)){ console.error("WealthLens: самопроверка", e); if(WL.reportError) WL.reportError(e, "recheck"); } }
-  finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); f.status = "done"; f.checking = false; WL.save(); await WL.rebuild(); }
+  finally{ delete fileAborts[f.id]; abort.signal.removeEventListener("abort", stop); delete f.fly; f.status = "done"; f.checking = false; WL.save(); await WL.rebuild(); }
 }
 async function reread(id){
   const s = WL.state, f = s.files.find(x => x.id === id); if(!f || WL.reading) return;
   const d = s.docs.find(x => x.fileId === id);
   WL.quotaHit = null;
-  WL.reading = true; WL.render();
+  WL.reading = true; WL.readT0 = Date.now(); WL.render();
   const full = d && d.preview && !WL.pay.locked();
   try{ await readOne(f, WL.makePool(PART_PARALLEL), !full && d && d.failed && d.failed.length && f.status === "done" ? d.failed.map(x => ({from: x.from, to: x.to})) : undefined, WL.pay.locked()); }
   finally{ WL.reading = false; await WL.rebuild(); if(WL.quotaHit) quotaMessage(); requestReview(); }
@@ -306,7 +314,7 @@ async function requestReview(force){
   const key = reviewKey(), comp = WL.reviewComp(m, s);
   if(!force && s.review && s.review.key === key && !s.review.error) return;
   const seq = ++reviewSeq;
-  WL.reviewing = true; WL.render();
+  WL.reviewing = true; WL.reviewT0 = Date.now(); WL.render();
   const r = await WL.api("/review", Object.assign({lang: WL.lang, report: WL.compact(m, s)}, WL.pay.auth()), {timeout: 240000});
   if(seq !== reviewSeq) return;
   WL.reviewing = false;
@@ -444,6 +452,29 @@ document.addEventListener("click", async e => {
 });
 window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.preventDefault(); e.returnValue = ""; } });
 
+/* Долгое чтение (5–20 минут на больших выписках): экран не гаснет (Wake Lock — телефон иначе усыпит вкладку и чтение встанет),
+   при попытке закрыть вкладку браузер переспрашивает, в заголовке вкладки — процент, по окончании в фоне — «Отчёт готов». */
+let wake = null;
+async function awake(on){
+  try{
+    if(on && !wake && navigator.wakeLock && document.visibilityState === "visible"){ wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => { wake = null; }); }
+    else if(!on && wake){ const w = wake; wake = null; await w.release(); }
+  }catch(e){}
+}
+document.addEventListener("visibilitychange", () => { if(WL.reading && document.visibilityState === "visible") awake(true); });
+window.addEventListener("beforeunload", e => { if(WL.reading){ e.preventDefault(); e.returnValue = ""; } });
+const TITLE = document.title;
+WL.titleBase = TITLE;
+function readDone(){
+  if(document.visibilityState === "hidden"){
+    document.title = "✓ " + t("Отчёт готов", "Report ready") + " · WealthLens";
+    document.addEventListener("visibilitychange", () => { document.title = TITLE; }, {once: true});
+  } else document.title = TITLE;
+}
+
+/* Таймер ожидания: пока читаются выписки или готовится сводка, раз в секунду обновляются время, оценка и полосы (без перерисовки). */
+setInterval(() => { if((WL.reading || WL.reviewing) && WL.tickWait) WL.tickWait(); }, 1000);
+
 /* ── Запуск ─────────────────────────────────────────────────────────── */
 (async () => {
   if(WL.state.docs.length){ try{ WL.model = WL.build(WL.state); }catch(e){ console.error(e); if(WL.reportError) WL.reportError(e, "build"); WL.model = null; } }
@@ -453,6 +484,7 @@ window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.
   if(WL.state.docs.length){ await WL.rebuild(); WL.refreshMarket(); }
   await access;
   WL.onUnlocked();
+  if(!WL.reading && WL.state.files.some(f => f.status === "queued")){ WL.toast(t("Продолжаем чтение выписок", "Resuming reading your statements")); runQueue(); }
   if(WL.chatReturn) await WL.chatReturn();
   if(WL.model && !WL.state.demo && (!WL.reviewNow() || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
   if(WL.track) WL.track("ViewContent", {content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"});
