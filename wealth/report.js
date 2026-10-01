@@ -665,7 +665,9 @@ WL.compact = (M, S, opts = {}) => {
       futures_notional: d.fut ? Object.fromEntries(Object.entries(d.fut.notional).map(([c, v]) => [c || d.ref_ccy || "?", r2(v)])) : undefined,
       reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
         checks: d.recon.checks.filter(c => c.unchecked !== "other").map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
-          positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx}))} : undefined,
+          positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx,
+          // частичный итог, совпавший с частью позиций (30.09.2026: «USD Positions» у IB — это итог облигаций): ИИ пересказывал его как расхождение
+          matched_as_subtotal_of: c.part ? ({long: "long positions", short: "short positions"}[c.part] || c.part.replace(/^cls:/, "asset class ").replace(/^sec:/, "section ").replace(/^ccy:/, "positions in ")) : undefined}))} : undefined,
       // выписка сошлась с итогом — заметки чтения по частям файла («таблица продолжается», «здесь только аналитика») сводке не
       // нужны, она пересказывала их как расхождения (30.09.2026); предупреждение о постороннем тексте в документе — всегда
       reader_notes: d.recon && d.recon.status === "ok" ? (d.notes || []).filter(n => /инструкц|instruction|ignor|проигнорир/i.test(n)) : d.notes})),
