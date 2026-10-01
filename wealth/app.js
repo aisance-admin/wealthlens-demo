@@ -376,7 +376,7 @@ function quotaMessage(){
 
 /* ── Сводка и вопросы ───────────────────────────────────────────────── */
 let reviewSeq = 0, reviewTimer = null;
-function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([m.base, Math.round(m.total), m.positions.length, s.docs.map(d => d.id + (s.include[d.id] ?? "")).join(","), WL.lang]); }
+function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([WL.REVIEW_V, m.base, Math.round(m.total), m.positions.length, s.docs.map(d => d.id + (s.include[d.id] ?? "")).join(","), WL.lang]); }
 async function requestReview(force){
   const s = WL.state, m = WL.model;
   if(s.demo || !m || !m.positions.length || WL.reading) return;
