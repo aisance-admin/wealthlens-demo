@@ -123,6 +123,20 @@ function rowsOf(d, drop = []){
       prev.push(r); byQv.set(k, prev);
     } else if(out.some(p => p.cls === r.cls && p.page === r.page && p.value === r.value && ident(p) === ident(r) && (p.acct || "") === (r.acct || ""))){ dupDropped++; continue; }
     const x = Object.assign({}, r);
+    // Число, разобранное в тысячу раз больше (30.09.2026: сервер читал «4.875» как 4875 — купоны облигаций IB): купона больше
+    // 100% не бывает; цена, количество или цена покупки, при которых строка не сходится со своей стоимостью, а после деления на
+    // 1000 сходится, делятся на 1000. Деривативы не трогаем: множитель контракта не читается.
+    if(x.coupon > 100 && x.coupon <= 30000) x.coupon = Math.round(x.coupon) / 1000;
+    const odd = v => Math.abs(v) >= 1000 && Math.round(Math.abs(v)) % 1000 !== 0;    // «x.yyy», прочитанное как xyyy
+    if(x.qty && x.price && x.value && !["option", "future"].includes(x.cls)){
+      const fits = (q, p) => [1, 0.01].some(k => Math.abs(q * p * k - x.value) <= Math.abs(x.value) * 0.01);
+      if(!fits(x.qty, x.price)){
+        const byP = odd(x.price) && fits(x.qty, x.price / 1000), byQ = odd(x.qty) && fits(x.qty / 1000, x.price);
+        if(byP && (!byQ || ["bond", "note", "deposit"].includes(x.cls))) x.price = x.price / 1000;
+        else if(byQ && !byP) x.qty = x.qty / 1000;
+      }
+    }
+    if(x.cpx && x.price && odd(x.cpx) && x.cpx / x.price > 300 && x.cpx / 1000 / x.price > 0.33 && x.cpx / 1000 / x.price < 3) x.cpx = x.cpx / 1000;
     // Цена в процентах номинала, если выписка это не подписала: номинал × цена / 100 ≈ стоимость.
     if(!x.unit && x.qty && x.price && x.value && ["bond", "note", "deposit"].includes(x.cls)){
       const pct = Math.abs(x.qty * x.price / 100 - x.value) / Math.abs(x.value), unit = Math.abs(x.qty * x.price - x.value) / Math.abs(x.value);
@@ -650,7 +664,7 @@ WL.compact = (M, S, opts = {}) => {
       summary_rows_ignored: d.summaryDropped || 0, futures_counted_as: d.fut ? (d.fut.mode === "pnl" ? "profit or loss only, as in the bank's total; the contract value is the notional" : "0, as in the bank's total; the contract value is the notional") : undefined,
       futures_notional: d.fut ? Object.fromEntries(Object.entries(d.fut.notional).map(([c, v]) => [c || d.ref_ccy || "?", r2(v)])) : undefined,
       reconciliation: d.recon ? {status: d.recon.status, subtotals_not_matched: d.recon.open || 0,
-        checks: d.recon.checks.map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
+        checks: d.recon.checks.filter(c => c.unchecked !== "other").map(c => ({label: c.label, scope: c.scope, assets_in: c.group || undefined, currency: c.ccy, statement: r2(c.amount), positions: r2(c.sum),
           positions_with_accrued: r2(c.sumAcc), matched: c.ok, not_checked: c.unchecked || undefined, via_fx: c.approx}))} : undefined,
       // выписка сошлась с итогом — заметки чтения по частям файла («таблица продолжается», «здесь только аналитика») сводке не
       // нужны, она пересказывала их как расхождения (30.09.2026); предупреждение о постороннем тексте в документе — всегда

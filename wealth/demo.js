@@ -5,7 +5,9 @@
 const WL = window.WL, t = WL.t;
 const pad = n => String(n).padStart(2, "0");
 const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-function monthEnd(){ const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 0); }
+// Конец прошлого месяца; в первые 10 дней месяца — позапрошлого: иначе у примера «Стоимость по дням» — один день
+// (1.10.2026 выписка примера оказалась вчерашней, и ряд не строился).
+function monthEnd(){ const d = new Date(); return new Date(d.getFullYear(), d.getMonth() - (d.getDate() < 10 ? 1 : 0), 0); }
 function thirdFriday(minDays){
   const d = new Date(); d.setDate(d.getDate() + minDays);
   for(let k = 0; k < 4; k++){ const f = new Date(d.getFullYear(), d.getMonth() + k, 1); f.setDate(1 + ((5 - f.getDay() + 7) % 7) + 14); if(f >= d) return f; }
@@ -23,7 +25,7 @@ function totals(docA, docB, docC){
   docC.totals = [{label: "Closing balance", scope: "account", account: "...0917", currency: "AED", amount: 1250000, accrued: "unknown", page: 1},
     {label: "Deposit principal", scope: "account", account: "...0925", currency: "AED", amount: 2000000, accrued: "excl", page: 2}];
 }
-/* Цены примера — на дату его выписки. Дата выписки в примере всегда «конец прошлого месяца», а цены в коде постоянные, поэтому,
+/* Цены примера — на дату его выписки. Дата выписки в примере — конец прошлого (в начале месяца — позапрошлого) месяца, а цены в коде постоянные, поэтому,
    когда приходят цены закрытия по дням, акции и фонды примера переоцениваются по закрытию на дату выписки (итоги — заново
    из строк). Иначе «Всего сейчас», «Стоимость по дням» и сама выписка расходились бы на движение рынка с тех пор, как цены
    записаны в код. Без цен закрытия пример остаётся со своими ценами. */
