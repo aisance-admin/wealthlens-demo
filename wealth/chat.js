@@ -7,6 +7,8 @@ const WL = window.WL, t = WL.t, esc = WL.esc, fmt = WL.fmt, $ = WL.$;
 const S = () => WL.state, M = () => WL.model;
 const LVL = {high: t("Важно", "Important"), watch: t("Внимание", "Watch"), info: t("К сведению", "Note")};
 const SPARK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.6 4.9L14.5 8l-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6z" fill="currentColor"/></svg>';
+// Ева — лицо ассистента в окне чата (владелец 1.10.2026: «только в чате», в самом отчёте её нет). Картинка — wealth/img/eva.jpg.
+const EVA = '<img src="wealth/img/eva.jpg" alt="" width="64" height="64" decoding="async">';
 const C = WL.chat = {open: false, topic: null, credits: null, pending: new Set(), errors: {}, draft: ""};
 const hash = s => { let h = 0; for(const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return (h >>> 0).toString(36); };
 
@@ -102,27 +104,27 @@ function topicButton(x){
 function hub(){
   const list = topics(), mine = Object.values(chats()).filter(x => x.messages && x.messages.length).sort((a, b) => (b.updated || 0) - (a.updated || 0));
   const fresh = list.filter(x => !talked(x.id)), important = fresh.filter(x => x.level === "high" || x.level === "watch").length;
-  return `<div class="msg a"><div class="av">${SPARK}</div><div class="bubble"><p>${important
-      ? t(`Я разобрал ваши выписки. ${important} ${WL.pl(important, ["момент стоит", "момента стоит", "моментов стоит"], ["", ""])} обсудить — выберите тему, и я начну с того, что это значит для портфеля и какие есть варианты.`,
+  return `<div class="msg a"><div class="av eva">${EVA}</div><div class="bubble"><p>${important
+      ? t(`Я разобрала ваши выписки. ${important} ${WL.pl(important, ["момент стоит", "момента стоит", "моментов стоит"], ["", ""])} обсудить — выберите тему, и я начну с того, что это значит для портфеля и какие есть варианты.`,
         `I have gone through your statements. ${important} ${important === 1 ? "point is" : "points are"} worth discussing — pick a topic and I will start with what it means for the portfolio and what the options are.`)
-      : t("Я разобрал ваши выписки. Выберите тему — начну с того, что это значит для портфеля и какие есть варианты. Или задайте свой вопрос внизу.",
+      : t("Я разобрала ваши выписки. Выберите тему — начну с того, что это значит для портфеля и какие есть варианты. Или задайте свой вопрос внизу.",
         "I have gone through your statements. Pick a topic — I will start with what it means for the portfolio and what the options are. Or ask your own question below.")}</p></div></div>
     ${mine.length ? `<div class="hub-h">${t("Ваши обсуждения", "Your discussions")}</div><div class="topics">${mine.map(x => topicButton(topicById(x.id) || x)).join("")}</div>` : ""}
     ${fresh.length ? `<div class="hub-h">${t("О чём стоит поговорить", "Worth discussing")}</div><div class="topics">${fresh.map(topicButton).join("")}</div>` : ""}
-    <p class="hub-note">${t("Ассистент видит все позиции, выводы и котировки этого отчёта. Он объясняет варианты, но не советует купить или продать конкретную бумагу.",
-      "The assistant sees every position, finding and quote in this report. It explains the options but does not tell you to buy or sell a specific security.")}</p>`;
+    <p class="hub-note">${t("Ева видит все позиции, выводы и котировки этого отчёта. Она объясняет варианты, но не советует купить или продать конкретную бумагу.",
+      "Eva sees every position, finding and quote in this report. She explains the options but does not tell you to buy or sell a specific security.")}</p>`;
 }
 
 function convo(){
   const tp = C.topic, ch = chats()[tp.id] || {messages: []}, busy = C.pending.has(tp.id), err = C.errors[tp.id];
   const msgs = ch.messages.map(m => m.role === "user" ? `<div class="msg u"><div class="bubble">${esc(m.text)}</div></div>`
-    : `<div class="msg a"><div class="av">${SPARK}</div><div class="bubble">${rich(m.text)}</div></div>`).join("");
+    : `<div class="msg a"><div class="av eva">${EVA}</div><div class="bubble">${rich(m.text)}</div></div>`).join("");
   const canTalk = C.credits && C.credits.left > 0;
   const sug = !busy && ch.suggestions && ch.suggestions.length && canTalk
     ? `<div class="sugs">${ch.suggestions.map(s => `<button type="button" class="sug" data-say="${esc(s)}">${esc(s)}</button>`).join("")}</div>` : "";
   return `<div class="ctx">${tp.level ? `<span class="lvl lv-${esc(tp.level)}">${LVL[tp.level]}</span>` : `<span class="tico">${SPARK}</span>`}<div><b>${esc(tp.title)}</b>${tp.text ? `<p>${esc(tp.text.length > 280 ? tp.text.slice(0, 277) + "…" : tp.text)}</p>` : ""}</div></div>
     ${msgs}
-    ${busy ? `<div class="msg a"><div class="av">${SPARK}</div><div class="bubble typing" aria-label="${t("Ассистент пишет", "The assistant is typing")}"><i></i><i></i><i></i></div></div>` : ""}
+    ${busy ? `<div class="msg a"><div class="av eva">${EVA}</div><div class="bubble typing" aria-label="${t("Ева пишет", "Eva is typing")}"><i></i><i></i><i></i></div></div>` : ""}
     ${err ? `<div class="chat-err">${esc(err.text)}${err.retry ? ` <button class="link" type="button" data-chat-retry>${t("Повторить", "Try again")}</button>` : ""}</div>` : ""}
     ${sug}${noCredits()}`;
 }
@@ -157,8 +159,8 @@ function renderPanel(){
   document.body.classList.toggle("chat-open", C.open);
   if(!C.open){ el.innerHTML = ""; return; }
   const tp = C.topic, noCred = C.credits && C.credits.left <= 0;
-  el.innerHTML = `<div class="chat-h">${tp ? `<button type="button" class="ib" data-chat-home title="${t("Все темы", "All topics")}" aria-label="${t("Все темы", "All topics")}">‹</button>` : `<span class="orb">${SPARK}</span>`}
-      <div class="chat-t"><div class="eyebrow">${tp ? t("Обсуждение", "Discussion") : t("Ассистент по портфелю", "Portfolio assistant")}</div><b>${esc(tp ? tp.title : S().client || t("Ваш портфель", "Your portfolio"))}</b></div>
+  el.innerHTML = `<div class="chat-h">${tp ? `<button type="button" class="ib" data-chat-home title="${t("Все темы", "All topics")}" aria-label="${t("Все темы", "All topics")}">‹</button>` : `<span class="orb eva">${EVA}</span>`}
+      <div class="chat-t"><div class="eyebrow">${tp ? t("Обсуждение", "Discussion") : t("Ева · ассистент", "Eva · assistant")}</div><b>${esc(tp ? tp.title : S().client || t("Ваш портфель", "Your portfolio"))}</b></div>
       ${creditsPill()}<button type="button" class="ib" data-chat-close aria-label="${t("Закрыть", "Close")}">×</button></div>
     <div class="chat-b" id="chatBody" aria-live="polite">${tp ? convo() : hub()}</div>
     <form class="chat-f" id="chatForm" autocomplete="off"><textarea name="q" rows="1" maxlength="1500" aria-label="${t("Сообщение", "Message")}" placeholder="${noCred ? t("Сообщения закончились", "No messages left")
