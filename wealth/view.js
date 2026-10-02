@@ -687,18 +687,18 @@ function row(p){
   return `<tr class="pr" data-pos="${esc(p.id)}" tabindex="0">
     <td class="nm"><b>${esc(p.name || p.isin || "—")}</b><span class="sub">${esc(detailOf(p))}</span></td>
     <td class="ac mh">${esc(p.inst)}${p.acct ? `<span class="sub">${esc(p.acct)}</span>` : ""}</td>
-    <td class="n mh mt">${p.cls === "cash" || (p.cls === "deposit" && p.qty == null) ? "" : esc(fmt.qty(p.qty))}</td>
-    <td class="n mh mt">${p.cls === "cash" || (p.cls === "deposit" && p.price == null) ? "" : esc(price)}</td>
+    <td class="n mh mq">${p.cls === "cash" || (p.cls === "deposit" && p.qty == null) ? "" : esc(fmt.qty(p.qty))}</td>
+    <td class="n mh mq">${p.cls === "cash" || (p.cls === "deposit" && p.price == null) ? "" : esc(price)}</td>
     <td class="n mh">${esc(p.value != null ? fmt.money(p.value, p.ccy || "", p.cls === "cash" ? 2 : 0) : "—")}${p.accrued ? `<span class="sub">+ ${t("НКД", "acc.")} ${esc(fmt.money(p.accrued, p.ccy || "", 0))}</span>` : ""}</td>
     <td class="n mk mh mt">${nowCell(p)}</td>
     <td class="n mk">${chgCell(p)}</td>
     <td class="n strong">${p.vb == null ? `<span class="unk" title="${t("нет курса", "no FX rate")}">—</span>` : esc(money((liveMode(M()) && p.nowB != null ? p.nowB : p.vb) + (p.ab || 0)))}</td>
     <td class="n w">${esc(fmt.pct(w, Math.abs(w) < 0.1 ? 1 : 0))}</td></tr>`;
 }
-/* Пустые ячейки колонок «Где», «Кол-во», «Цена», «Стоимость», «Сейчас» для строк категорий, «Итого» и замка: на узком экране
-   эти колонки скрываются по классу во всех строках сразу (mt — «Кол-во», «Цена», «Сейчас» до 1020 px; mh — все пять до 760 px),
-   и суммы стоят под своими заголовками. */
-const PH = '<td class="mh"></td><td class="mh mt"></td><td class="mh mt"></td><td class="mh"></td><td class="mh mt"></td>';
+/* Пустые ячейки колонок «Где», «Кол-во», «Цена», «Стоимость», «Сейчас» для строк категорий, «Итого» и замка: когда таблице
+   мало места, эти колонки скрываются по классу во всех строках сразу (mq — «Кол-во» и «Цена», mt — «Сейчас», mh — все пять;
+   пороги — по ширине самой таблицы, wealth.html), и суммы стоят под своими заголовками. */
+const PH = '<td class="mh"></td><td class="mh mq"></td><td class="mh mq"></td><td class="mh"></td><td class="mh mt"></td>';
 function holdings(){
   const m = M(), s = S(), f = WL.ui.filter || "all", q = (WL.ui.search || "").trim().toLowerCase();
   const printing = WL.printing, lock = locked() && !printing;
@@ -726,7 +726,7 @@ function holdings(){
       <input class="search" id="search" type="search" value="${esc(WL.ui.search || "")}" placeholder="${t("Найти бумагу, ISIN, банк", "Find a security, ISIN, bank")}" aria-label="${t("Поиск по позициям", "Search positions")}">
     </div>
     ${WL.ui.only ? `<p class="only no-print">${t("Показаны позиции из предупреждения.", "Showing the positions from a finding.")} <button class="link" type="button" data-clear-only>${t("Показать все", "Show all")}</button></p>` : ""}
-    <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l mh">${t("Где", "Where")}</th><th class="mh mt">${t("Кол-во", "Qty")}</th><th class="mh mt">${t("Цена", "Price")}</th>
+    <div class="tw"><table class="pos"><thead><tr><th class="l">${t("Бумага", "Security")}</th><th class="l mh">${t("Где", "Where")}</th><th class="mh mq">${t("Кол-во", "Qty")}</th><th class="mh mq">${t("Цена", "Price")}</th>
       <th class="mh">${t("Стоимость", "Value")}</th><th class="mh mt">${t("Сейчас", "Now")}</th><th>${t("Изм.", "Chg.")}<span class="thsub">${esc(WL.windowLabel(WL.ui.per || "all").toLowerCase())}</span></th><th>${esc(m.base)}${liveMode(m) ? `<span class="thsub">${t("сейчас", "now")}</span>` : ""}</th><th>${t("Доля", "Share")}</th></tr></thead>
       ${groups || `<tbody><tr><td colspan="9" class="muted">${t("Ничего не найдено.", "Nothing found.")}</td></tr></tbody>`}
       ${m.preview && lock ? `<tbody><tr class="lockrow"><td>${ICON.lock}${m.preview.isins ? t(`${m.preview.isins} ${WL.pl(m.preview.isins, ["бумага", "бумаги", "бумаг"], ["", ""])} по отдельности — в полном отчёте`, `${m.preview.isins} individual ${m.preview.isins === 1 ? "security" : "securities"} in the full report`)
@@ -1006,7 +1006,7 @@ WL.excel = async () => {
     sheet(nd, t("По дням", "By day"), [16, 18, 16, 14, 30]);
   }
   if(mk){
-    const P = WL.PERIODS.filter(([id]) => id !== "1d" && id !== "1w" && id !== "6m");
+    const P = WL.PERIODS.filter(([id]) => !["1d", "1w", "6m", "all"].includes(id));
     sheet([[t("Рынок", "Market"), when], [t(`Оценка сейчас, ${base}`, `Value now, ${base}`), round(mk.nowTotal)], [t(`По выпискам, ${base}`, `Per statements, ${base}`), round(m.total)],
       [t("Доля по рыночной цене, %", "Share at market prices, %"), round(mk.coverage * 100)], [],
       [t("Изменение, %", "Change, %"), t("Весь портфель", "Whole portfolio"), t("Котируемая часть", "Listed part"), ...mk.benchmarks.map(b => b.label)],

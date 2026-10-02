@@ -107,7 +107,7 @@ WL.period = (M, id, live) => {
   // ни другого — «с покупки» без даты (start пустой)
   const firstPoint = lines.flatMap(L => L.points.filter(p => p.date < L.current.as_of).map(p => p.date)).sort()[0] || "";
   const firstBuy = M.positions.map(p => p.bought).filter(Boolean).sort()[0] || "";
-  const start = id === "all" ? [firstPoint, firstBuy].filter(Boolean).sort()[0] || "" : startOf(id, end);
+  let start = id === "all" ? [firstPoint, firstBuy].filter(Boolean).sort()[0] || "" : startOf(id, end);
   const tol = TOL[id] ?? 0;
   // по позициям
   const pos = {};
@@ -126,7 +126,16 @@ WL.period = (M, id, live) => {
       const old = snap && snap.pos.find(x => x.key === WL.posKey(p));
       if(old && old.vb != null){ st = old.vb * (p.qty && old.qty ? p.qty / old.qty : 1); src = "stmt"; when = snap.as_of; }
     }
-    if(st == null && live && p.mk && !p.mk.suspect && p.nowB != null && p.cls !== "option"){
+    // «вся история» без цены покупки: от первой выписки, где позиция есть, а если выписка одна — в режиме «Сейчас» от неё.
+    // Биржевой рост «за всё время» не годится: он считается с начала торгов бумагой (2.10.2026: у NVIDIA в портфеле без цен
+    // покупки — +536 034% с 1999 года, и такая же прибыль в итоге).
+    if(st == null && id === "all"){
+      const L = lineOf[p.doc], key = WL.posKey(p), snap = L && L.snaps.find(s => s.as_of < L.current.as_of && s.pos.some(x => x.key === key));
+      const old = snap && snap.pos.find(x => x.key === key);
+      if(old && old.vb != null){ st = old.vb * (p.qty && old.qty ? p.qty / old.qty : 1); src = "stmt"; when = snap.as_of; }
+      else if(live && L && p.mk && !p.mk.suspect && p.nowB != null && p.cls !== "option"){ st = (p.vb || 0) + (p.ab || 0); src = "stmt"; when = L.current.as_of; }
+    }
+    if(st == null && live && id !== "all" && p.mk && !p.mk.suspect && p.nowB != null && p.cls !== "option"){
       const pc = id === "1d" ? p.mk.change : (p.mk.perf || {})[id];
       if(pc != null){ const v = marketStart(p, pc, start, base); if(v != null){ st = v + (p.ab || 0); src = "mkt"; when = start; } }
     }
@@ -134,6 +143,7 @@ WL.period = (M, id, live) => {
     cov += Math.abs(endV); earnedEst += endV - st; startEst += st;
     pos[p.id] = {end: endV, start: st, src, when, chg: endV - st, pct: st ? (endV - st) / Math.abs(st) : null};
   }
+  if(id === "all" && !start) start = Object.values(pos).filter(x => x.src === "stmt" && x.when).map(x => x.when).sort()[0] || "";
   // по выпискам: стоимость на начало окна и движения между — по каждой линии (банк и его счета)
   let hasStart = lines.length > 0, complete = true, dv = 0, startV = 0, net = 0, income = 0, fees = 0;
   const starts = new Set(), missing = [];

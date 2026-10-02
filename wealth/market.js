@@ -120,6 +120,7 @@ WL.market.apply = (M, S) => {
   // портфеля (whole), где деньги и бумаги без котировки считаются неизменными.
   const perf = {};
   for(const [id] of PERIODS){
+    if(id === "all") continue;        // рост «за всё время» — с начала торгов каждой бумагой (у NVIDIA — с 1999 года), к портфелю не относится
     let chg = 0, startVal = 0, n = 0;
     for(const p of M.positions){
       const v = p.nowB != null ? p.nowB : null, pc = !p.mk || p.mk.suspect ? null : id === "1d" ? p.mk.change : (p.mk.perf || {})[id];

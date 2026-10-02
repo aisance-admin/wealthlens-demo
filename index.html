@@ -258,6 +258,25 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 .pos tr.lockrow td{color:var(--ink-2); font-size:13px} .pos tr.lockrow svg{margin-right:6px; vertical-align:-2px; color:var(--accent)} .pos tr.lockrow .link{margin-left:8px}
 .pos tfoot td{padding:12px; font-weight:650; text-align:right} .pos tfoot td:first-child{text-align:left}
 .unk{color:var(--muted); border-bottom:1px dotted var(--muted)}
+/* Колонки таблицы позиций убираются по месту, которое досталось самой таблице, а не по ширине окна: открытый чат (с 1240 px
+   он забирает 460 px справа) оставляет таблице 770–1030 px на широком экране — 2.10.2026 на 1280–1536 px её приходилось тянуть
+   вбок. Сначала «Кол-во» и «Цена» (mq), потом «Сейчас» (mt), на ширине телефона — все пять (mh: у категорий, «Итого» и замка —
+   пустой ячейкой той же ширины, поэтому суммы остаются под своими заголовками); всё это есть в карточке позиции. Только на
+   экране: у печати свои правила, там видны все колонки. Браузер без правил по месту (iOS до 16) — по ширине окна, как раньше. */
+@media screen{ #holdings .tw{container:pos / inline-size} }
+@container pos (max-width:1080px){ .pos .mq{display:none} }
+@container pos (max-width:920px){ .pos .mt{display:none} .pos .nm{min-width:160px} .pos th{white-space:normal} }
+@container pos (max-width:760px){
+  .pos th,.pos td,.pos tfoot td{padding-left:6px; padding-right:6px}
+  .pos tfoot td .sub,.pos td.mk .sub{display:none}         /* в «Изм.» — только процент; сумма изменения — в карточке позиции */
+  .pos .nm,.pos .nm .sub{overflow-wrap:anywhere}         /* длинные ISIN и тикеры переносятся, а не расширяют таблицу */
+  .pos .mh{display:none} .pos .nm{min-width:0}
+}
+@supports not (container-type:inline-size){
+  @media screen and (max-width:1020px){ .pos .mq,.pos .mt{display:none} .pos .nm{min-width:160px} .pos th{white-space:normal} }
+  @media screen and (max-width:760px){ .pos th,.pos td,.pos tfoot td{padding-left:6px; padding-right:6px} .pos tfoot td .sub,.pos td.mk .sub{display:none}
+    .pos .nm,.pos .nm .sub{overflow-wrap:anywhere} .pos .mh{display:none} .pos .nm{min-width:0} }
+}
 
 .two{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px}
 .bars{list-style:none; margin:12px 0 0; padding:0; display:grid; gap:9px}
@@ -486,27 +505,16 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 }
 @media screen and (max-width:1020px){
   .hchart .hv,.hchart .hx{font-size:17px} .hchart .hp{r:6.5} .hchart .hp.end{r:6.5} .hchart .nm{r:7}
-  .pos .mt{display:none}
-  .pos .nm{min-width:160px}
-  .pos th{white-space:normal}
 }
 @media screen and (max-width:760px){
   .wrap{padding:0 16px}
-  .pos th,.pos td,.pos tfoot td{padding-left:6px; padding-right:6px}
-  .pos tfoot td .sub{display:none}
-  .pos td.mk .sub{display:none}                  /* на телефоне в «Изм.» — только процент; сумма изменения — в карточке позиции */
-  .pos .nm,.pos .nm .sub{overflow-wrap:anywhere}  /* длинные ISIN и тикеры переносятся, а не расширяют таблицу */
   .bar .wrap{flex-wrap:wrap; padding-top:8px; padding-bottom:8px; gap:8px}
   .client{flex:1 1 140px; width:auto}
   #addBtn,#newBtn{padding:6px 9px}
   .drop{padding:34px 20px 28px; border-radius:22px} .drop h1{font-size:26px}
   .how{grid-template-columns:minmax(0,1fr)}
-  /* колонки «Где», «Кол-во», «Цена», «Стоимость», «Сейчас» помечены классом mh во всех строках (у категорий, «Итого» и замка —
-     пустой ячейкой той же ширины), поэтому после скрытия строки выравниваются одинаково и итоги остаются на экране */
-  .pos .mh{display:none}
   .ov,.news-grid{grid-template-columns:minmax(0,1fr)}
   .cmp-h,.cmp-r{grid-template-columns:78px minmax(0,1fr) minmax(0,1fr); gap:8px}
-  .pos .nm{min-width:0}
   .bars li{grid-template-columns:40px minmax(0,1fr) 40px}
   .bars li .muted{display:none}
   .search{width:100%}
@@ -619,11 +627,11 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/core.js?v=98e5e09d3f90"></script>
 <script src="wealth/read.js?v=6709110d0578"></script>
 <script src="wealth/report.js?v=5fd1ad042fe9"></script>
-<script src="wealth/market.js?v=18509df8b319"></script>
-<script src="wealth/period.js?v=f1a477c3fdab"></script>
+<script src="wealth/market.js?v=60024bd6c5f7"></script>
+<script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
 <script src="wealth/pay.js?v=a9c628c98593"></script>
-<script src="wealth/view.js?v=640bf9fddd05"></script>
+<script src="wealth/view.js?v=0ac90d8f7a7b"></script>
 <script src="wealth/chat.js?v=50a4c5e31f5b"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
 <script src="wealth/app.js?v=bd95d17d2bd7"></script>
