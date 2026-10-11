@@ -28,6 +28,8 @@ WL.apiReady = (async () => {
     /* Локальный стенд может ходить в локальный сервер: ?api=http://127.0.0.1:8790 */
     const o = new URLSearchParams(location.search).get("api");
     if(o && /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(o)) api = o;
+    /* Сравнение моделей на чтении: ?model=claude-sonnet-5-5 — сервер принимает его только со стенда и копии для тестировщиков */
+    WL.testModel = new URLSearchParams(location.search).get("model") || "";
   }
   return WL.API_BASE = String(api || "https://api.euroaff.eu").replace(/\/+$/, "");
 })();

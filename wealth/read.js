@@ -203,7 +203,7 @@ WL.Quota = Quota;
 const slow = res => res.error === "timeout" || (res.error === "http" && res.status === 504);
 async function readPart(src, part, env, depth = 0){
   if(env.signal && env.signal.aborted) return [{part, error: "aborted"}];      // файл отменён — страницы не рисуем и не отправляем
-  const body = Object.assign({file: src.name, lang: WL.lang, part: {from: part.from, to: part.to, total: src.total}, ctx: env.ctx || undefined}, env.auth ? env.auth() : {});
+  const body = Object.assign({file: src.name, lang: WL.lang, part: {from: part.from, to: part.to, total: src.total}, ctx: env.ctx || undefined, model: WL.testModel || undefined}, env.auth ? env.auth() : {});
   if(src.kind === "sheet") body.sheet = src.sheets[part.from - 1];
   else body.pages = await src.pages(part.from, part.to);
   let res = null;
@@ -424,7 +424,7 @@ WL.readFileBg = async (file, blob, env) => {
     let st = null;
     for(let round = 0; round < 2; round++){
       if(!job){
-        const r = await WL.api("/jobs/new", Object.assign({file: src.name, total: src.total, parts, lang: WL.lang}, env.auth ? env.auth() : {}), opt(30000));
+        const r = await WL.api("/jobs/new", Object.assign({file: src.name, total: src.total, parts, lang: WL.lang, model: WL.testModel || undefined}, env.auth ? env.auth() : {}), opt(30000));
         if(!r || r.error || !r.job) return {fallback: true, reason: (r && r.error) || "no job"};
         job = {id: r.job, token: r.token, parts, at: Date.now()};
         env.onJob && env.onJob(job);
