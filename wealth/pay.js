@@ -7,7 +7,8 @@ const WL = window.WL, t = WL.t, esc = WL.esc;
 const ON_SITE = /(^|\.)euroaff\.eu$/.test(location.hostname);
 const PAYWALL = ON_SITE || (() => { const q = new URLSearchParams(location.search).has("paywall");
   try{ if(q) sessionStorage.setItem("wl_paywall", "1"); return q || sessionStorage.getItem("wl_paywall") === "1"; }catch(e){ return q; } })();
-const PAY_API = "https://api.euroaff.eu";
+/* Сервер — тот же, что у чтения и чата (wealth/api.json; локальный стенд — ?api=…), иначе боевой. */
+const PAY_API = async () => (await WL.apiReady) || "https://api.euroaff.eu";
 const PRICE = {amount: 49, currency: "EUR", label: "€49"};
 const UNLOCKS = "wl_unlock_v1", PENDING = "wl_pending_checkout", PROMO_KEY = "wl_promo";
 const TOKEN = /^[a-f0-9]{40}$/, PROMO_RE = /^[A-Z0-9][A-Z0-9-]{3,31}$/;
@@ -27,7 +28,7 @@ const grantId = (rid, u) => `${rid}|${u.s || ""}|${u.g.exp}|${u.g.sig}`;
 const b64u = x => Uint8Array.from(atob(String(x).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(x).length / 4) * 4, "=")), c => c.charCodeAt(0));
 function accessKey(){
   return keyP = keyP || (async () => {
-    const jwk = window.WL_ACCESS_KEY && window.WL_ACCESS_KEY.x ? window.WL_ACCESS_KEY : await fetch(PAY_API + "/unlock/key").then(x => x.json());
+    const jwk = window.WL_ACCESS_KEY && window.WL_ACCESS_KEY.x ? window.WL_ACCESS_KEY : await fetch(await PAY_API() + "/unlock/key").then(x => x.json());
     return crypto.subtle.importKey("jwk", {kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y}, {name: "ECDSA", namedCurve: "P-256"}, false, ["verify"]);
   })().catch(e => { keyP = null; throw e; });
 }
@@ -114,7 +115,7 @@ async function checkAccess(){
   if(SERVER_OK.has(key)) return;
   checking = true;
   let r = null;
-  try{ r = await fetch(`${PAY_API}/unlock/check?rid=${encodeURIComponent(s.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }catch(e){}
+  try{ r = await fetch(`${await PAY_API()}/unlock/check?rid=${encodeURIComponent(s.rid)}&token=${encodeURIComponent(u.t)}&sid=${encodeURIComponent(u.s || "")}`).then(x => x.json()); }catch(e){}
   checking = false;
   const now = unlockOf(s.rid);
   if(!now || now.t !== u.t) return WL.render();
@@ -136,7 +137,7 @@ pay.restore = async btn => {
   const s = S(); if(!s.rid) return;
   if(btn) btn.disabled = true;
   let r = null;
-  try{ r = await fetch(PAY_API + "/unlock/restore", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rid: s.rid})}).then(x => x.json()); }catch(e){}
+  try{ r = await fetch(await PAY_API() + "/unlock/restore", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({rid: s.rid})}).then(x => x.json()); }catch(e){}
   if(btn) btn.disabled = false;
   if(r && r.ok){ await unlockWith(r.sid, r, true); WL.toast(t("Оплата найдена — полный отчёт открыт", "Payment found — the full report is unlocked")); return WL.render(); }
   WL.toast(SUPPORT ? t(`Оплату этого отчёта не нашли. Напишите на ${SUPPORT} и укажите номер отчёта ${s.rid}.`, `No payment was found for this report. Email ${SUPPORT} with report number ${s.rid}.`)
@@ -149,7 +150,7 @@ pay.returnFromStripe = async () => {
     // Оплатили, но закрыли вкладку раньше, чем Stripe вернул на сайт.
     const p = WL.store.get(PENDING), s = S();
     if(pay.locked() && p && p.rid === s.rid && p.sid && Date.now() - p.at < 2 * 864e5){
-      let r = null; try{ r = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(p.sid)}&rid=${s.rid}`).then(x => x.json()); }catch(e){}
+      let r = null; try{ r = await fetch(`${await PAY_API()}/checkout/verify?session_id=${encodeURIComponent(p.sid)}&rid=${s.rid}`).then(x => x.json()); }catch(e){}
       if(r && r.ok){ await unlockWith(p.sid, r); WL.toast(t("Оплата прошла — полный отчёт открыт", "Payment received — the full report is unlocked")); WL.render(); }
     }
     return;
@@ -160,7 +161,7 @@ pay.returnFromStripe = async () => {
   const s = S();
   if(!s.rid || !s.docs.length){ WL.toast(t("Оплата прошла, но отчёта в этом браузере нет. Откройте его там, где загружали выписки.", "Payment received, but this browser has no report. Open it in the browser where you uploaded the statements.")); return; }
   let r = null;
-  try{ r = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(sid)}&rid=${s.rid}`).then(x => x.json()); }catch(e){}
+  try{ r = await fetch(`${await PAY_API()}/checkout/verify?session_id=${encodeURIComponent(sid)}&rid=${s.rid}`).then(x => x.json()); }catch(e){}
   if(r && r.ok){ await unlockWith(sid, r); WL.toast(t("Оплата прошла — полный отчёт открыт", "Payment received — the full report is unlocked")); }
   else WL.toast(r && r.reason === "not paid" ? t("Платёж ещё не подтверждён. Обновите страницу через минуту.", "Payment is not confirmed yet. Refresh the page in a minute.")
     : SUPPORT ? t(`Не удалось подтвердить оплату. Напишите на ${SUPPORT} — разберёмся.`, `Could not confirm the payment. Email ${SUPPORT} and we will look into it.`)
@@ -187,8 +188,8 @@ pay.open = async source => {
         : t("Разовая оплата через Stripe, без подписки.", "A one-off payment via Stripe, no subscription.")}
       ${t("Откроются все позиции, выводы и выгрузка отчёта в PDF и Excel. Выписки этого же портфеля можно добавлять и потом — платить снова не нужно.",
           "You get every position, all findings and the PDF and Excel downloads. You can add statements of the same portfolio later at no extra cost.")}</p>
-      <p class="muted">${t("Отчёт и доступ хранятся в этом браузере. На другом устройстве загрузите выписки заново и нажмите «Восстановить доступ».",
-        "The report and its access are kept in this browser. On another device, upload the statements again and use “Restore access”.")}</p>
+      <p class="muted">${t("Отчёт и доступ хранятся в этом браузере. Нужен отчёт на другом устройстве — напишите нам, откроем без повторной оплаты.",
+        "The report and its access are kept in this browser. Need it on another device? Write to us and we will unlock it at no extra cost.")}</p>
       <label class="check"><input type="checkbox" data-waiver> <span>${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</span></label>
       ${ON_SITE ? `<p class="fine">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
@@ -203,14 +204,14 @@ pay.open = async source => {
   const rid = s.rid;
   const pend = WL.store.get(PENDING);
   if(pend && pend.rid === rid && pend.sid && Date.now() - pend.at < 2 * 864e5){
-    let v = null; try{ v = await fetch(`${PAY_API}/checkout/verify?session_id=${encodeURIComponent(pend.sid)}&rid=${rid}`).then(x => x.json()); }catch(e){}
+    let v = null; try{ v = await fetch(`${await PAY_API()}/checkout/verify?session_id=${encodeURIComponent(pend.sid)}&rid=${rid}`).then(x => x.json()); }catch(e){}
     if(v && v.ok){ await unlockWith(pend.sid, v); WL.toast(t("Этот отчёт уже оплачен — полный отчёт открыт", "This report is already paid — the full report is unlocked")); return WL.render(); }
   }
   const code = pay.promo();
   track("InitiateCheckout", {value: code ? 0 : PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
   const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE}, code ? {promo: code} : {});
   let r = null;
-  try{ r = await fetch(PAY_API + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(x => x.json()); }catch(e){}
+  try{ r = await fetch(await PAY_API() + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(x => x.json()); }catch(e){}
   if(r && r.url){
     if(code && r.promo !== "applied"){
       if(r.promo === "invalid") WL.store.del(PROMO_KEY);

@@ -301,16 +301,17 @@ body.has-secs .chat-fab{display:none !important}            /* Ева — в м�
 @container main (max-width:520px){ .tiles{flex-wrap:wrap} .tile{flex:1 1 calc(50% - 4px)} }
 .ov-main{display:flex; flex-direction:column; min-width:0; container:mini / inline-size}
 .ov-main .sh,.ov-comp .sh{margin:0 0 10px; align-items:center}
+.sh-wait{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; white-space:nowrap} .sh-wait b{font-weight:500; font-variant-numeric:tabular-nums}
 .sh-more{margin-left:auto; font-size:13px}
-.minis{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; flex:1}
-@container mini (max-width:540px){ .minis{grid-template-columns:minmax(0,1fr)} }
+.minis{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; flex:1} .minis.n2{grid-template-columns:repeat(2, minmax(0,1fr))} .minis.n1{grid-template-columns:minmax(0,1fr)}
+@container mini (max-width:540px){ .minis, .minis.n2{grid-template-columns:minmax(0,1fr)} }
 .mini{padding:14px 15px; display:flex; flex-direction:column; gap:8px; border-top:3px solid var(--line-2); min-width:0}
 .mini.lv-high{border-top-color:var(--risk)} .mini.lv-watch{border-top-color:var(--watch)} .mini.lv-info{border-top-color:var(--info)}
 .mini h3{margin:0; font-size:15px; line-height:1.35; font-weight:600}
 .mini .clamp{margin:0; color:var(--ink-2); font-size:13px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden}
 .mini .ma{margin-top:auto; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; padding-top:4px}
 .mini .ma .btn svg{width:12px; height:12px}
-.mini.locked h3{filter:blur(5px); -webkit-user-select:none; user-select:none}
+.mini.locked h3{filter:blur(5px); -webkit-user-select:none; user-select:none} .mini.tease{border-top-color:var(--accent); border-top-style:dashed}
 .ov-comp{padding:16px 20px; min-width:0}
 .comp{display:grid; grid-template-columns:132px minmax(0,1fr); gap:20px; align-items:center}
 .donut{width:132px; height:132px; display:block}
@@ -717,10 +718,10 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/market.js?v=60024bd6c5f7"></script>
 <script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=a9c628c98593"></script>
-<script src="wealth/view.js?v=9b5acb4e70df"></script>
-<script src="wealth/chat.js?v=fe98e27a3765"></script>
+<script src="wealth/pay.js?v=9f044669034f"></script>
+<script src="wealth/view.js?v=060e2685b278"></script>
+<script src="wealth/chat.js?v=b63a0f8b69e9"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
-<script src="wealth/app.js?v=0fed4ef65bb8"></script>
+<script src="wealth/app.js?v=44008ac3ff9a"></script>
 </body>
 </html>

@@ -899,9 +899,15 @@ function miniAlert(a, i, lock){
 }
 function mainAlerts(){
   const all = alertList(), lock = locked();
-  if(!all.length) return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2></div><div class="card pad muted">${WL.reviewing ? t("Ева разбирает отчёт…", "Eva is reviewing the report…") : t("Замечаний нет.", "Nothing to flag.")}</div></div>`;
-  return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2>${all.length > 3 ? `<button class="link sh-more" type="button" data-sec="alerts">${t(`Все выводы — ${all.length}`, `All findings — ${all.length}`)}</button>` : ""}</div>
-    <div class="minis">${all.slice(0, 3).map((a, i) => miniAlert(a, i, lock)).join("")}</div></div>`;
+  // сводка ИИ готовится около минуты: таймер — и здесь, а не только в «Выводах»
+  const wait = WL.reviewing && !lock ? `<span class="sh-wait muted"><i class="spin"></i>${t("Готовим сводку", "Preparing the summary")} <b data-w="rtime" role="timer">${mmss(Math.max(0, (Date.now() - (WL.reviewT0 || Date.now())) / 1000))}</b></span>` : "";
+  if(!all.length) return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2>${wait}</div><div class="card pad muted">${WL.reviewing ? t("Ева разбирает отчёт…", "Eva is reviewing the report…") : t("Замечаний нет.", "Nothing to flag.")}</div></div>`;
+  // до оплаты выводов ИИ ещё нет — пустое место занимает карточка о разборе в полном отчёте; меньше трёх карточек — на всю ширину
+  const top = all.slice(0, 3), tease = lock && top.length < 3 && !(S().review && S().review.summary), n = top.length + (tease ? 1 : 0);
+  return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2>${wait}${all.length > 3 ? `<button class="link sh-more" type="button" data-sec="alerts">${t(`Все выводы — ${all.length}`, `All findings — ${all.length}`)}</button>` : ""}</div>
+    <div class="minis${n < 3 ? " n" + n : ""}">${top.map((a, i) => miniAlert(a, i, lock)).join("")}${tease ? `<article class="card mini tease"><div class="al"><span class="by">${ICON.spark}${t("ИИ", "AI")}</span></div>
+      <h3>${t("Разбор портфеля и вопросы к банку", "Portfolio review and questions for the bank")}</h3>
+      <div class="ma no-print"><button class="btn small" type="button" data-buy="alert">${ICON.lock}${t("В полном отчёте", "In the full report")}</button></div></article>` : ""}</div></div>`;
 }
 /* Состав — кольцо по классам активов (цвета категорий, зазор 2 px) и подписи с долями. */
 function donut(cats, total){

@@ -230,7 +230,7 @@ WL.chatReport = reportFor;
 async function turn(topic, text){
   const id = topic.id;
   const ch = chats()[id] = chats()[id] || {id, kind: topic.kind, title: topic.title, text: topic.text, level: topic.level, refs: topic.refs, messages: [], suggestions: []};
-  if(C.pending.has(id)) return;
+  if(C.pending.has(id)){ if(text && id === (C.topic && C.topic.id)){ C.draft = text; renderPanel(); } return; }   // Ева ещё пишет — вопрос ждёт в поле ввода
   if(text){ ch.messages.push({role: "user", text, at: Date.now()}); ch.suggestions = []; }
   ch.updated = Date.now();
   C.pending.add(id); delete C.errors[id];
@@ -259,6 +259,7 @@ async function turn(topic, text){
   WL.save(); renderPanel(); launcher();
 }
 
+let openSeq = 0;
 WL.openChat = async (id, question) => {
   WL.closeDrawer && WL.closeDrawer();
   dismissNudge();
@@ -266,9 +267,11 @@ WL.openChat = async (id, question) => {
   C.topic = id ? topicById(id) : null;
   if(question && C.topic) C.draft = "";
   renderPanel(); launcher();
-  const creditsReady = loadCredits();
+  const seq = ++openSeq, creditsReady = loadCredits();
   if(!C.credits || C.credits.rid !== rid()) await creditsReady;
-  if(!C.topic) return;
+  // пока ждали счётчик сообщений, открыли другую тему или задали вопрос: этот вызов тему не трогает — иначе Ева начинала тему
+  // сама, а вопрос пропадал (нажали «Ева», затем сразу вопрос — 19.10)
+  if(seq !== openSeq || !C.topic) return;
   if(question){
     if(C.credits && C.credits.left <= 0){ C.draft = question; return renderPanel(); }
     return turn(C.topic, question);

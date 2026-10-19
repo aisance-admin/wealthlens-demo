@@ -375,7 +375,7 @@ function quotaMessage(){
 }
 
 /* ── Сводка и вопросы ───────────────────────────────────────────────── */
-let reviewSeq = 0, reviewTimer = null;
+let reviewSeq = 0, reviewTimer = null, reviewAsked = "";
 function reviewKey(){ const m = WL.model, s = WL.state; return JSON.stringify([WL.REVIEW_V, m.base, Math.round(m.total), m.positions.length, s.docs.map(d => d.id + (s.include[d.id] ?? "")).join(","), WL.lang]); }
 async function requestReview(force){
   const s = WL.state, m = WL.model;
@@ -383,11 +383,13 @@ async function requestReview(force){
   if(WL.pay.locked()) return;                              // не оплачено: сводку ИИ делаем после оплаты, по полному отчёту
   const key = reviewKey(), comp = WL.reviewComp(m, s);
   if(!force && s.review && s.review.key === key && !s.review.error) return;
+  // та же сводка уже заказана: после возврата с оплаты её просили три места сразу — три платных запроса вместо одного (19.10)
+  if(WL.reviewing && reviewAsked === key) return;
   const seq = ++reviewSeq;
-  WL.reviewing = true; WL.reviewT0 = Date.now(); WL.render();
+  reviewAsked = key; WL.reviewing = true; WL.reviewT0 = Date.now(); WL.render();
   const r = await WL.api("/review", Object.assign({lang: WL.lang, report: WL.compact(m, s)}, WL.pay.auth()), {timeout: 240000});
   if(seq !== reviewSeq) return;
-  WL.reviewing = false;
+  WL.reviewing = false; reviewAsked = "";
   s.review = r && !r.error && r.summary ? {summary: r.summary, alerts: r.alerts || [], documents: r.documents || [], questions: r.questions || [], key, comp, base: m.base, lang: WL.lang, at: Date.now()}
     : {error: (r && r.error) || "failed", key, comp};
   if(WL.track) WL.track(s.review.error ? "Summary Failed" : "Summary Ready", s.review.error ? {error: String(s.review.error).slice(0, 30)} : {alerts: s.review.alerts.length, questions: s.review.questions.length});
