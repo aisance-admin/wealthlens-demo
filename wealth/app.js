@@ -478,6 +478,16 @@ document.addEventListener("keydown", e => {
   if(navOf(e) && WL.navKey && WL.navKey(e.target, e.key)) e.preventDefault();
   if(e.key === "Enter" && e.target.matches && e.target.matches("tr.pr")) WL.openPos(e.target.dataset.pos);
 });
+/* Разделы отчёта (view.js): раздел — в адресе (#holdings), «назад» в браузере возвращает к предыдущему. to — блок внутри раздела. */
+function openSec(sec, to){
+  const was = WL.ui.sec || "overview";
+  if(sec !== was){ if(WL.track) WL.track("Section Opened", {section: sec}); try{ history.pushState({sec}, "", location.pathname + location.search + "#" + sec); }catch(e){} }
+  WL.ui.sec = sec; WL.render();
+  const g = to && $("#" + to);
+  if(g) g.scrollIntoView({behavior: "smooth", block: "start"}); else if(sec !== was) scrollTo({top: 0});
+}
+addEventListener("popstate", () => { const h = location.hash.replace("#", ""), sec = /^(overview|alerts|holdings|dynamics|files|more)$/.test(h) ? h : "overview";
+  if(sec !== WL.ui.sec){ WL.ui.sec = sec; WL.render(); scrollTo({top: 0}); } });
 document.addEventListener("click", async e => {
   const el = e.target.closest("button, a, tr.pr, #scrim"); if(!el) { const m = $("#dlMenu"); if(m) m.hidden = true; return; }
   const d = el.dataset || {};
@@ -492,12 +502,13 @@ document.addEventListener("click", async e => {
   if(d.base){ if(d.base === WL.state.base) return; WL.state.base = d.base; await WL.rebuild(); return; }
   if(d.per){ if(WL.track && WL.ui.per !== d.per) WL.track("Period Changed", {period: d.per}); WL.ui.per = d.per; return WL.render(); }
   if(d.navAll !== undefined){ WL.ui.navAll = !WL.ui.navAll; return WL.render(); }
-  if(d.tab){ if(WL.track && WL.ui.tab !== d.tab) WL.track("Tab Opened", {tab: d.tab}); WL.ui.tab = d.tab; WL.render(); const b = document.querySelector(".tabs"); if(b && b.getBoundingClientRect().top < 0) b.scrollIntoView({block: "start"}); return; }
+  if(d.sec) return openSec(d.sec);
+  if(d.tab) return openSec(d.tab === "nav" ? "dynamics" : "overview");
   if(d.val){ WL.ui.val = d.val; return WL.render(); }
   if(d.bench){ WL.ui.bench = d.bench; return WL.render(); }
   if(d.refreshMarket !== undefined) return WL.refreshMarket();
   if(d.cat){ WL.ui.filter = d.cat; WL.ui.only = null; return WL.render(); }
-  if(d.show){ WL.ui.only = d.show.split(","); WL.ui.filter = "all"; WL.ui.search = ""; WL.render(); const h = $("#holdings"); if(h) h.scrollIntoView({behavior: "smooth", block: "start"}); return; }
+  if(d.show){ WL.ui.only = d.show.split(","); WL.ui.filter = "all"; WL.ui.search = ""; return openSec("holdings", "holdings"); }
   if(d.clearOnly !== undefined){ WL.ui.only = null; return WL.render(); }
   if(el.matches("tr.pr")) return WL.openPos(el.dataset.pos);
   if(d.buy) return WL.pay.open(d.buy);
@@ -505,7 +516,7 @@ document.addEventListener("click", async e => {
   if(d.review !== undefined) return requestReview(true);
   if(d.reread) return reread(d.reread);
   if(d.cancel) return cancelFile(d.cancel);
-  if(d.goto){ const g = $("#" + d.goto); if(g) g.scrollIntoView({behavior: "smooth", block: "start"}); return; }
+  if(d.goto) return openSec(WL.SEC_OF[d.goto] || WL.ui.sec, d.goto);
   if(d.include){ WL.state.include[d.include] = true; await WL.rebuild(); WL.refreshMarket(); return reviewSoon(); }
   if(d.exclude){ WL.state.include[d.exclude] = false; await WL.rebuild(); return reviewSoon(); }
   if(d.remove) return removeFile(d.remove);

@@ -194,6 +194,9 @@ function launcher(){
       <span>${esc(fresh[0].title)}</span></button>`;
 }
 WL.renderChatLauncher = launcher;
+/* Сколько важных тем ещё не обсуждали — число у кнопки Евы в меню разделов (view.js), как у плавающей кнопки. */
+WL.chatFresh = () => !(M() && M().positions.length && !M().preview) || WL.reading ? 0
+  : topics().filter(x => x.kind === "alert" && (x.level === "high" || x.level === "watch") && !talked(x.id)).length;
 const dismissNudge = () => { S().chatNudged = true; WL.save(); const n = $("#chatNudge"); if(n) n.remove(); };
 
 async function loadCredits(){

@@ -234,6 +234,93 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .alert.talk:hover .talkbtn{text-decoration:underline; text-underline-offset:3px}
 .sh-hint{margin-left:auto}
 
+/* Разделы отчёта (владелец 19.10.2026): меню слева на компьютере, внизу на телефоне; «Обзор» — одним экраном. Стиль — наш:
+   Onest и JetBrains Mono, чернила и золото, те же карточки и плашки. На бумаге разделов нет — отчёт подряд. */
+.layout{display:grid; grid-template-columns:minmax(0,1fr); gap:28px; margin-top:18px}
+.main{min-width:0; container:main / inline-size}
+.main > :first-child{margin-top:0}
+.main > .demo-bar{margin-bottom:14px; padding-block:9px}
+.side,.bnav{display:none}
+@media screen and (min-width:1100px){
+  body.has-secs .wrap{max-width:1400px}
+  .layout{grid-template-columns:188px minmax(0,1fr)}
+  .side{display:flex; flex-direction:column; gap:2px; position:sticky; top:84px; align-self:start}
+  body.chat-open .layout{grid-template-columns:46px minmax(0,1fr); gap:20px}
+  body.chat-open .si span,body.chat-open .si em{display:none}
+}
+.si{display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:none; border:0; border-radius:10px; padding:9px 11px; color:var(--ink-2); font:500 14px/1.25 var(--sans); position:relative}
+.si svg{width:16px; height:16px; flex:none; color:var(--muted)}
+.si:hover{background:rgba(226,236,255,.04); color:var(--ink)}
+.si.on{background:var(--accent-soft); color:var(--ink)} .si.on svg{color:var(--accent)}
+.si em{margin-left:auto; font:600 11px/1 var(--mono); font-style:normal; color:var(--muted); background:rgba(226,236,255,.06); border-radius:999px; padding:3px 7px}
+.si.eva{margin-top:12px; border:1px solid var(--line-2)} .si.eva svg{color:var(--accent)}
+.si.eva small{display:block; font:500 11px/1.2 var(--sans); color:var(--muted)}
+.si.eva em{color:#1B1305; background:var(--accent)}
+.si:focus-visible,.bi:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+body.has-secs .chat-fab{display:none !important}            /* Ева — в меню разделов */
+.bi{display:flex; flex-direction:column; align-items:center; gap:3px; background:none; border:0; padding:6px 2px 4px; color:var(--muted); font:500 11px/1.1 var(--sans); position:relative; min-width:0}
+.bi svg{width:19px; height:19px} .bi.on{color:var(--accent)}
+.bi.eva i{display:grid; place-items:center; width:48px; height:48px; margin-top:-24px; border-radius:50%; background:linear-gradient(180deg, #FFD27A, #F3BD58); color:#1B1305;
+  box-shadow:0 8px 22px -8px rgba(243,189,88,.7), 0 0 0 4px var(--ground)}
+.bi.eva svg{width:20px; height:20px} .bi.eva span{color:var(--ink-2)}
+.bi em{position:absolute; top:0; left:calc(50% + 6px); font:600 10px/1 var(--mono); font-style:normal; color:#1B1305; background:var(--accent); border-radius:999px; padding:3px 6px}
+.bi.eva em{top:-26px; left:calc(50% + 12px); color:var(--accent); background:#1B1305; border:1px solid var(--accent)}
+@media screen and (max-width:1099px){
+  body.has-secs .bnav{display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); align-items:end; position:fixed; left:50%; transform:translateX(-50%); width:min(520px, calc(100% - 20px)); bottom:calc(10px + env(safe-area-inset-bottom, 0px)); z-index:34;
+    background:rgba(14,21,31,.94); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); border:1px solid var(--line-2); border-radius:20px; padding:6px 4px; box-shadow:var(--shadow)}
+  body.has-secs #app.wrap{padding-bottom:120px}
+  body.has-secs .chat-nudge{bottom:calc(92px + env(safe-area-inset-bottom, 0px))}
+  .layout{margin-top:16px}
+}
+.ovw{display:grid; gap:16px}
+.ov-top{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.3fr); gap:18px; align-items:stretch}
+.ov-bot{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:18px; align-items:stretch}
+@container main (max-width:880px){ .ov-top,.ov-bot{grid-template-columns:minmax(0,1fr)} }
+.ov-total{padding:16px 20px; display:flex; flex-direction:column; gap:11px; min-width:0}
+.ov-total .th{display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap}
+.ov-total .segs{display:flex; gap:6px; flex-wrap:wrap}
+.ov-total .seg.val{margin:0}
+@container main (max-width:460px){ .ov-total .seg.val{display:none} .ov-total .th .segs{flex-basis:100%} }   /* валюта — всегда своей строкой: иначе подпись «Всего сейчас» после котировок сдвигала её вниз */   /* на телефоне — только валюта: второе число под итогом уже показывает выписку */
+.where .sh{margin:0 0 6px; align-items:center} .where .sh .muted{font-size:12.5px}
+@container main (max-width:460px){ .where .sh{flex-wrap:wrap; row-gap:2px} .where .sh .muted{flex-basis:100%} .ov-per .chips{display:grid; grid-template-columns:repeat(3, max-content)} }
+.ov-total .tv{margin:0}
+.ov-total .cover{margin-top:0}
+.ov-sub{display:flex; flex-wrap:wrap; gap:4px 8px; align-items:baseline; font-size:13.5px; min-height:20px}
+.ov-sub b{font-weight:600; font-variant-numeric:tabular-nums} .ov-sub.busy{opacity:.6}
+.ov-per{display:flex; flex-direction:column; gap:8px; padding-top:11px; border-top:1px solid var(--line)}
+.ov-per .pl{display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px}
+.ov-per .pl .eyebrow{flex-basis:100%}
+.ov-per .pl b{font-size:22px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+.ov-per .pl b.na{color:var(--muted); font-weight:500}
+.ov-per .chips button{padding:4px 9px; font-size:12px}
+.pill{font:600 12px/1 var(--mono); padding:4px 7px; border-radius:999px} .pill.up{color:var(--good); background:var(--good-soft)} .pill.dn{color:var(--risk); background:var(--risk-soft)}
+.tiles{display:flex; gap:8px}
+.tile{flex:1 1 0; background:rgba(226,236,255,.03); border:1px solid var(--line); border-radius:12px; padding:9px 11px; min-width:0}
+.tile b{display:block; font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere}
+.tile span{font-size:12px; color:var(--muted)}
+@container main (max-width:520px){ .tiles{flex-wrap:wrap} .tile{flex:1 1 calc(50% - 4px)} }
+.ov-main{display:flex; flex-direction:column; min-width:0; container:mini / inline-size}
+.ov-main .sh,.ov-comp .sh{margin:0 0 10px; align-items:center}
+.sh-more{margin-left:auto; font-size:13px}
+.minis{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; flex:1}
+@container mini (max-width:540px){ .minis{grid-template-columns:minmax(0,1fr)} }
+.mini{padding:14px 15px; display:flex; flex-direction:column; gap:8px; border-top:3px solid var(--line-2); min-width:0}
+.mini.lv-high{border-top-color:var(--risk)} .mini.lv-watch{border-top-color:var(--watch)} .mini.lv-info{border-top-color:var(--info)}
+.mini h3{margin:0; font-size:15px; line-height:1.35; font-weight:600}
+.mini .clamp{margin:0; color:var(--ink-2); font-size:13px; line-height:1.45; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden}
+.mini .ma{margin-top:auto; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; padding-top:4px}
+.mini .ma .btn svg{width:12px; height:12px}
+.mini.locked h3{filter:blur(5px); -webkit-user-select:none; user-select:none}
+.ov-comp{padding:16px 20px; min-width:0}
+.comp{display:grid; grid-template-columns:132px minmax(0,1fr); gap:20px; align-items:center}
+.donut{width:132px; height:132px; display:block}
+.donut .d1{font:500 11px/1 var(--sans); fill:var(--muted); text-anchor:middle}
+.donut .d2{font:600 15px/1 var(--sans); fill:var(--ink); text-anchor:middle}
+.cl{list-style:none; margin:0; padding:0; display:grid; gap:7px}
+.cl li{display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; font-size:13px; color:var(--ink-2)}
+.cl b{color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums}
+@container main (max-width:420px){ .comp{grid-template-columns:minmax(0,1fr); justify-items:center} .cl{width:100%} }
+
 /* Позиции */
 .tools{display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:10px}
 .chips{display:flex; gap:6px; flex-wrap:wrap}
@@ -631,9 +718,9 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
 <script src="wealth/pay.js?v=a9c628c98593"></script>
-<script src="wealth/view.js?v=0ac90d8f7a7b"></script>
-<script src="wealth/chat.js?v=50a4c5e31f5b"></script>
+<script src="wealth/view.js?v=9b5acb4e70df"></script>
+<script src="wealth/chat.js?v=fe98e27a3765"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
-<script src="wealth/app.js?v=bd95d17d2bd7"></script>
+<script src="wealth/app.js?v=0fed4ef65bb8"></script>
 </body>
 </html>

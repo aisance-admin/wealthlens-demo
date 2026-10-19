@@ -15,6 +15,10 @@ const ICON = {
   dash: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   lock: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5.3a2.5 2.5 0 015 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
   spark: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l1.6 4.9L14.5 8l-4.9 1.6L8 14.5l-1.6-4.9L1.5 8l4.9-1.6z" fill="currentColor"/></svg>',
+  home: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.2L8 2.6l5.5 4.6v6.3a.8.8 0 01-.8.8H10V10H6v4.3H3.3a.8.8 0 01-.8-.8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  list: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="2.6" cy="4" r="1" fill="currentColor"/><circle cx="2.6" cy="8" r="1" fill="currentColor"/><circle cx="2.6" cy="12" r="1" fill="currentColor"/></svg>',
+  trend: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.8 12l4-4.2 3 2.6L14.2 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.6 4.5h3.6v3.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  dots: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>',
   file: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.8h5.2L12.5 5v9.2H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 2v3.3h3.3" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 };
 const money = (v, d = 0) => fmt.money(v, M().base, d);
@@ -183,6 +187,22 @@ function per(){
 }
 WL.perNow = per;
 const sgn = v => v > 0 ? "+" : v < 0 ? "−" : "";
+/* Подсказка к прибыли за период: как посчитано и чего не хватает — для тех, кто захочет проверить. */
+function perTip(m, r){
+  const id = r.id, abs = v => money(Math.abs(v)), stmtEnd = m.dates[m.dates.length - 1], has = r.exact || r.coverage > 0;
+  const n = r.srcCount, src = [n.buy ? t(`цена покупки — ${n.buy}`, `purchase price — ${n.buy}`) : "", n.stmt ? t(`выписка — ${n.stmt}`, `statement — ${n.stmt}`) : "",
+    n.mkt ? t(`биржевая цена — ${n.mkt}`, `market price — ${n.mkt}`) : ""].filter(Boolean).join(", ");
+  return [
+    r.exact ? t(`По выпискам на ${fmt.date(r.startDate)} и ${fmt.date(stmtEnd)}${r.live ? ", после выписки — текущие цены" : ""}.`, `From the statements as of ${fmt.date(r.startDate)} and ${fmt.date(stmtEnd)}${r.live ? ", current prices after the statement" : ""}.`)
+      : has ? t(`Оценка по позициям (${src})${r.coverage < 0.995 ? `, без точки отсчёта — ${fmt.pct(1 - r.coverage, 0)} вложений` : ""}. Деньги на счетах не считаются прибылью.`,
+        `Estimate from positions (${src})${r.coverage < 0.995 ? `, no starting point for ${fmt.pct(1 - r.coverage, 0)} of holdings` : ""}. Cash balances are not counted as profit.`)
+      : t("Для этого периода нет точки отсчёта.", "No starting point for this period."),
+    r.flows != null && Math.abs(r.flows) >= 1 ? t(`Пополнения и снятия: ${sgn(r.flows)}${abs(r.flows)}.`, `Deposits and withdrawals: ${sgn(r.flows)}${abs(r.flows)}.`) : "",
+    r.change == null && id !== "1d" && id !== "1w" ? (id === "all" || !r.start ? t("Для изменения стоимости нужны выписки за прошлые периоды.", "The change in value needs statements for past periods.")
+      : t(`Для изменения стоимости нужна выписка на ${fmt.date(r.start)}.`, `The change in value needs a statement as of ${fmt.date(r.start)}.`)) : "",
+    r.gaps.length ? t(`Нет выписок за ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}.`, `No statements for ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}.`) : "",
+    r.breaks.length ? t(`Стоимость на конец выписки на ${r.breaks.map(b => fmt.date(b.date)).join(", ")} не совпала с началом следующей.`, `The closing value as of ${r.breaks.map(b => fmt.date(b.date)).join(", ")} doesn't match the next opening value.`) : ""].filter(Boolean).join(" ");
+}
 /* Динамика за период — сразу под итогом: переключатель окна и два числа — «прибыль / убыток» (без пополнений и снятий) и
    «изменение стоимости». Пояснения (откуда числа, пробелы в выписках) — во всплывающей подсказке, не текстом на странице:
    Саша (24.09.2026) — «очень много слов, страница перегружена». Оценка по позициям помечена знаком «≈». */
@@ -197,19 +217,7 @@ function dynamics(m){
     ? `<b class="${r.earned < 0 ? "dn" : "up"}">${r.exact ? "" : "≈ "}${sgn(r.earned)}${esc(abs(r.earned))}</b>${r.earnedPct != null && isFinite(r.earnedPct) ? `<span class="${r.earned < 0 ? "dn" : "up"}">${sgn(r.earnedPct)}${esc(fmt.pct(Math.abs(r.earnedPct), 1))}</span>` : ""}`
     : `<b class="na">—</b>`}</div>`;
   const change = id === "1d" || id === "1w" ? "" : `<div class="dv"><span class="dl">${t("Изменение стоимости", "Change in value")}</span>${r.change != null ? `<b>${sgn(r.change)}${esc(abs(r.change))}</b>` : `<b class="na">—</b>`}</div>`;
-  // подсказка: как посчитано и чего не хватает — для тех, кто захочет проверить
-  const n = r.srcCount, src = [n.buy ? t(`цена покупки — ${n.buy}`, `purchase price — ${n.buy}`) : "", n.stmt ? t(`выписка — ${n.stmt}`, `statement — ${n.stmt}`) : "",
-    n.mkt ? t(`биржевая цена — ${n.mkt}`, `market price — ${n.mkt}`) : ""].filter(Boolean).join(", ");
-  const tip = [
-    r.exact ? t(`По выпискам на ${fmt.date(r.startDate)} и ${fmt.date(stmtEnd)}${r.live ? ", после выписки — текущие цены" : ""}.`, `From the statements as of ${fmt.date(r.startDate)} and ${fmt.date(stmtEnd)}${r.live ? ", current prices after the statement" : ""}.`)
-      : has ? t(`Оценка по позициям (${src})${r.coverage < 0.995 ? `, без точки отсчёта — ${fmt.pct(1 - r.coverage, 0)} вложений` : ""}. Деньги на счетах не считаются прибылью.`,
-        `Estimate from positions (${src})${r.coverage < 0.995 ? `, no starting point for ${fmt.pct(1 - r.coverage, 0)} of holdings` : ""}. Cash balances are not counted as profit.`)
-      : t("Для этого периода нет точки отсчёта.", "No starting point for this period."),
-    r.flows != null && Math.abs(r.flows) >= 1 ? t(`Пополнения и снятия: ${sgn(r.flows)}${abs(r.flows)}.`, `Deposits and withdrawals: ${sgn(r.flows)}${abs(r.flows)}.`) : "",
-    r.change == null && id !== "1d" && id !== "1w" ? (id === "all" || !r.start ? t("Для изменения стоимости нужны выписки за прошлые периоды.", "The change in value needs statements for past periods.")
-      : t(`Для изменения стоимости нужна выписка на ${fmt.date(r.start)}.`, `The change in value needs a statement as of ${fmt.date(r.start)}.`)) : "",
-    r.gaps.length ? t(`Нет выписок за ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}.`, `No statements for ${r.gaps.map(g => fmt.date(g.from) + " – " + fmt.date(g.to)).join(", ")}.`) : "",
-    r.breaks.length ? t(`Стоимость на конец выписки на ${r.breaks.map(b => fmt.date(b.date)).join(", ")} не совпала с началом следующей.`, `The closing value as of ${r.breaks.map(b => fmt.date(b.date)).join(", ")} doesn't match the next opening value.`) : ""].filter(Boolean).join(" ");
+  const tip = perTip(m, r);
   return `<div class="dyn">${chips}<div class="dvs" title="${esc(tip)}"><span class="eyebrow dyh">${since ? `${t("с", "since")} ${esc(fmt.date(since))}` : t("с покупки", "since purchase")}</span>${pl}${change}</div></div>`;
 }
 /* История портфеля: стоимость по датам выписок (и на начало периода первой), график и цепочка выписок с проверкой стыков. */
@@ -349,21 +357,6 @@ function navSec(inTab){
 }
 /* Вкладки отчёта: «Отчёт» и «Стоимость по дням» — вторая есть, когда ряд можно построить (бумаги с биржевой ценой и выписка
    раньше сегодняшнего дня). */
-function tabs(m){
-  const can = !WL.printing && WL.nav && (navSeries() || WL.nav.possible(m, S()));
-  const cur = can && WL.ui.tab === "nav" ? "nav" : "report";
-  if(!can) return {cur, html: ""};
-  const b = (id, label) => `<button type="button" role="tab" data-tab="${id}" aria-selected="${cur === id}">${esc(label)}</button>`;
-  return {cur, html: `<nav class="tabs no-print" role="tablist" aria-label="${t("Разделы отчёта", "Report sections")}">${b("report", t("Отчёт", "Report"))}${b("nav", t("Стоимость по дням", "Value by day"))}</nav>`};
-}
-function navTab(){
-  const sec = navSec(true);
-  if(sec) return sec + method();
-  const st = WL.nav.status();
-  return `<section class="sec intab" id="nav"><div class="card pad navwait">${st === "fail"
-    ? `<p>${t("Цены закрытия сейчас не загрузились. Попробуйте позже — кнопка «Обновить» у котировок.", "Closing prices did not load. Try again later with “Refresh” next to the quotes.")}</p>`
-    : `<p><span class="spin" aria-hidden="true"></span>${t("Загружаю цены закрытия…", "Loading closing prices…")}</p>`}</div></section>`;
-}
 function historySec(){
   const m = M(), H = m.hist, lines = H ? H.lines.filter(L => L.current) : [];
   if(!lines.some(L => L.points.length > 1)) return "";
@@ -382,6 +375,16 @@ function historySec(){
   return `<section class="sec" id="history"><div class="sh"><h2>${t("История", "History")}</h2><span class="muted">${t(`${rows.length} ${WL.pl(rows.length, ["выписка", "выписки", "выписок"], ["", ""])}`, `${rows.length} ${rows.length === 1 ? "statement" : "statements"}`)}</span></div>
     <div class="card pad" title="${esc(t("Стоимость — по выпискам на их даты; кружок без заливки — стоимость на начало периода выписки из её сводки. Стык — проверка, что стоимость на конец одной выписки совпадает с началом следующей.",
       "Values are taken from the statements as of their dates; an open circle is a statement's opening value from its summary. A link check confirms that one statement's closing value matches the next one's opening value."))}">${WL.printing && navSeries() ? "" : historyChart(pts, 1100, 230, "hc-wide") + historyChart(pts, 560, 300, "hc-narrow")}<ul class="hlist">${rows.join("")}</ul></div></section>`;
+}
+function whereCard(m, title){
+  return `<div class="card where">
+      ${title ? `<div class="sh"><h2>${esc(title)}</h2>${liveMode(m) ? `<span class="muted">${t("по текущим ценам", "at current prices")}</span>` : ""}</div>`
+        : `<div class="eyebrow">${t("Где лежит", "Where it is")}${liveMode(m) ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>`}
+      <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
+        const open = worst === "ok" ? i.docs.reduce((k, d) => k + ((d.recon && d.recon.open) || 0), 0) : 0;
+        return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
+          <div class="iv"><b>${esc(money(i.value))}</b>${i.docs.some(d => d.preview) ? "" : recBadge(worst, open, i.docs.some(d => S().files.some(f => f.id === d.id && /queued|reading/.test(f.status))))}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
+    </div>`;
 }
 function hero(){
   const m = M(), s = S();
@@ -402,13 +405,7 @@ function hero(){
       ${coverage(m)}
       ${mix(agg(m))}
     </div>
-    <div class="card where">
-      <div class="eyebrow">${t("Где лежит", "Where it is")}${liveMode(m) ? ` · ${t("по текущим ценам", "at current prices")}` : ""}</div>
-      <ul class="inst">${agg(m).byInst.map(i => { const worst = i.docs.map(d => d.recon ? d.recon.status : "none").sort((a, b) => ({mismatch: 0, partial: 1, none: 2, ok: 3})[a] - ({mismatch: 0, partial: 1, none: 2, ok: 3})[b])[0];
-        const open = worst === "ok" ? i.docs.reduce((k, d) => k + ((d.recon && d.recon.open) || 0), 0) : 0;
-        return `<li><div class="in"><b>${esc(i.name)}</b><span class="muted">${esc(i.as_of.map(fmt.date).join(", "))}</span></div>
-          <div class="iv"><b>${esc(money(i.value))}</b>${i.docs.some(d => d.preview) ? "" : recBadge(worst, open, i.docs.some(d => S().files.some(f => f.id === d.id && /queued|reading/.test(f.status))))}</div><span class="trk"><i style="width:${Math.max(1, Math.round(100 * Math.max(0, i.share)))}%"></i></span></li>`; }).join("")}</ul>
-    </div>
+    ${whereCard(m)}
   </section>`;
 }
 /* Итог: по текущим ценам (если есть котировки) или по выпискам. Переключатель и время обновления — рядом. */
@@ -821,6 +818,130 @@ function demoBar(){
     <button class="btn primary small" type="button" data-new>${t("Загрузить свои выписки", "Upload your statements")}</button></div>`;
 }
 
+/* ── Разделы отчёта (владелец 19.10.2026: структура варианта 10 дизайнеров — в нашем стиле) ───────────────────────────
+   «Обзор» — одним экраном: сколько всего, прибыль за период, три главных вывода, состав, где лежат деньги. Остальное —
+   отдельными экранами: выводы, позиции, динамика, файлы. На компьютере меню слева, на телефоне — внизу, с Евой посередине.
+   На бумаге (PDF) — весь отчёт подряд, как раньше. */
+const SECS = () => [{id: "overview", label: t("Обзор", "Overview"), icon: "home"}, {id: "alerts", label: t("Выводы", "Findings"), icon: "warn"},
+  {id: "holdings", label: t("Позиции", "Positions"), icon: "list"}, {id: "dynamics", label: t("Динамика", "Performance"), icon: "trend"},
+  {id: "files", label: t("Файлы и сверка", "Files and checks"), icon: "file"}];
+// куда ведут ссылки «Подробнее», «Показать позиции» и т. п.: раздел, где лежит нужный блок
+WL.SEC_OF = {overview: "overview", alerts: "alerts", brief: "alerts", questions: "alerts", holdings: "holdings", dates: "holdings",
+  dynamics: "dynamics", nav: "dynamics", history: "dynamics", market: "dynamics", files: "files"};
+const secNow = () => { const s = WL.ui.sec || "overview"; return s === "more" || SECS().some(x => x.id === s) ? s : "overview"; };
+const evaReady = m => !!(m && m.positions.length && !m.preview) && !WL.reading;
+function sideNav(m){
+  const cur = secNow(), n = alertList().length, eva = WL.chatFresh ? WL.chatFresh() : 0;
+  const item = x => `<button type="button" class="si${cur === x.id ? " on" : ""}" data-sec="${x.id}"${cur === x.id ? ' aria-current="page"' : ""}>${ICON[x.icon]}<span>${esc(x.label)}</span>${x.id === "alerts" && n ? `<em>${n}</em>` : ""}</button>`;
+  return `<nav class="side no-print" aria-label="${t("Разделы отчёта", "Report sections")}">${SECS().map(item).join("")}
+    ${evaReady(m) ? `<button type="button" class="si eva" data-chat-open>${ICON.spark}<span>${t("Ева", "Eva")}<small>${t("ассистент", "assistant")}</small></span>${eva ? `<em>${eva}</em>` : ""}</button>` : ""}</nav>`;
+}
+function bottomNav(m){
+  const cur = secNow(), n = alertList().length, eva = WL.chatFresh ? WL.chatFresh() : 0;
+  const b = (id, icon, label, badge) => `<button type="button" class="bi${cur === id ? " on" : ""}" data-sec="${id}"${cur === id ? ' aria-current="page"' : ""}>${ICON[icon]}<span>${esc(label)}</span>${badge ? `<em>${badge}</em>` : ""}</button>`;
+  return `<nav class="bnav no-print" aria-label="${t("Разделы отчёта", "Report sections")}">${b("overview", "home", t("Обзор", "Overview"))}${b("alerts", "warn", t("Выводы", "Findings"), n)}
+    ${evaReady(m) ? `<button type="button" class="bi eva" data-chat-open aria-label="${t("Обсудить с Евой", "Discuss with Eva")}"><i>${ICON.spark}</i><span>${t("Ева", "Eva")}</span>${eva ? `<em>${eva}</em>` : ""}</button>` : `<span></span>`}
+    ${b("holdings", "list", t("Позиции", "Positions"))}${b("more", "dots", t("Ещё", "More"))}</nav>`;
+}
+/* Итог: крупно — текущая оценка (или по выписке, если переключено), под ним одной строкой второе число. Место под строку
+   держится, пока котировки грузятся, — иначе блоки под итогом прыгают (verify: «вёрстка не прыгает»). */
+function totalNow(m){
+  const canLive = m.positions.some(p => WL.market.keyOf(p) || WL.market.occOf(p)), live = liveMode(m);
+  const dates = m.dates.length ? fmt.date(m.dates[m.dates.length - 1]) : "";
+  const has = !!(m.mkt && m.mkt.coverage > 0);
+  const seg = canLive ? `<div class="seg val no-print" role="group" aria-label="${t("Оценка", "Valuation")}"><button type="button" data-val="now" aria-pressed="${live}"${has ? "" : " disabled"}>${t("Сейчас", "Now")}</button><button type="button" data-val="stmt" aria-pressed="${!live}"${has ? "" : " disabled"}>${t("По выписке", "Statement")}</button></div>` : "";
+  let sub;
+  let tip = "";
+  if(live){ const at = new Date(m.mkt.at).toLocaleTimeString(WL.EN ? "en-GB" : "ru-RU", {hour: "2-digit", minute: "2-digit"});
+    tip = t(`Биржевые цены на ${at}, акции с задержкой до 15 минут. По текущим ценам пересчитаны бумаги с биржевой ценой — ${fmt.pct(m.mkt.coverage, 0)} портфеля, остальное — по выпискам.`,
+      `Market prices at ${at}, stocks delayed up to 15 minutes. Holdings with a market price (${fmt.pct(m.mkt.coverage, 0)} of the portfolio) are repriced, the rest stays at statement values.`);
+    sub = `<span class="muted">${t(`по выписке на ${esc(dates)}`, `per statement ${esc(dates)}`)}</span><b>${esc(money(m.total))}</b>`; }
+  else if(m.mkt && m.mkt.coverage > 0) sub = `<span class="muted">${t("сейчас по биржевым ценам", "now at market prices")}</span><b>${esc(money(m.mkt.nowTotal))}</b>`;
+  else sub = canLive ? `<span class="muted">${WL.marketLoading || !WL.marketTried ? t("загружаю текущие цены…", "loading current prices…") : t("текущих цен нет — по выписке", "no current prices — per statement")}</span>` : `<span class="muted">${t(`по выписке на ${esc(dates)}`, `per statement ${esc(dates)}`)}</span>`;
+  const baseName = {USD: t("в долларах", "in US dollars"), EUR: t("в евро", "in euros"), CHF: t("во франках", "in Swiss francs"), GBP: t("в фунтах", "in pounds")}[m.base] || m.base;
+  return `<div class="th"><span class="eyebrow">${live ? t("Всего сейчас", "Total now") : t("Всего", "Total")} ${esc(baseName)}</span>
+      <div class="segs">${seg}<div class="seg" role="group" aria-label="${t("Валюта отчёта", "Report currency")}">${WL.BASES.map(b => `<button type="button" data-base="${b}" aria-pressed="${b === m.base}">${b}</button>`).join("")}</div></div></div>
+    <div class="tv"${tip ? ` title="${esc(tip)}"` : ""}>${esc(money(live ? m.mkt.nowTotal : m.total))}</div>
+    <div class="ov-sub${WL.marketLoading ? " busy" : ""}">${sub}</div>`;
+}
+/* Прибыль за период: одно число с подписью периода; как посчитано — в подсказке. Кнопки — самые нужные периоды. */
+const PER_MAIN = ["1w", "1m", "ytd", "1y", "all"];
+function perLine(m){
+  const r = per();
+  if(!r || m.preview) return "";
+  const id = r.id, has = r.exact || r.coverage > 0;
+  const when = {"1d": t("за день", "today"), "1w": t("за неделю", "this week"), "1m": t("за месяц", "this month"), "3m": t("за 3 месяца", "in 3 months"), "6m": t("за полгода", "in 6 months"),
+    "ytd": t("с начала года", "year to date"), "1y": t("за год", "in a year"), "5y": t("за 5 лет", "in 5 years")}[id] || (r.start ? t(`с ${fmt.date(r.start)}`, `since ${fmt.date(r.start)}`) : t("с покупки", "since purchase"));
+  const chips = WL.WINDOWS.filter(([k]) => PER_MAIN.includes(k) || k === id).map(([k, l]) => `<button type="button" data-per="${k}" aria-pressed="${id === k}">${esc(k === "all" ? t("Всё", "All") : l)}</button>`).join("");
+  return `<div class="ov-per"><div class="pl" title="${esc(perTip(m, r))}"><span class="eyebrow">${t("Прибыль / убыток", "Profit / loss")}</span>${has
+      ? `<b class="${r.earned < 0 ? "dn" : "up"}">${r.exact ? "" : "≈ "}${sgn(r.earned)}${esc(money(Math.abs(r.earned)))}</b>${r.earnedPct != null && isFinite(r.earnedPct) ? `<span class="pill ${r.earned < 0 ? "dn" : "up"}">${sgn(r.earnedPct)}${esc(fmt.pct(Math.abs(r.earnedPct), 1))}</span>` : ""}`
+      : `<b class="na">—</b>`}<span class="muted">${esc(when)}</span></div>
+    <div class="chips per no-print" role="group" aria-label="${t("Период", "Period")}">${chips}</div></div>`;
+}
+function totalCard(m){
+  const accts = new Set(m.docs.filter(d => d.use).flatMap(d => d.accounts.map(a => (d.institution || d.file) + "|" + a.id)));
+  const nAcc = Math.max(accts.size, m.docs.filter(d => d.use).length);
+  const tile = (v, l, tip) => `<div class="tile"${tip ? ` title="${esc(tip)}"` : ""}><b>${esc(String(v))}</b><span>${esc(l)}</span></div>`;
+  const nPos = m.preview ? (m.preview.isins || 0) : m.positions.length;
+  return `<div class="card ov-total">${totalNow(m)}${perLine(m)}
+    <div class="tiles">${tile(m.byInst.length, WL.pl(m.byInst.length, ["банк", "банка", "банков"], ["institution", "institutions"]))}${tile(nAcc, WL.pl(nAcc, ["счёт", "счёта", "счетов"], ["account", "accounts"]))}
+      ${nPos ? tile(nPos, m.preview ? WL.pl(nPos, ["бумага", "бумаги", "бумаг"], ["security", "securities"]) : WL.pl(nPos, ["позиция", "позиции", "позиций"], ["position", "positions"])) : ""}
+      ${m.accrued ? tile(money(m.accrued), t("НКД", "accrued"), t("Накопленный купонный доход — входит в итог, если банк его показывает", "Accrued interest — included in the total where the bank shows it")) : ""}</div>
+    ${coverage(m)}</div>`;
+}
+/* Главное — три первых вывода по важности; кнопки внизу карточки на одном уровне. Без оплаты открыт первый. */
+function miniAlert(a, i, lock){
+  const hide = lock && i > 0, tid = hide ? "" : topicOf(a), refs = (a.refs || []).filter(id => pos(id));
+  return `<article class="card mini lv-${esc(a.level)}${hide ? " locked" : ""}"><div class="al"><span class="lvl lv-${esc(a.level)}">${LVL[a.level] || ""}</span>${a.auto ? "" : `<span class="by">${ICON.spark}${t("ИИ", "AI")}</span>`}</div>
+    <h3>${esc(a.title)}</h3>${hide ? "" : `<p class="clamp">${esc(a.text)}</p>`}
+    <div class="ma no-print">${hide ? `<button class="btn small" type="button" data-buy="alert">${ICON.lock}${t("В полном отчёте", "In the full report")}</button>`
+      : (tid ? `<button class="talkbtn" type="button" data-topic="${esc(tid)}">${ICON.spark}${t("Обсудить с Евой", "Discuss with Eva")}</button>` : "") + (refs.length ? `<button class="link" type="button" data-show="${esc(refs.slice(0, 40).join(","))}">${t("Позиции", "Positions")}</button>` : "")}</div></article>`;
+}
+function mainAlerts(){
+  const all = alertList(), lock = locked();
+  if(!all.length) return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2></div><div class="card pad muted">${WL.reviewing ? t("Ева разбирает отчёт…", "Eva is reviewing the report…") : t("Замечаний нет.", "Nothing to flag.")}</div></div>`;
+  return `<div class="ov-main"><div class="sh"><h2>${t("Главное", "Key points")}</h2>${all.length > 3 ? `<button class="link sh-more" type="button" data-sec="alerts">${t(`Все выводы — ${all.length}`, `All findings — ${all.length}`)}</button>` : ""}</div>
+    <div class="minis">${all.slice(0, 3).map((a, i) => miniAlert(a, i, lock)).join("")}</div></div>`;
+}
+/* Состав — кольцо по классам активов (цвета категорий, зазор 2 px) и подписи с долями. */
+function donut(cats, total){
+  const R = 52, C = 2 * Math.PI * R, gap = cats.length > 1 ? 2 : 0; let off = 0;
+  const arcs = cats.map(c => { const len = Math.max(1.2, c.sh * C - gap);
+    const a = `<circle cx="70" cy="70" r="${R}" fill="none" stroke-width="15" style="stroke:var(--c-${c.key})" stroke-dasharray="${len.toFixed(2)} ${(C - len).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 70 70)"><title>${esc(c.label)} ${esc(fmt.pct(c.sh, 1))}</title></circle>`;
+    off += c.sh * C; return a; }).join("");
+  return `<svg class="donut" viewBox="0 0 140 140" role="img" aria-label="${t("Состав портфеля", "Portfolio mix")}">${arcs}<text x="70" y="65" class="d1">${t("всего", "total")}</text><text x="70" y="84" class="d2">${esc(fmt.short(total, M().base))}</text></svg>`;
+}
+function compCard(m){
+  const a = agg(m), cats = a.byCat.filter(c => c.value > 0), gross = cats.reduce((s, c) => s + c.value, 0);
+  if(!cats.length) return "";
+  const cs = cats.map(c => Object.assign({}, c, {sh: gross ? c.value / gross : 0})).sort((x, y) => y.sh - x.sh);
+  return `<div class="card ov-comp"><div class="sh"><h2>${t("Состав", "Mix")}</h2><button class="link sh-more" type="button" data-sec="holdings">${t("Позиции", "Positions")}</button></div>
+    <div class="comp">${donut(cs, liveMode(m) ? m.mkt.nowTotal : m.total)}<ul class="cl">${cs.map(c => `<li><span class="k c-${c.key}"></span><span class="cn">${esc(c.label)}</span><b>${esc(fmt.pct(c.sh, c.sh < 0.1 ? 1 : 0))}</b></li>`).join("")}</ul></div></div>`;
+}
+function overview(m){
+  return `<section class="ovw" id="overview"><div class="ov-top">${totalCard(m)}${mainAlerts()}</div>
+    <div class="ov-bot">${compCard(m)}${whereCard(m, t("Где лежат деньги", "Where the money is"))}</div></section>`;
+}
+/* «Динамика»: стоимость по дням, история выписок и рынок. */
+function dynamicsSec(){
+  const m = M(), can = WL.nav && (navSeries() || WL.nav.possible(m, S()));
+  let nav = "";
+  if(can){ nav = navSec(true); if(!nav){ const st = WL.nav.status();
+    nav = `<section class="sec intab" id="nav"><div class="card pad navwait">${st === "fail" ? `<p>${t("Цены закрытия сейчас не загрузились. Попробуйте позже — кнопка «Обновить» у котировок.", "Closing prices did not load. Try again later with “Refresh” next to the quotes.")}</p>`
+      : `<p><span class="spin" aria-hidden="true"></span>${t("Загружаю цены закрытия…", "Loading closing prices…")}</p>`}</div></section>`; } }
+  const body = nav + historySec() + (WL.marketSection ? WL.marketSection() : "");
+  return body || `<section class="sec"><div class="card pad muted">${t("Для динамики нужны котировки или выписки за прошлые периоды.", "Performance needs market prices or statements for past periods.")}</div></section>`;
+}
+function secBody(m){
+  switch(secNow()){
+    case "alerts": return brief() + alertsBlock() + questions() || `<section class="sec"><div class="card pad muted">${t("Замечаний нет.", "Nothing to flag.")}</div></section>`;
+    case "holdings": return paywall() + holdings() + currenciesAndDates();
+    case "dynamics": return dynamicsSec();
+    case "files": return files() + method();
+    case "more": return dynamicsSec() + files() + method();
+    default: return overview(m) + paywall();
+  }
+}
 function report(){
   const m = M();
   if(!m || (!m.positions.length && !S().docs.length)) return readingPanel() || `<section class="empty card"><p>${t("Пока ничего не прочитано.", "Nothing has been read yet.")}</p></section>`;
@@ -828,13 +949,15 @@ function report(){
     <p>${t("Отчёт по портфелю", "Portfolio report")} · ${esc(fmt.date(WL.today()))}</p></div>`;
   if(!m.positions.length) return printHead + demoBar() + readingPanel() + (WL.reading ? "" : `<section class="card empty"><h2>${t("Позиций не нашлось", "No positions found")}</h2>
     <p class="muted">${t("В этих файлах не нашлось ни остатков, ни бумаг. Проверьте, что это выписки по счетам, — ниже по каждому файлу написано, что в нём.", "No balances or securities were found in these files. Check that they are account statements — each file below says what it contains.")}</p></section>`) + files();
-  // «Стоимость по дням» — отдельной вкладкой (Саша, 25.09.2026: «брать его, когда это нужно»); на бумаге — всё подряд
-  const tab = tabs(m);
-  if(tab.cur === "nav") return printHead + demoBar() + readingPanel() + tab.html + navTab();
-  return printHead + demoBar() + readingPanel() + tab.html + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + (WL.printing ? navSec() : "") + historySec() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
+  // на бумаге — весь отчёт подряд, как раньше
+  if(WL.printing) return printHead + hero() + paywall() + brief() + alertsBlock() + questions() + holdings() + navSec() + historySec() + currenciesAndDates() + (WL.marketSection ? WL.marketSection() : "") + files() + method();
+  // на экране — разделы (владелец 19.10.2026): меню слева / внизу, содержимое выбранного раздела
+  return printHead + `<div class="layout">${sideNav(m)}<div class="main">${demoBar()}${readingPanel()}${secBody(m)}</div></div>` + bottomNav(m);
 }
 
 WL.ui = WL.ui || {filter: "all", search: "", only: null};
+// раздел при открытии — из адреса (#holdings и т. п.): «назад» в браузере возвращает к предыдущему разделу (app.js)
+if(!WL.ui.sec){ const h = location.hash.replace("#", ""); WL.ui.sec = /^(overview|alerts|holdings|dynamics|files|more)$/.test(h) ? h : "overview"; }
 WL.render = () => {
   const app = $("#app"), s = S();
   const has = s.files.length || s.docs.length || s.demo;
@@ -844,6 +967,7 @@ WL.render = () => {
   if($("#client")) $("#client").value = s.client || "";
   const keep = document.activeElement && document.activeElement.id === "search" ? document.activeElement.selectionStart : null;
   app.innerHTML = has ? report() : upload();
+  document.body.classList.toggle("has-secs", !!app.querySelector(".layout"));
   if(keep != null && $("#search")){ $("#search").focus(); $("#search").setSelectionRange(keep, keep); }
   WL.renderBar && WL.renderBar();
   WL.renderChatLauncher && WL.renderChatLauncher();
