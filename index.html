@@ -88,8 +88,10 @@ svg{width:14px; height:14px; flex:none}
 .how li{counter-increment:s; padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:rgba(14,20,29,.6); display:grid; gap:3px}
 .how li b::before{content:counter(s) "  "; font:600 11px/1 var(--mono); color:var(--accent)}
 .how span{font-size:13px; color:var(--ink-2)}
-.privacy{display:flex; gap:10px; align-items:flex-start; max-width:720px; margin:0; font-size:13px; color:var(--ink-2)}
-.privacy svg{margin-top:3px; color:var(--good)}
+.trust-row{list-style:none; margin:-8px 0 0; padding:0; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 22px; max-width:720px; font-size:13.5px; color:var(--ink-2)}
+.trust-row li{display:flex; gap:7px; align-items:center}
+.trust-row svg{flex:none; width:14px; height:14px; color:var(--good)}
+.privacy{max-width:720px; margin:-12px 0 0; font-size:12.5px; color:var(--muted); text-align:center}
 body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-index:90; border:2px dashed var(--accent); border-radius:22px; background:rgba(6,9,14,.82); display:grid; place-items:center; font:600 20px/1.3 var(--sans); color:var(--accent); pointer-events:none}
 
 /* Отчёт */
@@ -193,6 +195,9 @@ body.dragging::after{content:attr(data-drop); position:fixed; inset:12px; z-inde
 .hook-list{list-style:none; margin:12px 0 12px; padding:0; display:grid; gap:7px}
 .hook-list li{display:flex; gap:9px; align-items:flex-start; font-size:14.5px; color:var(--ink)}
 .hook-list svg{flex:none; width:16px; height:16px; margin-top:3px; color:var(--accent)}
+.guar{display:flex; gap:8px; align-items:center; margin:0; font-size:13px; font-weight:500; color:var(--ink)}
+.guar svg{flex:none; width:16px; height:16px; color:var(--good)}
+.modal .hook-list.opens{margin:2px 0 12px} .modal .guar{margin:0 0 10px}
 
 /* Сводка */
 .brief{margin-top:18px; padding:20px 22px}
@@ -718,8 +723,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/market.js?v=60024bd6c5f7"></script>
 <script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=ebc99ca27670"></script>
-<script src="wealth/view.js?v=060e2685b278"></script>
+<script src="wealth/pay.js?v=d703dd0d4ddd"></script>
+<script src="wealth/view.js?v=49bbb604d9e3"></script>
 <script src="wealth/chat.js?v=d753a365c3b6"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
 <script src="wealth/app.js?v=9059a4d3f617"></script>

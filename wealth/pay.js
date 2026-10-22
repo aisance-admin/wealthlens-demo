@@ -169,6 +169,23 @@ pay.returnFromStripe = async () => {
   WL.render();
 };
 
+/* Что откроется — числами: бумаги, банки, выводы. Обещание «вернём» — как в политике возврата: ошибка чтения, о которой отчёт
+   не предупредил и которую не исправили за 5 рабочих дней (/legal/refund/). */
+function opens(){
+  const m = WL.model, pv = m.preview, banks = m.byInst.length, al = !pv && WL.alertList ? WL.alertList().length : 0;
+  // число бумаг точно, только когда выписки прочитаны целиком; по сводкам точно лишь число страниц, которые дочитаем
+  // (ISIN на страницах его занижают: у опционов и у брокеров США их нет)
+  const left = pv ? Math.max(0, pv.total - pv.read) : 0, nSec = m.positions.filter(p => p.cls !== "cash").length;
+  return [
+    left ? t(`Ещё ${left} ${WL.pl(left, ["страница", "страницы", "страниц"], ["", ""])} выписок: каждая бумага с ценой и изменением`, `${left} more statement ${left === 1 ? "page" : "pages"}: every security with price and change`)
+      : nSec && !pv ? t(`${nSec} ${WL.pl(nSec, ["бумага", "бумаги", "бумаг"], ["", ""])} — с ценой и изменением`, `${nSec} ${nSec === 1 ? "security" : "securities"} with price and change`)
+      : t("Каждая бумага — с ценой и изменением", "Every security with price and change"),
+    banks > 1 ? t(`Сверка с итогом каждого из ${banks} банков`, `Totals checked against each of the ${banks} banks`) : t("Сверка с итогом банка", "Totals checked against the bank"),
+    al > 1 ? t(`${al} ${WL.pl(al, ["вывод", "вывода", "выводов"], ["", ""])} и разбор портфеля`, `${al} findings and a portfolio review`) : t("Разбор портфеля и вопросы к банку", "Portfolio review and questions for the bank"),
+    t("PDF и Excel", "PDF and Excel")];
+}
+const guarantee = () => t(`Ошибка чтения — исправим или вернём ${PRICE.label}`, `Misread statement? We fix it or refund ${PRICE.label}`);
+
 let busy = false;
 pay.open = async source => {
   const s = S();
@@ -178,22 +195,22 @@ pay.open = async source => {
   if(busy) return;
   const u0 = unlockOf(s.rid);
   if(u0 && !confirmed(u0)){ busy = true; await pay.check(); busy = false; if(!pay.locked() || unlockOf(s.rid)) return; }
-  const gift = pay.promo();
+  const gift = pay.promo(), I = WL.ICON || {};
   busy = true;
   track("Paywall Opened", {source: String(source || ""), gift: !!gift});
   const {choice} = await WL.dialog({
     eyebrow: gift ? t("Подарочный код", "Gift code") : t("Полный отчёт", "Full report"),
     title: gift ? t("Открыть полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Открыть полный отчёт за ${PRICE.label}`, `Unlock the full report for ${PRICE.label}`),
-    body: `<p>${gift ? t(`Код <b>${esc(gift)}</b> будет уже применён на странице Stripe — к оплате €0.`, `Code <b>${esc(gift)}</b> will already be applied on the Stripe page — you pay €0.`)
-        : t("Разовая оплата через Stripe, без подписки.", "A one-off payment via Stripe, no subscription.")}
-      ${t("Откроются все позиции, выводы и выгрузка отчёта в PDF и Excel. Выписки этого же портфеля можно добавлять и потом — платить снова не нужно.",
-          "You get every position, all findings and the PDF and Excel downloads. You can add statements of the same portfolio later at no extra cost.")}</p>
-      <p class="muted">${t("Отчёт и доступ хранятся в этом браузере. Нужен отчёт на другом устройстве — напишите нам, откроем без повторной оплаты.",
-        "The report and its access are kept in this browser. Need it on another device? Write to us and we will unlock it at no extra cost.")}</p>
+    body: `<ul class="hook-list opens">${opens().map(x => `<li>${I.check || ""}<span>${esc(x)}</span></li>`).join("")}</ul>
+      ${gift ? "" : `<p class="guar">${I.shield || ""}<span>${esc(guarantee())}</span></p>`}
+      <p>${gift ? t(`Код <b>${esc(gift)}</b> будет уже применён на странице Stripe — к оплате €0.`, `Code <b>${esc(gift)}</b> will already be applied on the Stripe page — you pay €0.`)
+        : t("Разовая оплата через Stripe, без подписки. Данные карты мы не видим.", "A one-off payment via Stripe, no subscription. We never see your card details.")}</p>
+      <p class="muted">${t("Выписки этого портфеля можно добавлять и потом — бесплатно. Доступ хранится в этом браузере; на другом устройстве откроем по письму, без повторной оплаты.",
+        "You can add statements of this portfolio later for free. Access is kept in this browser; on another device we unlock it by email at no extra cost.")}</p>
       <label class="check"><input type="checkbox" data-waiver> <span>${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
         "I ask for the report to be unlocked right after payment and understand that I then lose the 14-day right of withdrawal.")}</span></label>
-      ${ON_SITE ? `<p class="fine">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">возврат, если отчёт не собрался</a>`,
-        `<a href="/en/legal/terms/" target="_blank" rel="noopener">Terms</a> · <a href="/en/legal/refund/" target="_blank" rel="noopener">refund if the report can't be built</a>`)}</p>` : ""}`,
+      ${ON_SITE ? `<p class="fine">${t(`<a href="/legal/terms/" target="_blank" rel="noopener">Условия</a> · <a href="/legal/refund/" target="_blank" rel="noopener">Возврат оплаты</a>`,
+        `<a href="/en/legal/terms/" target="_blank" rel="noopener">Terms</a> · <a href="/en/legal/refund/" target="_blank" rel="noopener">Refunds</a>`)}</p>` : ""}`,
     buttons: [{id: "pay", label: gift ? t("Продолжить", "Continue") : t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}],
     gate: "[data-waiver]",
   });

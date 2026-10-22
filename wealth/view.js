@@ -21,6 +21,8 @@ const ICON = {
   dots: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" fill="currentColor"/><circle cx="8" cy="8" r="1.3" fill="currentColor"/><circle cx="12.5" cy="8" r="1.3" fill="currentColor"/></svg>',
   file: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.8h5.2L12.5 5v9.2H4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M9 2v3.3h3.3" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 };
+ICON.shield = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v4c0 3-2.1 5.4-5 6.4-2.9-1-5-3.4-5-6.4v-4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M5.6 8.1l1.7 1.6 3.1-3.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+WL.ICON = ICON;                                            // окно оплаты (pay.js) рисует теми же значками
 const money = (v, d = 0) => fmt.money(v, M().base, d);
 const pos = id => M().positions.find(p => p.id === id);
 const docOf = id => M().docs.find(d => d.id === id);
@@ -42,14 +44,15 @@ function upload(){
       <p class="hint">${t("или перетащите их сюда · PDF, JPG, PNG, Excel, CSV", "or drag them here · PDF, JPG, PNG, Excel, CSV")}</p>
       <a class="demo-link" href="?demo=1${WL.EN ? "&lang=en" : ""}">${t("Посмотреть пример отчёта", "See a sample report")}</a>
     </div>
+    <ul class="trust-row">${[t("Без логинов и доступа к счетам", "No logins or account access"),
+      t("Страницы удаляем сразу после чтения", "Pages are deleted right after reading"), t("Отчёт — только в вашем браузере", "The report stays in your browser")]
+      .map(x => `<li>${ICON.lock}<span>${x}</span></li>`).join("")}</ul>
     <ol class="how">
       <li><b>${t("Кладёте файлы", "Drop the files")}</b><span>${t("Любые выписки, в любом виде и на любом языке.", "Any statements, in any layout or language.")}</span></li>
       <li><b>${t("Читаем каждую страницу", "We read every page")}</b><span>${t("Как человек: таблицы, итоги, валюты — с помощью ИИ.", "Like a person would: tables, totals, currencies — with AI.")}</span></li>
       <li><b>${t("Получаете отчёт", "You get the report")}</b><span>${t("Здесь в браузере, в PDF и в Excel.", "Here in the browser, as PDF and as Excel.")}</span></li>
     </ol>
-    <p class="privacy">${ICON.lock}<span>${t("Выписки читает наша технология на основе ИИ. Страницы хранятся зашифрованными, только пока их читают, — потом удаляются. Отчёт остаётся в этом браузере.",
-      "Statements are read by our AI-based technology. Pages are kept encrypted only while they are read, then deleted. The report stays in this browser.")}
-      ${WL.pay.ON_SITE ? `<a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Подробнее", "Details")}</a>` : ""}${WL.pay.ON_SITE && (window.WL_MP_TOKEN || window.WL_PIXEL_ID) ? ` · <a href="#" data-cookies>${t("Cookies", "Cookies")}</a>` : ""}</span></p>
+    ${WL.pay.ON_SITE ? `<p class="privacy"><a href="${WL.EN ? "/en" : ""}/legal/privacy/">${t("Как мы обращаемся с выписками", "How we handle statements")}</a>${window.WL_MP_TOKEN || window.WL_PIXEL_ID || window.WL_GADS ? ` · <a href="#" data-cookies>${t("Cookies", "Cookies")}</a>` : ""}</p>` : ""}
   </section>`;
 }
 
@@ -635,6 +638,7 @@ function paywall(){
       <p class="muted">${left ? t(`Откроется сразу после оплаты: дочитаем ${left} ${WL.pl(left, ["страницу", "страницы", "страниц"], ["", ""])} — около минуты. Разовая оплата, без подписки.`, `Opens right after payment: we read the remaining ${left} ${left === 1 ? "page" : "pages"} — about a minute. One-off payment, no subscription.`)
         : t("Разовая оплата, без подписки.", "One-off payment, no subscription.")}</p></div>
     <div class="pa"><button class="btn primary big" type="button" data-buy="paywall">${gift ? t("Открыть за €0", "Unlock for €0") : t(`Открыть полный отчёт — ${pay.PRICE.label}`, `Unlock the full report — ${pay.PRICE.label}`)}</button>
+      ${gift ? "" : `<p class="guar">${ICON.shield}<span>${esc(t(`Ошибка чтения — исправим или вернём ${pay.PRICE.label}`, `Misread statement? We fix it or refund ${pay.PRICE.label}`))}</span></p>`}
       <button class="link" type="button" data-restore>${t("Уже оплатили? Восстановить доступ", "Already paid? Restore access")}</button></div>
   </section>`;
   }
@@ -643,6 +647,7 @@ function paywall(){
       <h2>${gift ? t("Откройте полный отчёт по подарочному коду", "Unlock the full report with your gift code") : t(`Все позиции, выводы, PDF и Excel — ${pay.PRICE.label}`, `Every position, all findings, PDF and Excel — ${pay.PRICE.label}`)}</h2>
       <p class="muted">${t("Сейчас видно итог, состав, банки, первый вывод и крупнейшие позиции. Разовая оплата, без подписки.", "You can see the total, the mix, the institutions, the first finding and the largest positions. One-off payment, no subscription.")}</p></div>
     <div class="pa"><button class="btn primary big" type="button" data-buy="paywall">${gift ? t("Открыть за €0", "Unlock for €0") : t(`Открыть за ${pay.PRICE.label}`, `Unlock for ${pay.PRICE.label}`)}</button>
+      ${gift ? "" : `<p class="guar">${ICON.shield}<span>${esc(t(`Ошибка чтения — исправим или вернём ${pay.PRICE.label}`, `Misread statement? We fix it or refund ${pay.PRICE.label}`))}</span></p>`}
       <button class="link" type="button" data-restore>${t("Уже оплатили? Восстановить доступ", "Already paid? Restore access")}</button></div>
   </section>`;
 }
