@@ -16,6 +16,10 @@ const TAG = document.currentScript, D = (TAG && TAG.dataset) || {};
 if(!window.WL_AUDIENCE && D.audience) window.WL_AUDIENCE = D.audience;
 const LOCAL = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname), Q = new URLSearchParams(location.search);
 const PIXEL = String(window.WL_PIXEL_ID || D.pixel || "");
+/* Google Ads: номер тега и метки конверсий (покупка, начало оплаты, предпросмотр) — из wealth/config.js или атрибута лендинга. */
+let GADS = window.WL_GADS || null;
+if(!GADS && D.gads){ try{ GADS = JSON.parse(D.gads); }catch(e){} }
+if(!GADS || !/^AW-\d{6,}$/.test(String(GADS.id || ""))) GADS = null;
 /* Стенд: ?mp=…&mp_host=… запоминаются на вкладку — после возврата со страницы оплаты их в адресе уже нет. */
 const tab = (k, v) => { try{ if(v) sessionStorage.setItem("wl_" + k, v); return v || sessionStorage.getItem("wl_" + k) || ""; }catch(e){ return v || ""; } };
 const MP = LOCAL ? String(tab("mp", Q.get("mp"))) : String(window.WL_MP_TOKEN || D.mp || "");
@@ -49,6 +53,25 @@ function loadPixel(){
   window.fbq("set", "autoConfig", false, PIXEL);   // не собирать кнопки и поля страницы автоматически
   window.fbq("init", PIXEL);
   window.fbq("track", "PageView");
+}
+
+/* Тег Google Ads — только измерение рекламы: персонализация (ремаркетинг) и расширенные конверсии выключены, просмотры страниц
+   в Google не уходят. Клик по рекламе (gclid), если cookies разрешили уже в приложении, передаётся запомненным. */
+let gtOn = false;
+function loadGtag(){
+  if(!GADS) return;
+  if(gtOn){ try{ window.gtag("consent", "update", {ad_storage: "granted", ad_user_data: "granted"}); }catch(e){} return; }
+  gtOn = true;
+  window.dataLayer = window.dataLayer || [];
+  window.gtag = window.gtag || function(){ window.dataLayer.push(arguments); };
+  window.gtag("consent", "default", {ad_storage: "granted", ad_user_data: "granted", ad_personalization: "denied", analytics_storage: "denied"});
+  window.gtag("js", new Date());
+  const cfg = {allow_enhanced_conversions: false, send_page_view: false};
+  let c = {}; try{ c = JSON.parse(get(CLICK) || "{}"); }catch(e){}
+  if(c.gclid && Date.now() - (c.gat || 0) < 90 * 864e5 && !Q.get("gclid")) cfg.page_location = location.origin + location.pathname + "?gclid=" + encodeURIComponent(c.gclid);
+  window.gtag("config", GADS.id, cfg);
+  const t = document.createElement("script"); t.async = true; t.src = "https://www.googletagmanager.com/gtag/js?id=" + encodeURIComponent(GADS.id);
+  document.head.appendChild(t);
 }
 
 /* Mixpanel: только значения-числа, да/нет и короткие строки-метки; всё прочее отбрасывается. */
@@ -109,9 +132,15 @@ const pixelParams = (name, p) => { const o = {}; ["value", "currency", "content_
   return o; };
 /* Номер события: одна покупка из браузера и с сервера считается один раз (Mixpanel — до 36 букв и цифр, как на сервере). */
 const insertId = id => String(id || "").replace(/[^A-Za-z0-9]/g, "").slice(-36);
+/* Конверсии Google Ads: те же шаги, у покупки — номер оплаты (Google не посчитает её дважды). */
+const GADS_MAP = {Purchase: "purchase", "Chat Pack Purchased": "purchase", InitiateCheckout: "checkout"};
+const gadsKey = (name, p) => GADS_MAP[name] || ((name === "Preview Ready" || name === "Report Ready") && p.locked === true ? "preview" : null);
 WL.track = function(name, params, opts = {}){
   const p = Object.assign({}, params || {});
   try{ const px = pixelEvent(name, p); if(px && allowed() && window.fbq) window.fbq(px[0], px[1], pixelParams(name, p), opts.id ? {eventID: String(opts.id)} : undefined); }catch(e){}
+  try{ const k = gadsKey(name, p), q = pixelParams(name, p);
+    if(k && GADS && GADS[k] && gtOn && allowed() && window.gtag) window.gtag("event", "conversion", Object.assign({send_to: GADS.id + "/" + GADS[k]},
+      q.value !== undefined ? {value: q.value, currency: q.currency || "EUR"} : {}, opts.id ? {transaction_id: String(opts.id)} : {})); }catch(e){}
   try{ if(window.va) window.va("event", {name, data: p}); }catch(e){}
   if(!MP || get(CONSENT) === "necessary") return;
   const ev = [MP_NAME[name] || name, clean(p)];
@@ -129,8 +158,11 @@ WL.track = function(name, params, opts = {}){
   if(Object.keys(found).length) set(ATTR_LAST, JSON.stringify(Object.assign({seen: day}, found)));
   if(window.WL_AUDIENCE && !found.audience) found.audience = window.WL_AUDIENCE;
   if(Object.keys(found).length && !get(ATTR)) set(ATTR, JSON.stringify(Object.assign({first_seen: day}, found)));
-  const fbclid = Q.get("fbclid");
-  if(fbclid && /^[A-Za-z0-9_-]{8,400}$/.test(fbclid)) set(CLICK, JSON.stringify({fbclid, at: Date.now()}));
+  let ck = {}; try{ ck = JSON.parse(get(CLICK) || "{}"); }catch(e){}
+  const fbclid = Q.get("fbclid"), gclid = Q.get("gclid");
+  if(fbclid && /^[A-Za-z0-9_-]{8,400}$/.test(fbclid)) Object.assign(ck, {fbclid, at: Date.now()});
+  if(gclid && /^[A-Za-z0-9_-]{8,400}$/.test(gclid)) Object.assign(ck, {gclid, gat: Date.now()});
+  if(fbclid || gclid) set(CLICK, JSON.stringify(ck));
 })();
 WL.attribution = () => { try{ return JSON.parse(get(ATTR) || "{}"); }catch(e){ return {}; } };
 WL.attributionLast = () => { try{ return JSON.parse(get(ATTR_LAST) || "{}"); }catch(e){ return {}; } };
@@ -153,11 +185,12 @@ WL.adIds = () => {
 // Без согласия по умолчанию (ЕЭЗ и соседи) показывается, пока не выбрали; в остальных странах — один раз.
 // «Настройки cookies» внизу страницы открывают его снова.
 function notice(force){
-  if(!(PIXEL || MP) || document.querySelector(".consent")) return;
+  const ADS = PIXEL || GADS;
+  if(!(ADS || MP) || document.querySelector(".consent")) return;
   if(!force && (get(CONSENT) || (!STRICT && get(SEEN)))) return;
   if(!STRICT && !force) set(SEEN, "1");
   const EN = en(), ask = STRICT || force;
-  const why = MP && PIXEL ? (EN ? "for site analytics and to measure our ads" : "для аналитики сайта и оценки рекламы")
+  const why = MP && ADS ? (EN ? "for site analytics and to measure our ads" : "для аналитики сайта и оценки рекламы")
     : MP ? (EN ? "for site analytics" : "для аналитики сайта") : (EN ? "to measure our ads" : "для оценки рекламы");
   const b = document.createElement("div");
   b.className = "consent no-print";
@@ -171,15 +204,17 @@ function notice(force){
   b.onclick = e => {
     const x = e.target.closest("[data-c]"); if(!x) return;
     set(CONSENT, x.dataset.c);
-    if(x.dataset.c === "all"){ loadPixel(); loadMixpanel(); }
-    else { if(window.fbq){ try{ window.fbq("consent", "revoke"); }catch(err){} } stopMixpanel(); }
+    if(x.dataset.c === "all"){ loadPixel(); loadGtag(); loadMixpanel(); }
+    else { if(window.fbq){ try{ window.fbq("consent", "revoke"); }catch(err){} }
+      if(gtOn && window.gtag){ try{ window.gtag("consent", "update", {ad_storage: "denied", ad_user_data: "denied"}); }catch(err){} }
+      stopMixpanel(); }
     b.classList.remove("in"); setTimeout(() => b.remove(), 260);
   };
   document.body.appendChild(b);
   setTimeout(() => b.classList.add("in"), force ? 0 : 900);
 }
 function init(){
-  if(allowed()){ if(PIXEL) loadPixel(); if(MP) loadMixpanel(); }
+  if(allowed()){ if(PIXEL) loadPixel(); if(GADS) loadGtag(); if(MP) loadMixpanel(); }
   WL.track("Page View", {page: PAGE});
   notice(false);
 }
