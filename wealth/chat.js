@@ -290,7 +290,9 @@ async function buyPack(id){
     buttons: [{id: "pay", label: t("Перейти к оплате", "Continue to payment"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}], gate: "[data-waiver]"});
   if(choice !== "pay") return;
   WL.save();
-  const r = await WL.api("/chat/checkout", {rid: rid(), pack: id, lang: WL.lang, path: location.pathname, waiver: true});
+  const ads = WL.adIds ? WL.adIds() : null;
+  if(WL.track) WL.track("Chat Pack Checkout", {pack: id, messages: p.messages});
+  const r = await WL.api("/chat/checkout", Object.assign({rid: rid(), pack: id, lang: WL.lang, path: location.pathname, waiver: true}, ads ? {ads} : {}));
   if(r && r.url){ WL.store.set("wl_chat_pending", {rid: rid(), sid: r.id, at: Date.now()}); WL.leaving = true; location.href = r.url; return; }
   WL.toast(r && r.error === "packs_not_configured" ? t("Пакеты сообщений скоро появятся.", "Message packs are coming soon.") : t("Не удалось открыть оплату. Попробуйте ещё раз.", "Could not open checkout. Please try again."));
 }
@@ -305,6 +307,9 @@ WL.chatReturn = async () => {
   if(r && r.ok){
     if(!S().demo && r0 === S().rid){ S().chatPacks = [...new Set([...(S().chatPacks || []), sid])]; keepTally(r.credits); WL.save(); }
     C.credits = Object.assign(r.credits, {rid: r0}); WL.store.del("wl_chat_pending");
+    const seen = "wl_purchase_" + String(sid).slice(-16);
+    if(WL.track && !WL.store.get(seen)){ WL.store.set(seen, 1);
+      WL.track("Chat Pack Purchased", {messages: r.messages, value: typeof r.amount === "number" ? r.amount : undefined, currency: r.currency || "EUR", content_name: "chat_pack"}, {id: sid}); }
     WL.toast(t(`Добавлено ${r.messages} сообщений`, `${r.messages} messages added`)); WL.openChat(null);
   }
   else WL.toast(t("Оплату сообщений не удалось подтвердить. Обновите страницу через минуту или напишите нам.", "Could not confirm the message payment. Refresh in a minute or write to us."));

@@ -16,11 +16,14 @@ const TAG = document.currentScript, D = (TAG && TAG.dataset) || {};
 if(!window.WL_AUDIENCE && D.audience) window.WL_AUDIENCE = D.audience;
 const LOCAL = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname), Q = new URLSearchParams(location.search);
 const PIXEL = String(window.WL_PIXEL_ID || D.pixel || "");
-const MP = LOCAL ? String(Q.get("mp") || "") : String(window.WL_MP_TOKEN || D.mp || "");
-const MP_HOST = LOCAL && /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(Q.get("mp_host") || "") ? Q.get("mp_host") : "https://api-eu.mixpanel.com";
+/* Стенд: ?mp=…&mp_host=… запоминаются на вкладку — после возврата со страницы оплаты их в адресе уже нет. */
+const tab = (k, v) => { try{ if(v) sessionStorage.setItem("wl_" + k, v); return v || sessionStorage.getItem("wl_" + k) || ""; }catch(e){ return v || ""; } };
+const MP = LOCAL ? String(tab("mp", Q.get("mp"))) : String(window.WL_MP_TOKEN || D.mp || "");
+const MP_HOST_Q = LOCAL ? tab("mp_host", Q.get("mp_host")) : "";
+const MP_HOST = /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}$/.test(MP_HOST_Q) ? MP_HOST_Q : "https://api-eu.mixpanel.com";
 const ENV = LOCAL ? "local" : String(window.WL_ENV || D.env || "production");
 const PAGE = D.page || "app";
-const CONSENT = "wl_consent_v1", SEEN = "wl_consent_seen", ATTR = "wl_attr_v1";
+const CONSENT = "wl_consent_v1", SEEN = "wl_consent_seen", ATTR = "wl_attr_v1", ATTR_LAST = "wl_attr_last_v1", CLICK = "wl_click_v1";
 const get = k => { try{ return localStorage.getItem(k); }catch(e){ return null; } };
 const set = (k, v) => { try{ localStorage.setItem(k, v); }catch(e){} };
 const en = () => (document.documentElement.lang || "ru").startsWith("en");
@@ -60,8 +63,10 @@ const clean = p => {
 };
 const superProps = () => {
   const a = WL.attribution ? WL.attribution() : {};
+  const l = WL.attributionLast ? WL.attributionLast() : {};
   return clean({page_type: PAGE, lang: en() ? "en" : "ru", env: ENV, audience: a.audience || window.WL_AUDIENCE, first_seen: a.first_seen,
-    utm_source: a.utm_source, utm_medium: a.utm_medium, utm_campaign: a.utm_campaign, utm_content: a.utm_content});
+    utm_source: a.utm_source, utm_medium: a.utm_medium, utm_campaign: a.utm_campaign, utm_content: a.utm_content,
+    last_utm_source: l.utm_source, last_utm_campaign: l.utm_campaign, last_utm_content: l.utm_content, last_seen_ad: l.seen});
 };
 let mpOn = false;
 const mpQueue = [];
@@ -92,23 +97,57 @@ function stopMixpanel(){
 /* Имена шагов в Mixpanel: стандартные события пикселя — понятными словами, остальные — как есть. */
 const STANDARD = new Set(["PageView", "ViewContent", "Lead", "InitiateCheckout", "Purchase", "CompleteRegistration"]);
 const MP_NAME = {ViewContent: "App Opened", InitiateCheckout: "Checkout Started", Purchase: "Purchase", Lead: "Lead", CompleteRegistration: "Sign Up"};
-WL.track = function(name, params){
+/* Шаги воронки, которые видит и реклама: кампании учатся на шаге, где событий больше, чем оплат. Предпросмотр — наш
+   «пробный период» (StartTrial), окно оплаты — «положил в корзину» (AddToCart), пакет сообщений — тоже покупка. В пиксель
+   уходят только имя, сумма, валюта и что куплено. */
+const PIXEL_MAP = {"Files Added": ["trackCustom", "UploadStatements"], "Paywall Opened": ["track", "AddToCart"], "Chat Pack Purchased": ["track", "Purchase"]};
+const pixelEvent = (name, p) => STANDARD.has(name) ? ["track", name] : PIXEL_MAP[name]
+  || ((name === "Preview Ready" || name === "Report Ready") && p.locked === true ? ["track", "StartTrial"] : null);
+const pixelParams = (name, p) => { const o = {}; ["value", "currency", "content_name"].forEach(k => { if(p[k] !== undefined && p[k] !== "") o[k] = p[k]; });
+  if(name === "Paywall Opened") Object.assign(o, {value: 49, currency: "EUR", content_name: "portfolio_report"});
+  if(name === "Preview Ready" || name === "Report Ready") Object.assign(o, {value: 0, currency: "EUR", content_name: "portfolio_report"});
+  return o; };
+/* Номер события: одна покупка из браузера и с сервера считается один раз (Mixpanel — до 36 букв и цифр, как на сервере). */
+const insertId = id => String(id || "").replace(/[^A-Za-z0-9]/g, "").slice(-36);
+WL.track = function(name, params, opts = {}){
   const p = Object.assign({}, params || {});
-  try{ if(STANDARD.has(name) && allowed() && window.fbq) window.fbq("track", name, p); }catch(e){}
+  try{ const px = pixelEvent(name, p); if(px && allowed() && window.fbq) window.fbq(px[0], px[1], pixelParams(name, p), opts.id ? {eventID: String(opts.id)} : undefined); }catch(e){}
   try{ if(window.va) window.va("event", {name, data: p}); }catch(e){}
   if(!MP || get(CONSENT) === "necessary") return;
   const ev = [MP_NAME[name] || name, clean(p)];
+  if(opts.id) ev[1].$insert_id = insertId(opts.id);
   try{ if(mpOn && window.mixpanel) window.mixpanel.track(ev[0], ev[1]); else if(mpQueue.length < 50) mpQueue.push([ev[0], Object.assign(ev[1], {time: Date.now() / 1000})]); }catch(e){}   // до согласия — со своим временем
 };
 
-// Первое касание: метки кампании и аудитория лендинга.
+// Первое касание: метки кампании и аудитория лендинга; последнее касание — метки свежего захода из рекламы (повторный
+// показ, другая кампания). Номер клика по рекламе Meta (fbclid) — чтобы сопоставить оплату с кликом, когда человек
+// разрешит cookies уже в приложении, где адреса с fbclid больше нет. В Mixpanel номер клика не уходит.
 (function(){
   const keys = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "audience"];
   const found = {}; keys.forEach(k => { const v = Q.get(k); if(v) found[k] = v.slice(0, 120); });
+  const day = new Date().toISOString().slice(0, 10);
+  if(Object.keys(found).length) set(ATTR_LAST, JSON.stringify(Object.assign({seen: day}, found)));
   if(window.WL_AUDIENCE && !found.audience) found.audience = window.WL_AUDIENCE;
-  if(Object.keys(found).length && !get(ATTR)) set(ATTR, JSON.stringify(Object.assign({first_seen: new Date().toISOString().slice(0, 10)}, found)));
+  if(Object.keys(found).length && !get(ATTR)) set(ATTR, JSON.stringify(Object.assign({first_seen: day}, found)));
+  const fbclid = Q.get("fbclid");
+  if(fbclid && /^[A-Za-z0-9_-]{8,400}$/.test(fbclid)) set(CLICK, JSON.stringify({fbclid, at: Date.now()}));
 })();
 WL.attribution = () => { try{ return JSON.parse(get(ATTR) || "{}"); }catch(e){ return {}; } };
+WL.attributionLast = () => { try{ return JSON.parse(get(ATTR_LAST) || "{}"); }catch(e){ return {}; } };
+/* Метки для покупки с сервера (см. api/index.py, _conversion): только с согласием на cookies — иначе пусто. */
+const cookie = n => { const m = document.cookie.match(new RegExp("(?:^|; )" + n + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : ""; };
+WL.adIds = () => {
+  if(!allowed() || get(CONSENT) === "necessary") return null;
+  const o = {};
+  try{ if(mpOn && window.mixpanel && window.mixpanel.get_distinct_id) o.mp_id = String(window.mixpanel.get_distinct_id() || ""); }catch(e){}
+  if(PIXEL){
+    o.fbp = cookie("_fbp");
+    let c = {}; try{ c = JSON.parse(get(CLICK) || "{}"); }catch(e){}
+    o.fbc = cookie("_fbc") || (c.fbclid && Date.now() - c.at < 90 * 864e5 ? `fb.1.${c.at}.${c.fbclid}` : "");
+  }
+  Object.keys(o).forEach(k => { if(!o[k]) delete o[k]; });
+  return Object.keys(o).length ? o : null;
+};
 
 // Уведомление о cookies — маленькая карточка в углу, не перекрывает страницу и не требует ответа.
 // Без согласия по умолчанию (ЕЭЗ и соседи) показывается, пока не выбрали; в остальных странах — один раз.

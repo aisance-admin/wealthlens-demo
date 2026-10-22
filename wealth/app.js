@@ -143,7 +143,8 @@ function trackRead(t0){
   WL.track(!ok ? "Read Failed" : pv ? "Preview Ready" : "Report Ready", {files: files.length, read: ok, failed: files.filter(f => f.status === "error").length,
     pages: pv ? pv.read : s.docs.reduce((k, d) => k + (d.pages || []).length, 0), pages_total: pv ? pv.total : s.docs.reduce((k, d) => k + (d.pageCount || 0), 0),
     securities: pv ? pv.isins || 0 : m ? m.positions.length : 0, recon_ok: recon.filter(x => x === "ok").length,
-    recon_off: recon.filter(x => x === "mismatch" || x === "partial").length, seconds: Math.round((Date.now() - t0) / 1000), limit: WL.quotaHit || "none"});
+    recon_off: recon.filter(x => x === "mismatch" || x === "partial").length, seconds: Math.round((Date.now() - t0) / 1000), limit: WL.quotaHit || "none",
+    locked: !!(WL.pay && WL.pay.PAYWALL && WL.pay.locked())});        // закрытый отчёт — «пробный период» для рекламы (track.js)
 }
 function errText(e){
   const c = e && e.code;
@@ -531,7 +532,7 @@ document.addEventListener("click", async e => {
     doc.ref_ccy = c; doc.rows.forEach(r => { if(!r.ccy) r.ccy = c; }); doc.totals.forEach(x => { if(!x.currency) x.currency = c; });
     await WL.rebuild(); return reviewSoon();
   }
-  if(d.new !== undefined) return leaveDemo();
+  if(d.new !== undefined){ if(WL.state.demo && WL.track) WL.track("Demo Upload Clicked", {from: el.closest("#chat") ? "chat" : "report"}); return leaveDemo(); }
 });
 window.addEventListener("beforeunload", e => { if(WL.reading && !WL.leaving){ e.preventDefault(); e.returnValue = ""; } });
 

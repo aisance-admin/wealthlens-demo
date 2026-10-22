@@ -14,7 +14,7 @@ const UNLOCKS = "wl_unlock_v1", PENDING = "wl_pending_checkout", PROMO_KEY = "wl
 const TOKEN = /^[a-f0-9]{40}$/, PROMO_RE = /^[A-Z0-9][A-Z0-9-]{3,31}$/;
 const SUPPORT = String(window.WL_SUPPORT_EMAIL || "");
 const S = () => WL.state;
-const track = (n, p) => WL.track && WL.track(n, p);
+const track = (n, p, o) => WL.track && WL.track(n, p, o);
 
 const unlocks = () => WL.store.get(UNLOCKS, {}) || {};
 const setUnlocks = m => WL.store.set(UNLOCKS, m);
@@ -98,7 +98,7 @@ async function unlockWith(sid, r, restored){
   if(WL.onUnlocked) setTimeout(() => WL.onUnlocked(), 0);          // выписки, прочитанные по сводкам, — дочитать целиком
   if(restored) return;
   const seen = "wl_purchase_" + String(sid).slice(-16);
-  if(!WL.store.get(seen)){ WL.store.set(seen, 1); track("Purchase", {value: typeof r.amount === "number" ? r.amount : PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}); }
+  if(!WL.store.get(seen)){ WL.store.set(seen, 1); track("Purchase", {value: typeof r.amount === "number" ? r.amount : PRICE.amount, currency: r.currency || PRICE.currency, content_name: "portfolio_report"}, {id: sid}); }
 }
 
 let checking = false;
@@ -209,7 +209,9 @@ pay.open = async source => {
   }
   const code = pay.promo();
   track("InitiateCheckout", {value: code ? 0 : PRICE.amount, currency: PRICE.currency, content_name: "portfolio_report", source});
-  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE}, code ? {promo: code} : {});
+  const ads = WL.adIds ? WL.adIds() : null;              // только с согласием на cookies: покупку досчитает сервер
+  const body = Object.assign({}, WL.attribution ? WL.attribution() : {}, {rid, lang: WL.lang, path: location.pathname, waiver: true, paywall: PAYWALL && !ON_SITE},
+    code ? {promo: code} : {}, ads ? {ads} : {});
   let r = null;
   try{ r = await fetch(await PAY_API() + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(x => x.json()); }catch(e){}
   if(r && r.url){
