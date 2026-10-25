@@ -208,7 +208,7 @@ function notice(force){
     else { if(window.fbq){ try{ window.fbq("consent", "revoke"); }catch(err){} }
       if(gtOn && window.gtag){ try{ window.gtag("consent", "update", {ad_storage: "denied", ad_user_data: "denied"}); }catch(err){} }
       stopMixpanel(); }
-    b.classList.remove("in"); setTimeout(() => b.remove(), 260);
+    b.classList.remove("in"); setTimeout(() => { b.remove(); if(window.WL && WL.renderChatLauncher) WL.renderChatLauncher(); }, 260);
   };
   document.body.appendChild(b);
   setTimeout(() => b.classList.add("in"), force ? 0 : 900);

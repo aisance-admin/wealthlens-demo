@@ -184,7 +184,8 @@ function launcher(){
   b.innerHTML = `${SPARK}<span>${t("Обсудить портфель", "Discuss the portfolio")}</span>${fresh.length ? `<em>${fresh.length}</em>` : ""}`;
   b.setAttribute("aria-label", t("Обсудить портфель с ассистентом", "Discuss the portfolio with the assistant") + (fresh.length ? t(`: ${fresh.length} ${WL.pl(fresh.length, ["тема", "темы", "тем"], ["", ""])}`, `: ${fresh.length} ${fresh.length === 1 ? "topic" : "topics"}`) : ""));
   let n = $("#chatNudge");
-  const show = ready && !C.open && fresh.length && !S().chatNudged && WL.reviewNow() && WL.reviewNow().summary && !document.body.classList.contains("has-modal");
+  // пока внизу плашка cookies, подсказка не всплывает: на телефоне они закрывали друг друга и текст отчёта
+  const show = ready && !C.open && fresh.length && !S().chatNudged && WL.reviewNow() && WL.reviewNow().summary && !document.body.classList.contains("has-modal") && !document.querySelector(".consent");
   if(!show){ if(n) n.remove(); return; }
   if(!n){ n = document.createElement("div"); n.id = "chatNudge"; n.className = "chat-nudge no-print"; n.setAttribute("role", "status"); document.body.appendChild(n);
     clearTimeout(C.nudgeTimer); C.nudgeTimer = setTimeout(dismissNudge, 20000); }

@@ -6,6 +6,11 @@ const WL = window.WL = window.WL || {};
 const EN = WL.lang === "en";
 const t = WL.t = WL.t || ((ru, en) => EN ? en : ru);
 WL.EN = EN;
+/* Телефон и встроенный браузер соцсети (из рекламы Meta отчёт открывается в нём): у такого браузера своё хранилище,
+   отдельное от Safari и Chrome, и Apple Pay там обычно нет. */
+WL.ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+WL.touch = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+WL.inApp = (u => /Instagram/.test(u) ? "Instagram" : /FBAN|FBAV|FB_IAB|FBIOS/.test(u) ? "Facebook" : /Messenger/.test(u) ? "Messenger" : "")(navigator.userAgent);
 
 const esc = WL.esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const $ = WL.$ = (sel, root = document) => root.querySelector(sel);
@@ -130,11 +135,17 @@ WL.dialog = ({eyebrow, title, body = "", buttons = [], cancel = "cancel", gate, 
     if(!document.querySelector(".modal-wrap")) document.body.classList.remove("has-modal");
     document.removeEventListener("keydown", key, true); if(prev && prev.focus) prev.focus(); resolve({choice, value}); };
   const primary = wrap.querySelector(".btn.primary");
-  const sync = () => { if(gate && primary) primary.disabled = !wrap.querySelector(gate).checked; };
+  // без флажка главная кнопка выглядит недоступной, но нажимается: показывает, какой флажок отметить (на телефоне серую
+  // кнопку жмут, не замечая мелкий флажок выше)
+  const off = () => !!(gate && primary && !wrap.querySelector(gate).checked);
+  const sync = () => { if(gate && primary){ primary.classList.toggle("off", off()); primary.setAttribute("aria-disabled", off() ? "true" : "false"); } };
+  const ask = () => { const g = wrap.querySelector(gate), box = g.closest("label") || g; box.classList.remove("ask"); void box.offsetWidth; box.classList.add("ask"); g.focus(); };
   if(gate){ sync(); wrap.querySelector(gate).addEventListener("change", sync); }
-  wrap.addEventListener("click", e => { const b = e.target.closest("[data-dlg]"); if(b && !b.disabled) done(b.dataset.dlg); else if(e.target === wrap) done(cancel); });
+  wrap.addEventListener("click", e => { const b = e.target.closest("[data-dlg]");
+    if(b && b === primary && off()) return ask();
+    if(b && !b.disabled) done(b.dataset.dlg); else if(e.target === wrap) done(cancel); });
   const key = e => { if(e.key === "Escape"){ e.preventDefault(); done(cancel); }
-    else if(e.key === "Enter" && input && document.activeElement === wrap.querySelector(".modal-input") && primary && !primary.disabled){ e.preventDefault(); done(primary.dataset.dlg); } };
+    else if(e.key === "Enter" && input && document.activeElement === wrap.querySelector(".modal-input") && primary && !primary.disabled && !off()){ e.preventDefault(); done(primary.dataset.dlg); } };
   document.addEventListener("keydown", key, true);
   setTimeout(() => (wrap.querySelector(".modal-input") || primary || wrap.querySelector("button")).focus(), 30);
 });

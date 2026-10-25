@@ -29,9 +29,31 @@ const docOf = id => M().docs.find(d => d.id === id);
 const locked = () => WL.pay.locked();
 const FREE_ROWS = 5;
 
+/* ── Встроенный браузер Instagram / Facebook ─────────────────────────── */
+// Реклама Meta открывает сайт в браузере самого приложения: отчёт и доступ хранятся только в нём, Apple Pay там обычно нет.
+// До загрузки — совет открыть сайт в обычном браузере; после оплаты — как не потерять отчёт.
+const OWN = () => WL.ios ? "Safari" : "Chrome";
+function iabNote(){
+  if(!WL.inApp) return "";
+  return `<div class="iab no-print"><p><b>${esc(t(`Вы в браузере ${WL.inApp}`, `You are in the ${WL.inApp} browser`))}</b>
+    ${esc(t(`Откройте сайт в ${OWN()}: там отчёт сохранится и будет ${WL.ios ? "Apple Pay" : "Google Pay"}. Меню «${WL.ios ? "⋯" : "⋮"}» вверху → открыть в браузере.`,
+      `Open the site in ${OWN()}: the report is kept there and ${WL.ios ? "Apple Pay" : "Google Pay"} works. Menu “${WL.ios ? "⋯" : "⋮"}” at the top → open in browser.`))}</p>
+    <button class="btn small" type="button" data-copy-link>${t("Скопировать ссылку", "Copy link")}</button></div>`;
+}
+function iabCard(){
+  if(!WL.inApp || locked() || S().demo || S().iabSaved) return "";
+  const mail = String(window.WL_SUPPORT_EMAIL || ""), rid = S().rid || "";
+  return `<div class="card iab-card no-print"><button class="nx" type="button" data-iab-close aria-label="${t("Скрыть", "Dismiss")}">×</button>
+    <p><b>${esc(t(`Отчёт сохранён только в браузере ${WL.inApp}`, `The report is saved only in the ${WL.inApp} browser`))}</b>
+    ${esc(t(`Скачайте PDF. Нужен отчёт в ${OWN()} или на компьютере — напишите нам, откроем без повторной оплаты.`,
+      `Download the PDF. Need the report in ${OWN()} or on a computer? Write to us and we will unlock it at no extra cost.`))}</p>
+    <div class="ia"><button class="btn primary small" type="button" data-iab-pdf>${t("Скачать PDF", "Download PDF")}</button>
+    ${mail ? `<a class="btn small" href="mailto:${esc(mail)}?subject=${encodeURIComponent(t("Отчёт WealthLens в другом браузере", "WealthLens report in another browser"))}&body=${encodeURIComponent(t("Номер отчёта: ", "Report number: ") + rid)}">${t("Написать нам", "Write to us")}</a>` : ""}</div></div>`;
+}
+
 /* ── Экран загрузки ──────────────────────────────────────────────────── */
 function upload(){
-  return `<section class="start">
+  return `<section class="start">${iabNote()}
     <div class="drop" id="drop">
       <div class="mark"></div>
       <h1>${t("Положите выписки — получите один понятный отчёт", "Drop your statements — get one clear report")}</h1>
@@ -41,7 +63,11 @@ function upload(){
         <button class="btn primary big" type="button" data-pick="files">${t("Выбрать файлы", "Choose files")}</button>
         <button class="btn big" type="button" data-pick="folder">${t("Выбрать папку", "Choose a folder")}</button>
       </div>
-      <p class="hint">${t("или перетащите их сюда · PDF, JPG, PNG, Excel, CSV", "or drag them here · PDF, JPG, PNG, Excel, CSV")}</p>
+      ${WL.touch ? `<p class="hint mail">${WL.ios ? t("Выписка в письме? Откройте вложение → «Поделиться» → «Сохранить в Файлы». Бумажную — сфотографируйте.",
+          "Statement in an email? Open the attachment → Share → Save to Files. A paper one — just take a photo.")
+        : t("Выписка в письме? Скачайте вложение — оно появится в «Загрузках». Бумажную — сфотографируйте.",
+          "Statement in an email? Download the attachment — it appears in Downloads. A paper one — just take a photo.")}</p>`
+        : `<p class="hint">${t("или перетащите их сюда · PDF, JPG, PNG, Excel, CSV", "or drag them here · PDF, JPG, PNG, Excel, CSV")}</p>`}
       <a class="demo-link" href="?demo=1${WL.EN ? "&lang=en" : ""}">${t("Посмотреть пример отчёта", "See a sample report")}</a>
     </div>
     <ul class="trust-row">${[t("Без логинов и доступа к счетам", "No logins or account access"),
@@ -950,7 +976,7 @@ function secBody(m){
     case "dynamics": return dynamicsSec();
     case "files": return files() + method();
     case "more": return dynamicsSec() + files() + method();
-    default: return overview(m) + paywall();
+    default: return iabCard() + overview(m) + paywall();
   }
 }
 function report(){

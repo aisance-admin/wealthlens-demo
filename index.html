@@ -83,11 +83,19 @@ svg{width:14px; height:14px; flex:none}
 .drop .lede{color:var(--ink-2); margin:0 auto 26px; max-width:56ch; font-size:15.5px}
 .actions{display:flex; flex-wrap:wrap; gap:10px; justify-content:center}
 .drop .hint{font-size:12.5px; color:var(--muted); margin:16px 0 0}
+.drop .hint.mail{font-size:13px; color:var(--ink-2); max-width:34ch; margin-left:auto; margin-right:auto}
 .demo-link{display:inline-block; margin-top:14px; font-weight:500}
 .how{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; width:100%; max-width:720px; counter-reset:s}
 .how li{counter-increment:s; padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:rgba(14,20,29,.6); display:grid; gap:3px}
 .how li b::before{content:counter(s) "  "; font:600 11px/1 var(--mono); color:var(--accent)}
 .how span{font-size:13px; color:var(--ink-2)}
+.iab{width:100%; max-width:720px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:12px 14px; border:1px solid rgba(243,189,88,.35);
+  border-radius:14px; background:rgba(243,189,88,.07); font-size:13.5px; color:var(--ink-2)}
+.iab p{margin:0} .iab b{display:block; color:var(--ink); margin-bottom:2px} .iab .btn{flex:none}
+.iab-card{position:relative; margin-bottom:14px; padding:14px 40px 14px 16px; border-color:rgba(243,189,88,.4); display:grid; gap:10px; font-size:13.5px; color:var(--ink-2)}
+.iab-card p{margin:0} .iab-card b{display:block; color:var(--ink); margin-bottom:2px} .iab-card .ia{display:flex; gap:10px; flex-wrap:wrap}
+.iab-card .nx{position:absolute; top:6px; right:8px; background:none; border:0; color:var(--muted); font-size:20px; line-height:1; padding:6px; cursor:pointer}
+@media (max-width: 520px){ .iab{flex-direction:column; align-items:stretch} }
 .trust-row{list-style:none; margin:-8px 0 0; padding:0; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 22px; max-width:720px; font-size:13.5px; color:var(--ink-2)}
 .trust-row li{display:flex; gap:7px; align-items:center}
 .trust-row svg{flex:none; width:14px; height:14px; color:var(--good)}
@@ -499,7 +507,13 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 .modal-body p{margin:0 0 10px; color:var(--ink-2)}
 .modal-input{width:100%; margin:4px 0 6px; background:rgba(6,9,14,.6); border:1px solid var(--line-2); border-radius:10px; padding:10px 12px}
 .modal-actions{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:16px}
-.check{display:flex; gap:10px; align-items:flex-start; font-size:13px; color:var(--ink-2); margin:12px 0 4px; cursor:pointer}
+.check{display:flex; gap:10px; align-items:flex-start; font-size:13px; color:var(--ink-2); margin:12px 0 4px; cursor:pointer; padding:8px; margin-left:-8px; margin-right:-8px; border-radius:10px}
+.check input{flex:none; width:22px; height:22px; margin:0; accent-color:var(--accent); cursor:pointer}
+.check.ask{background:rgba(243,189,88,.12); color:var(--ink); animation:ask .5s ease}
+.check.ask input{outline:2px solid var(--accent); outline-offset:2px}
+@keyframes ask{0%,100%{transform:none} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)}}
+@media (prefers-reduced-motion: reduce){ .check.ask{animation:none} }
+.btn.primary.off{opacity:.45; cursor:not-allowed}
 .check input{margin-top:3px; accent-color:var(--accent)}
 #toast{position:fixed; left:50%; bottom:22px; transform:translate(-50%, 20px); opacity:0; pointer-events:none; z-index:95; max-width:min(560px, calc(100vw - 32px));
   background:#18222F; border:1px solid var(--line-2); color:var(--ink); padding:11px 16px; border-radius:12px; box-shadow:var(--shadow); font-size:13.5px; transition:opacity .2s, transform .2s}
@@ -716,17 +730,17 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <script src="wealth/config.js?v=57d5e010027f"></script>
 <script src="wealth/errors.js?v=8281b3a0d46a"></script>
 <script src="wealth/boot.js?v=588cd3892518"></script>
-<script src="wealth/track.js?v=ddb61be84135"></script>
-<script src="wealth/core.js?v=98e5e09d3f90"></script>
+<script src="wealth/track.js?v=5503c0469f96"></script>
+<script src="wealth/core.js?v=11caee6bb83b"></script>
 <script src="wealth/read.js?v=621802474a20"></script>
 <script src="wealth/report.js?v=5fd1ad042fe9"></script>
 <script src="wealth/market.js?v=60024bd6c5f7"></script>
 <script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=d703dd0d4ddd"></script>
-<script src="wealth/view.js?v=49bbb604d9e3"></script>
-<script src="wealth/chat.js?v=d753a365c3b6"></script>
+<script src="wealth/pay.js?v=643a75e93f9b"></script>
+<script src="wealth/view.js?v=8715b7770370"></script>
+<script src="wealth/chat.js?v=14335f8424f2"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
-<script src="wealth/app.js?v=9059a4d3f617"></script>
+<script src="wealth/app.js?v=fc2b21821345"></script>
 </body>
 </html>

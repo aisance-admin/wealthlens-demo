@@ -516,6 +516,11 @@ document.addEventListener("click", async e => {
   if(el.matches("tr.pr")) return WL.openPos(el.dataset.pos);
   if(d.buy) return WL.pay.open(d.buy);
   if(d.restore !== undefined) return WL.pay.restore(el);
+  if(d.copyLink !== undefined){ let ok = false; try{ await navigator.clipboard.writeText(location.href); ok = true; }catch(e){}
+    return WL.toast(ok ? t(`Ссылка скопирована — вставьте её в ${WL.ios ? "Safari" : "Chrome"}`, `Link copied — paste it into ${WL.ios ? "Safari" : "Chrome"}`)
+      : t("Не удалось скопировать: откройте меню вверху → открыть в браузере.", "Could not copy: open the menu at the top → open in browser.")); }
+  if(d.iabPdf !== undefined) return WL.printReport();
+  if(d.iabClose !== undefined){ WL.state.iabSaved = true; WL.save(); return WL.render(); }
   if(d.review !== undefined) return requestReview(true);
   if(d.reread) return reread(d.reread);
   if(d.cancel) return cancelFile(d.cancel);
@@ -575,6 +580,6 @@ setInterval(() => { if((WL.reading || WL.reviewing) && WL.tickWait) WL.tickWait(
   if(!WL.reading && WL.state.files.some(f => f.status === "queued")){ WL.toast(t("Продолжаем чтение выписок", "Resuming reading your statements")); runQueue(); }
   if(WL.chatReturn) await WL.chatReturn();
   if(WL.model && !WL.state.demo && (!WL.reviewNow() || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
-  if(WL.track) WL.track("ViewContent", {content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"});
+  if(WL.track) WL.track("ViewContent", Object.assign({content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"}, WL.inApp ? {in_app: WL.inApp} : {}));
 })();
 })();
