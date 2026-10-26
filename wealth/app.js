@@ -103,6 +103,7 @@ async function addFiles(list){
   }
   if(WL.track && kinds.length) WL.track("Files Added", {files: kinds.length, kinds: [...new Set(kinds)].sort().join("+"), duplicates: dup, in_report: s.files.length});
   if(dup) WL.toast(dup === 1 ? t("Этот файл уже в отчёте", "This file is already in the report") : t(`${dup} файла уже в отчёте`, `${dup} files are already in the report`));
+  else if(WL.inApp && kinds.length === 1) WL.toast(t("Файл добавлен. Следующий — кнопкой «+ Файлы» вверху", "File added. Add the next one with “+ Files” at the top"));
   WL.save(); WL.render(); runQueue();
 }
 

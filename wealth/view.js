@@ -30,14 +30,15 @@ const locked = () => WL.pay.locked();
 const FREE_ROWS = 5;
 
 /* ── Встроенный браузер Instagram / Facebook ─────────────────────────── */
-// Реклама Meta открывает сайт в браузере самого приложения: отчёт и доступ хранятся только в нём, Apple Pay там обычно нет.
+// Реклама Meta открывает сайт в браузере самого приложения: отчёт и доступ хранятся только в нём, файлы там выбираются
+// по одному (тест с iPhone 26.10.2026: из двух выбранных дошёл один; Apple Pay на странице Stripe при этом был).
 // До загрузки — совет открыть сайт в обычном браузере; после оплаты — как не потерять отчёт.
 const OWN = () => WL.ios ? "Safari" : "Chrome";
 function iabNote(){
   if(!WL.inApp) return "";
   return `<div class="iab no-print"><p><b>${esc(t(`Вы в браузере ${WL.inApp}`, `You are in the ${WL.inApp} browser`))}</b>
-    ${esc(t(`Откройте сайт в ${OWN()}: там отчёт сохранится и будет ${WL.ios ? "Apple Pay" : "Google Pay"}. Меню «${WL.ios ? "⋯" : "⋮"}» вверху → открыть в браузере.`,
-      `Open the site in ${OWN()}: the report is kept there and ${WL.ios ? "Apple Pay" : "Google Pay"} works. Menu “${WL.ios ? "⋯" : "⋮"}” at the top → open in browser.`))}</p>
+    ${esc(t(`Откройте сайт в ${OWN()}: там отчёт сохранится, а файлы выбираются сразу пачкой. Меню «${WL.ios ? "⋯" : "⋮"}» вверху → открыть в браузере. Здесь — по одному файлу, следующий через «+ Файлы».`,
+      `Open the site in ${OWN()}: the report is kept there and you can pick several files at once. Menu “${WL.ios ? "⋯" : "⋮"}” at the top → open in browser. Here — one file at a time, the next one via “+ Files”.`))}</p>
     <button class="btn small" type="button" data-copy-link>${t("Скопировать ссылку", "Copy link")}</button></div>`;
 }
 function iabCard(){

@@ -213,8 +213,8 @@ pay.open = async source => {
       ${gift ? "" : `<p class="guar">${I.shield || ""}<span>${esc(guarantee())}</span></p>`}
       <p>${gift ? t(`Код <b>${esc(gift)}</b> будет уже применён на странице Stripe — к оплате €0.`, `Code <b>${esc(gift)}</b> will already be applied on the Stripe page — you pay €0.`)
         : t("Разовая оплата через Stripe, без подписки. Данные карты мы не видим.", "A one-off payment via Stripe, no subscription. We never see your card details.")}</p>
-      <p class="muted">${WL.inApp ? t(`Вы в браузере ${WL.inApp}: отчёт останется только в нём, Apple Pay может не работать. Удобнее в ${WL.ios ? "Safari" : "Chrome"} — меню вверху. Отчёт понадобится в другом браузере — напишите нам, откроем без повторной оплаты.`,
-          `You are in the ${WL.inApp} browser: the report stays only there, and Apple Pay may not work. ${WL.ios ? "Safari" : "Chrome"} is easier — use the menu at the top. If you need the report in another browser, write to us and we will unlock it at no extra cost.`)
+      <p class="muted">${WL.inApp ? t(`Вы в браузере ${WL.inApp}: отчёт останется только в нём. Понадобится в ${WL.ios ? "Safari" : "Chrome"} или на компьютере — напишите нам, откроем без повторной оплаты.`,
+          `You are in the ${WL.inApp} browser: the report stays only there. If you need it in ${WL.ios ? "Safari" : "Chrome"} or on a computer, write to us and we will unlock it at no extra cost.`)
         : t("Выписки этого портфеля можно добавлять и потом — бесплатно. Доступ хранится в этом браузере; на другом устройстве откроем по письму, без повторной оплаты.",
         "You can add statements of this portfolio later for free. Access is kept in this browser; on another device we unlock it by email at no extra cost.")}</p>
       <label class="check"><input type="checkbox" data-waiver> <span>${t("Прошу открыть отчёт сразу после оплаты и понимаю, что после этого право отказаться от покупки в течение 14 дней не действует.",
