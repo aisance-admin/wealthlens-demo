@@ -885,7 +885,7 @@ function bottomNav(m){
   const cur = secNow(), n = alertList().length, eva = WL.chatFresh ? WL.chatFresh() : 0;
   const b = (id, icon, label, badge) => `<button type="button" class="bi${cur === id ? " on" : ""}" data-sec="${id}"${cur === id ? ' aria-current="page"' : ""}>${ICON[icon]}<span>${esc(label)}</span>${badge ? `<em>${badge}</em>` : ""}</button>`;
   return `<nav class="bnav no-print${evaReady(m) ? "" : " n4"}" aria-label="${t("Разделы отчёта", "Report sections")}">${b("overview", "home", t("Обзор", "Overview"))}${b("alerts", "warn", t("Выводы", "Findings"), n)}
-    ${evaReady(m) ? `<button type="button" class="bi eva" data-chat-open aria-label="${t("Обсудить с Евой", "Discuss with Eva")}"><i>${ICON.spark}</i><span>${t("Ева", "Eva")}</span>${eva ? `<em>${eva}</em>` : ""}</button>` : `<span></span>`}
+    ${evaReady(m) ? `<button type="button" class="bi eva" data-chat-open aria-label="${t("Обсудить с Евой", "Discuss with Eva")}"><i>${ICON.spark}</i><span>${t("Ева", "Eva")}</span>${eva ? `<em>${eva}</em>` : ""}</button>` : ""}
     ${b("holdings", "list", t("Позиции", "Positions"))}${b("more", "dots", t("Ещё", "More"))}</nav>`;
 }
 /* Итог: крупно — текущая оценка (или по выписке, если переключено), под ним одной строкой второе число. Место под строку
