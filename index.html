@@ -31,6 +31,9 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0}
+html{background:var(--ground); overscroll-behavior-y:none} body{overscroll-behavior-y:none}
+body.scroll-lock{position:fixed; left:0; right:0; width:100%; overflow:hidden}
+.modal-wrap,.modal,.chat,.drawer{overscroll-behavior:contain}
 body{background:var(--ground) radial-gradient(1100px 520px at 72% -160px, rgba(243,189,88,.10), transparent 70%) no-repeat; color:var(--ink); font:14.5px/1.5 var(--sans); -webkit-font-smoothing:antialiased; min-height:100vh}
 body::before{content:""; position:fixed; left:0; right:0; top:0; height:720px; z-index:-1; pointer-events:none; opacity:.5;
   background-image:linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size:64px 64px;
@@ -68,6 +71,7 @@ svg{width:14px; height:14px; flex:none}
 .client{font-size:17px; font-weight:600; border:1px solid transparent; background:transparent; padding:4px 8px; border-radius:8px; width:230px; min-width:80px; flex:0 1 230px; text-overflow:ellipsis}
 .client:hover{border-color:var(--line-2)} .client:focus{border-color:var(--accent); outline:none; background:var(--surface)}
 .spacer{flex:1}
+.bar .bl-s{display:none}
 .dl{position:relative}
 .menu{position:absolute; right:0; top:calc(100% + 6px); min-width:220px; padding:6px; border-radius:12px; background:#131C28; border:1px solid var(--line-2); box-shadow:var(--shadow); z-index:30; display:grid}
 .menu button{display:flex; gap:10px; align-items:center; text-align:left; background:none; border:0; padding:9px 10px; border-radius:8px}
@@ -281,6 +285,7 @@ body.has-secs .chat-fab{display:none !important}            /* Ева — в м�
 @media screen and (max-width:1099px){
   body.has-secs .bnav{display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); align-items:end; position:fixed; left:50%; transform:translateX(-50%); width:min(520px, calc(100% - 20px)); bottom:calc(10px + env(safe-area-inset-bottom, 0px)); z-index:34;
     background:rgba(14,21,31,.94); -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); border:1px solid var(--line-2); border-radius:20px; padding:6px 4px; box-shadow:var(--shadow)}
+  body.has-secs .bnav.n4{grid-template-columns:repeat(4, minmax(0,1fr))}
   body.has-secs #app.wrap{padding-bottom:120px}
   body.has-secs .chat-nudge{bottom:calc(92px + env(safe-area-inset-bottom, 0px))}
   .layout{margin-top:16px}
@@ -617,7 +622,10 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
   .wrap{padding:0 16px}
   .bar .wrap{flex-wrap:wrap; padding-top:8px; padding-bottom:8px; gap:8px}
   .client{flex:1 1 140px; width:auto}
-  #addBtn,#newBtn{padding:6px 9px}
+  #langBtn{order:1} .bar .spacer{order:2; flex:0 0 100%; height:0}
+  #addBtn{order:3} #newBtn{order:4} .bar .dl{order:5}
+  #addBtn,#newBtn,.bar .dl{flex:1 1 30%; min-width:0} #addBtn,#newBtn,#dlBtn{padding:7px 6px; width:100%; white-space:nowrap}
+  .bar .bl-l{display:none} .bar .bl-s{display:inline}
   .drop{padding:34px 20px 28px; border-radius:22px} .drop h1{font-size:26px}
   .how{grid-template-columns:minmax(0,1fr)}
   .ov,.news-grid{grid-template-columns:minmax(0,1fr)}
@@ -713,8 +721,8 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
     <input class="client" id="client" value="" aria-label="Название отчёта" spellcheck="false" maxlength="80">
     <span class="spacer"></span>
     <button class="btn small" id="langBtn" type="button" lang="en" title="English">EN</button>
-    <button class="btn small" id="addBtn" type="button">Добавить файлы</button>
-    <button class="btn small" id="newBtn" type="button">Новый отчёт</button>
+    <button class="btn small" id="addBtn" type="button"><span class="bl-l">Добавить файлы</span><span class="bl-s">+ Файлы</span></button>
+    <button class="btn small" id="newBtn" type="button"><span class="bl-l">Новый отчёт</span><span class="bl-s">Новый</span></button>
     <div class="dl"><button class="btn small primary" id="dlBtn" type="button" aria-haspopup="true">Скачать</button>
       <div class="menu" id="dlMenu" hidden>
         <button type="button" data-dl="pdf"><span><b>PDF</b><small>Для печати и отправки</small></span></button>
@@ -729,18 +737,18 @@ table.pos{width:100%; border-collapse:collapse; font-size:13.5px; font-variant-n
 <input type="file" id="folderInput" multiple hidden webkitdirectory directory>
 <script src="wealth/config.js?v=57d5e010027f"></script>
 <script src="wealth/errors.js?v=8281b3a0d46a"></script>
-<script src="wealth/boot.js?v=588cd3892518"></script>
+<script src="wealth/boot.js?v=12a753a2576d"></script>
 <script src="wealth/track.js?v=5503c0469f96"></script>
-<script src="wealth/core.js?v=11caee6bb83b"></script>
+<script src="wealth/core.js?v=9ac2473d93c9"></script>
 <script src="wealth/read.js?v=621802474a20"></script>
 <script src="wealth/report.js?v=5fd1ad042fe9"></script>
 <script src="wealth/market.js?v=60024bd6c5f7"></script>
 <script src="wealth/period.js?v=473a30927c02"></script>
 <script src="wealth/nav.js?v=1dc5dc36af35"></script>
-<script src="wealth/pay.js?v=643a75e93f9b"></script>
-<script src="wealth/view.js?v=8715b7770370"></script>
-<script src="wealth/chat.js?v=14335f8424f2"></script>
+<script src="wealth/pay.js?v=2bab51e9cb35"></script>
+<script src="wealth/view.js?v=a9a45be6ea6a"></script>
+<script src="wealth/chat.js?v=43fd53582590"></script>
 <script src="wealth/demo.js?v=4e5ddead9400"></script>
-<script src="wealth/app.js?v=fc2b21821345"></script>
+<script src="wealth/app.js?v=c5049d41177b"></script>
 </body>
 </html>

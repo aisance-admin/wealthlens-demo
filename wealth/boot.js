@@ -13,8 +13,10 @@ document.documentElement.lang = WL.lang;
 if(WL.lang === "en"){
   document.title = "WealthLens · portfolio report";
   document.body.dataset.drop = "Drop the files — we will read them";
-  const tx = {langBtn: ["RU", "Русский"], addBtn: ["Add files"], newBtn: ["New report"], dlBtn: ["Download"]};
+  const tx = {langBtn: ["RU", "Русский"], dlBtn: ["Download"]};
   for(const [id, [text, title]] of Object.entries(tx)){ const b = document.getElementById(id); b.textContent = text; if(title) b.title = title; }
+  for(const [id, lg, sh] of [["addBtn", "Add files", "+ Files"], ["newBtn", "New report", "New"]])
+    document.getElementById(id).innerHTML = `<span class="bl-l">${lg}</span><span class="bl-s">${sh}</span>`;
   document.getElementById("langBtn").lang = "ru";
   const m = document.querySelectorAll("#dlMenu small"); m[0].textContent = "To print and send"; m[1].textContent = "All positions and reconciliation";
   document.getElementById("client").setAttribute("aria-label", "Report name");

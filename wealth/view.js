@@ -475,7 +475,8 @@ function coverageOf(m){
   const busy = new Set(files.filter(f => /queued|reading/.test(f.status)).map(f => f.id));     // перепроверяется — вывод по её итогу
   const hist = docs.filter(d => d.history), histBad = hist.filter(d => !busy.has(d.id) && d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
   const reading = files.filter(f => /queued|reading/.test(f.status)).length;
-  const broken = files.filter(f => (f.status === "error" || f.status === "skipped") && !docs.some(d => d.id === f.id)).length;
+  const broken = files.filter(f => (f.status === "error" || f.status === "skipped") && !f.quota && !docs.some(d => d.id === f.id)).length;
+  const later = files.filter(f => f.quota && !docs.some(d => d.id === f.id)).length;     // бесплатный лимит — дочитается после оплаты
   const pages = used.reduce((k, d) => k + (d.failed || []).reduce((q, x) => q + x.to - x.from + 1, 0), 0);
   const cut = used.filter(d => d.truncated).length;
   const bad = used.filter(d => !busy.has(d.id) && d.recon && (d.recon.status === "mismatch" || d.recon.status === "partial")).length;
@@ -489,6 +490,8 @@ function coverageOf(m){
     removed: [t("убран вами", "removed by you"), t("убраны вами", "removed by you")]};
   for(const [k, c] of Object.entries(why)) note.push(`${c} — ${(WHY[k] || [k, k])[c === 1 ? 0 : 1]}`);
   if(broken) out.push(n(broken, "файл не удалось прочитать", "файла не удалось прочитать", "файлов не удалось прочитать", "file could not be read", "files could not be read"));
+  if(later) out.push(t(`${later} ${WL.pl(later, ["файл прочитается", "файла прочитаются", "файлов прочитаются"], ["", ""])} после оплаты — бесплатное чтение на сегодня исчерпано`,
+    `${later} ${later === 1 ? "file will be read" : "files will be read"} after payment — today's free reading is used up`));
   if(reading) out.push(n(reading, "файл ещё читается", "файла ещё читаются", "файлов ещё читаются", "file is still being read", "files are still being read"));
   if(pages) out.push(t(`не прочитано ${pages} стр.`, `${pages} ${pages === 1 ? "page" : "pages"} not read`));
   if(cut) out.push(n(cut, "файл прочитан не полностью", "файла прочитаны не полностью", "файлов прочитаны не полностью", "file was read only in part", "files were read only in part"));
@@ -520,7 +523,17 @@ function coverage(m){
     const fs = S().files, all = fs.reduce((k, f) => k + (f.total || 0), 0), dn = fs.reduce((k, f) => k + (f.done || 0), 0);
     return `<div class="cover"><i class="spin"></i><span>${esc(all ? t(`Читаем полный отчёт: ${dn} из ${all} стр.`, `Reading the full report: ${dn} of ${all} pages`) : t("Читаем полный отчёт…", "Reading the full report…"))}</span></div>`;
   }
-  if(m.preview) return `<div class="cover ok">${ICON.check}<span>${esc(t(`Предпросмотр по сводным страницам выписок: прочитано ${m.preview.read} из ${m.preview.total}`, `Preview from the summary pages: ${m.preview.read} of ${m.preview.total} pages read`))}</span></div>`;
+  // до оплаты длинная выписка читается по сводным страницам: называем банк, иначе кажется, что выписка не прочиталась
+  // (тест с телефона 26.10.2026); файл, упёршийся в бесплатный лимит, — тоже здесь, а не только в «Файлах»
+  if(m.preview){
+    const pv = m.docs.filter(d => d.use && d.preview), later = S().files.filter(f => f.quota && !m.docs.some(d => d.id === f.id));
+    const head = pv.length === 1 ? (pv[0].institution || pv[0].file || "") : t(`${pv.length} ${WL.pl(pv.length, ["выписка", "выписки", "выписок"], ["", ""])}`, `${pv.length} statements`);
+    const parts = [t(`${head}: прочитаны сводные страницы ${m.preview.read} из ${m.preview.total} — бумаги по отдельности после оплаты`,
+      `${head}: summary pages read, ${m.preview.read} of ${m.preview.total} — individual securities after payment`)];
+    if(later.length) parts.push(t(`${later.length === 1 ? `«${later[0].name}» прочитается` : `ещё ${later.length} ${WL.pl(later.length, ["файл", "файла", "файлов"], ["", ""])} прочитаются`} после оплаты — бесплатное чтение на сегодня исчерпано`,
+      `${later.length === 1 ? `“${later[0].name}” will be read` : `${later.length} more files will be read`} after payment — today's free reading is used up`));
+    return `<div class="cover ok">${ICON.check}<span>${esc(parts.join(" · "))}</span></div>`;
+  }
   const c = coverageOf(m);
   if(!c.text) return "";
   return `<div class="cover ${c.warn ? "warn" : "ok"}">${c.warn ? ICON.warn : ICON.check}<span>${esc(c.text)}
@@ -870,7 +883,7 @@ function sideNav(m){
 function bottomNav(m){
   const cur = secNow(), n = alertList().length, eva = WL.chatFresh ? WL.chatFresh() : 0;
   const b = (id, icon, label, badge) => `<button type="button" class="bi${cur === id ? " on" : ""}" data-sec="${id}"${cur === id ? ' aria-current="page"' : ""}>${ICON[icon]}<span>${esc(label)}</span>${badge ? `<em>${badge}</em>` : ""}</button>`;
-  return `<nav class="bnav no-print" aria-label="${t("Разделы отчёта", "Report sections")}">${b("overview", "home", t("Обзор", "Overview"))}${b("alerts", "warn", t("Выводы", "Findings"), n)}
+  return `<nav class="bnav no-print${evaReady(m) ? "" : " n4"}" aria-label="${t("Разделы отчёта", "Report sections")}">${b("overview", "home", t("Обзор", "Overview"))}${b("alerts", "warn", t("Выводы", "Findings"), n)}
     ${evaReady(m) ? `<button type="button" class="bi eva" data-chat-open aria-label="${t("Обсудить с Евой", "Discuss with Eva")}"><i>${ICON.spark}</i><span>${t("Ева", "Eva")}</span>${eva ? `<em>${eva}</em>` : ""}</button>` : `<span></span>`}
     ${b("holdings", "list", t("Позиции", "Positions"))}${b("more", "dots", t("Ещё", "More"))}</nav>`;
 }
@@ -1046,7 +1059,7 @@ WL.openPos = async id => {
     <dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     <div class="src"><div class="eyebrow">${t("Откуда цифры", "Where the numbers come from")}</div>
       <p>${esc(p.docFile)}${p.page ? t(`, страница ${p.page}`, `, page ${p.page}`) : ""}</p><div class="page" id="srcPage"><div class="skel tall"></div></div></div>`;
-  dr.classList.add("open"); $("#scrim").classList.add("open"); dr.setAttribute("aria-hidden", "false"); dr.querySelector(".x").focus();
+  dr.classList.add("open"); $("#scrim").classList.add("open"); dr.setAttribute("aria-hidden", "false"); WL.lockScroll("drawer", true); dr.querySelector(".x").focus();
   const box = $("#srcPage");
   try{
     const blob = WL.blobs[p.doc] || await WL.files.get(p.doc);
@@ -1057,7 +1070,7 @@ WL.openPos = async id => {
     else box.innerHTML = `<p class="muted">${t("Таблица: строка взята из листа файла.", "Spreadsheet: the row comes from the file's sheet.")}</p>`;
   }catch(e){ box.innerHTML = `<p class="muted">${t("Страницу показать не удалось.", "Could not show the page.")}</p>`; }
 };
-WL.closeDrawer = () => { const dr = $("#drawer"); dr.classList.remove("open"); $("#scrim").classList.remove("open"); dr.setAttribute("aria-hidden", "true"); };
+WL.closeDrawer = () => { const dr = $("#drawer"); dr.classList.remove("open"); $("#scrim").classList.remove("open"); dr.setAttribute("aria-hidden", "true"); WL.lockScroll("drawer", false); };
 
 /* ── Выгрузка: PDF (печать браузера) и Excel ─────────────────────────── */
 WL.printReport = async () => {

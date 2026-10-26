@@ -78,13 +78,21 @@ const pay = WL.pay = {
   extendPaid,
   promo(){ const c = WL.store.get(PROMO_KEY, ""); return typeof c === "string" && PROMO_RE.test(c) ? c : ""; },
 };
+// Код остаётся в адресе, пока не использован: ссылку из адресной строки или из «Скопировать ссылку» пересылают себе
+// в Instagram или открывают в Safari — без кода в адресе подарок терялся (тест с телефона 26.10.2026). Убирается после
+// оплаты и если код больше не действует (dropPromo).
 function capturePromo(){
   const u = new URL(location.href);
   if(!u.searchParams.has("promo")) return;
   const c = (u.searchParams.get("promo") || "").trim().toUpperCase();
-  u.searchParams.delete("promo"); history.replaceState(null, "", u.pathname + u.search + u.hash);
   if(PROMO_RE.test(c)) WL.store.set(PROMO_KEY, c);
 }
+function dropPromo(){
+  WL.store.del(PROMO_KEY);
+  const u = new URL(location.href); if(!u.searchParams.has("promo")) return;
+  u.searchParams.delete("promo"); history.replaceState(null, "", u.pathname + u.search + u.hash);
+}
+pay.dropPromo = dropPromo;
 capturePromo();
 
 async function unlockWith(sid, r, restored){
@@ -93,7 +101,7 @@ async function unlockWith(sid, r, restored){
   setUnlocks(m);
   SERVER_OK.add(`${s.rid}|${r.token}`);
   WL.store.del(PENDING);
-  if(r.amount === 0) WL.store.del(PROMO_KEY);
+  if(r.amount === 0) dropPromo();
   await primeGrant();
   if(WL.onUnlocked) setTimeout(() => WL.onUnlocked(), 0);          // выписки, прочитанные по сводкам, — дочитать целиком
   if(restored) return;
@@ -235,7 +243,7 @@ pay.open = async source => {
   try{ r = await fetch(await PAY_API() + "/checkout", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(x => x.json()); }catch(e){}
   if(r && r.url){
     if(code && r.promo !== "applied"){
-      if(r.promo === "invalid") WL.store.del(PROMO_KEY);
+      if(r.promo === "invalid") dropPromo();
       const {choice: go} = await WL.dialog({eyebrow: t("Подарочный код", "Gift code"),
         title: r.promo === "invalid" ? t("Код больше не действует", "This code is no longer valid") : t("Код не удалось применить автоматически", "The code could not be applied automatically"),
         body: `<p>${r.promo === "invalid" ? t(`Код <b>${esc(code)}</b> уже использован или истёк. Полный отчёт можно открыть за ${PRICE.label}.`, `Code <b>${esc(code)}</b> has already been used or has expired. You can unlock the full report for ${PRICE.label}.`)

@@ -116,6 +116,15 @@ WL.toast = (text, ms = 5200) => {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove("on"), ms);
 };
 
+/* Окно поверх страницы: страница под ним не прокручивается и не утягивается за край экрана (отзыв с телефона 26.10.2026:
+   под окном было видно страницу и её можно было сдвинуть). Причины учитываются по отдельности: окно, ассистент, позиция. */
+const LOCKS = new Set(); let lockY = 0;
+WL.lockScroll = (why, on) => {
+  const was = LOCKS.size; if(on) LOCKS.add(why); else LOCKS.delete(why);
+  if(!was && LOCKS.size){ lockY = window.scrollY; document.body.style.top = `-${lockY}px`; document.body.classList.add("scroll-lock"); }
+  else if(was && !LOCKS.size){ document.body.classList.remove("scroll-lock"); document.body.style.top = ""; window.scrollTo(0, lockY); }
+};
+
 /* Диалог: {eyebrow, title, body (HTML — только своё, экранированное), buttons: [{id, label, primary}], cancel, gate (селектор флажка,
    без которого главная кнопка недоступна), input: {type, placeholder}} → Promise<{choice, value}> */
 WL.dialog = ({eyebrow, title, body = "", buttons = [], cancel = "cancel", gate, input}) => new Promise(resolve => {
@@ -130,9 +139,9 @@ WL.dialog = ({eyebrow, title, body = "", buttons = [], cancel = "cancel", gate, 
     <div class="modal-actions">${buttons.map(b => `<button type="button" class="btn${b.primary ? " primary" : ""}" data-dlg="${esc(b.id)}">${esc(b.label)}</button>`).join("")}</div>
   </div>`;
   document.body.appendChild(wrap);
-  document.body.classList.add("has-modal");
+  document.body.classList.add("has-modal"); WL.lockScroll("dialog", true);
   const done = choice => { const value = input ? wrap.querySelector(".modal-input").value : undefined; wrap.remove();
-    if(!document.querySelector(".modal-wrap")) document.body.classList.remove("has-modal");
+    if(!document.querySelector(".modal-wrap")){ document.body.classList.remove("has-modal"); WL.lockScroll("dialog", false); }
     document.removeEventListener("keydown", key, true); if(prev && prev.focus) prev.focus(); resolve({choice, value}); };
   const primary = wrap.querySelector(".btn.primary");
   // без флажка главная кнопка выглядит недоступной, но нажимается: показывает, какой флажок отметить (на телефоне серую

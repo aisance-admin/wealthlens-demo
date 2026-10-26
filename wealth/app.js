@@ -431,8 +431,10 @@ async function removeFile(id){
 WL.renderBar = () => {
   const lock = WL.pay.locked(), s = WL.state;
   const dl = $("#dlBtn");
-  if(dl) dl.textContent = lock && WL.pay.pending() ? t("Проверяем доступ…", "Checking access…")
-    : lock ? (WL.pay.promo() ? t("Полный отчёт · €0", "Full report · €0") : t(`Полный отчёт · ${WL.pay.PRICE.label}`, `Full report · ${WL.pay.PRICE.label}`)) : t("Скачать", "Download");
+  // на телефоне — короткая подпись, чтобы три кнопки шапки встали в один ряд
+  const two = (lg, sh) => `<span class="bl-l">${lg}</span><span class="bl-s">${sh}</span>`, price = WL.pay.promo() ? "€0" : WL.pay.PRICE.label;
+  if(dl) dl.innerHTML = lock && WL.pay.pending() ? two(t("Проверяем доступ…", "Checking access…"), t("Проверяем…", "Checking…"))
+    : lock ? two(t(`Полный отчёт · ${price}`, `Full report · ${price}`), t(`Отчёт · ${price}`, `Report · ${price}`)) : t("Скачать", "Download");
   const busy = WL.reading;
   ["#addBtn", "#newBtn"].forEach(k => { const b = $(k); if(b) b.disabled = !!s.demo && k === "#addBtn" ? false : false; });
   const menu = $("#dlMenu"); if(menu && lock) menu.hidden = true;
@@ -516,7 +518,9 @@ document.addEventListener("click", async e => {
   if(el.matches("tr.pr")) return WL.openPos(el.dataset.pos);
   if(d.buy) return WL.pay.open(d.buy);
   if(d.restore !== undefined) return WL.pay.restore(el);
-  if(d.copyLink !== undefined){ let ok = false; try{ await navigator.clipboard.writeText(location.href); ok = true; }catch(e){}
+  if(d.copyLink !== undefined){ let ok = false;
+    const u = new URL(location.href), code = WL.pay.promo(); if(code && !u.searchParams.has("promo")) u.searchParams.set("promo", code);   // подарочный код — с собой
+    try{ await navigator.clipboard.writeText(u.href); ok = true; }catch(e){}
     return WL.toast(ok ? t(`Ссылка скопирована — вставьте её в ${WL.ios ? "Safari" : "Chrome"}`, `Link copied — paste it into ${WL.ios ? "Safari" : "Chrome"}`)
       : t("Не удалось скопировать: откройте меню вверху → открыть в браузере.", "Could not copy: open the menu at the top → open in browser.")); }
   if(d.iabPdf !== undefined) return WL.printReport();

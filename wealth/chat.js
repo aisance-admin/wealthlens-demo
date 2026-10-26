@@ -157,6 +157,7 @@ function renderPanel(){
   el.classList.toggle("open", C.open);
   el.setAttribute("aria-hidden", C.open ? "false" : "true");
   document.body.classList.toggle("chat-open", C.open);
+  WL.lockScroll("chat", C.open && matchMedia("(max-width: 760px)").matches);      // на телефоне ассистент — во весь экран
   if(!C.open){ el.innerHTML = ""; return; }
   const tp = C.topic, noCred = C.credits && C.credits.left <= 0;
   el.innerHTML = `<div class="chat-h">${tp ? `<button type="button" class="ib" data-chat-home title="${t("Все темы", "All topics")}" aria-label="${t("Все темы", "All topics")}">‹</button>` : `<span class="orb eva">${EVA}</span>`}
