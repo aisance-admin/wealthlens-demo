@@ -41,15 +41,19 @@ function iabNote(){
       `Open the site in ${OWN()}: the report is kept there and you can pick several files at once. Menu “${WL.ios ? "⋯" : "⋮"}” at the top → open in browser. Here — one file at a time, the next one via “+ Files”.`))}</p>
     <button class="btn small" type="button" data-copy-link>${t("Скопировать ссылку", "Copy link")}</button></div>`;
 }
+// письмо в поддержку с номером отчёта: откроем отчёт в другом браузере без повторной оплаты
+const supportMail = () => { const mail = String(window.WL_SUPPORT_EMAIL || ""); if(!mail) return "";
+  return `mailto:${mail}?subject=${encodeURIComponent(t("Отчёт WealthLens в другом браузере", "WealthLens report in another browser"))}&body=${encodeURIComponent(t("Номер отчёта: ", "Report number: ") + (S().rid || ""))}`; };
+WL.supportMail = supportMail;
 function iabCard(){
   if(!WL.inApp || locked() || S().demo || S().iabSaved) return "";
-  const mail = String(window.WL_SUPPORT_EMAIL || ""), rid = S().rid || "";
+  const mail = supportMail();
+  // PDF и Excel во встроенном браузере не скачиваются (печати нет, файлы не сохраняются — тест с iPhone 26.10.2026)
   return `<div class="card iab-card no-print"><button class="nx" type="button" data-iab-close aria-label="${t("Скрыть", "Dismiss")}">×</button>
     <p><b>${esc(t(`Отчёт сохранён только в браузере ${WL.inApp}`, `The report is saved only in the ${WL.inApp} browser`))}</b>
-    ${esc(t(`Скачайте PDF. Нужен отчёт в ${OWN()} или на компьютере — напишите нам, откроем без повторной оплаты.`,
-      `Download the PDF. Need the report in ${OWN()} or on a computer? Write to us and we will unlock it at no extra cost.`))}</p>
-    <div class="ia"><button class="btn primary small" type="button" data-iab-pdf>${t("Скачать PDF", "Download PDF")}</button>
-    ${mail ? `<a class="btn small" href="mailto:${esc(mail)}?subject=${encodeURIComponent(t("Отчёт WealthLens в другом браузере", "WealthLens report in another browser"))}&body=${encodeURIComponent(t("Номер отчёта: ", "Report number: ") + rid)}">${t("Написать нам", "Write to us")}</a>` : ""}</div></div>`;
+    ${esc(t(`PDF и Excel здесь не скачиваются. Нужен отчёт в ${OWN()} или на компьютере — напишите нам, откроем без повторной оплаты.`,
+      `PDF and Excel can't be downloaded here. Need the report in ${OWN()} or on a computer? Write to us and we will unlock it at no extra cost.`))}</p>
+    ${mail ? `<div class="ia"><a class="btn primary small" href="${esc(mail)}">${t("Написать нам", "Write to us")}</a></div>` : ""}</div>`;
 }
 
 /* ── Экран загрузки ──────────────────────────────────────────────────── */
@@ -1074,15 +1078,28 @@ WL.openPos = async id => {
 WL.closeDrawer = () => { const dr = $("#drawer"); dr.classList.remove("open"); $("#scrim").classList.remove("open"); dr.setAttribute("aria-hidden", "true"); WL.lockScroll("drawer", false); };
 
 /* ── Выгрузка: PDF (печать браузера) и Excel ─────────────────────────── */
+// Встроенный браузер Instagram/Facebook не печатает и не сохраняет файлы: «Скачать» там молча не работало, а страница
+// после разметки для печати оставалась прокрученной в другое место (тест с iPhone 26.10.2026).
+async function noFilesHere(){
+  const mail = supportMail();
+  const {choice} = await WL.dialog({title: t(`В браузере ${WL.inApp} файлы не скачиваются`, `Files can't be downloaded in the ${WL.inApp} browser`),
+    body: `<p>${esc(t(`PDF и Excel работают в ${OWN()} и на компьютере. Отчёт сейчас хранится только здесь — напишите нам, откроем его в другом браузере без повторной оплаты.`,
+      `PDF and Excel work in ${OWN()} and on a computer. The report is stored only here for now — write to us and we will open it in another browser at no extra cost.`))}</p>`,
+    buttons: [...(mail ? [{id: "mail", label: t("Написать нам", "Write to us"), primary: true}] : []), {id: "cancel", label: t("Понятно", "Got it"), primary: !mail}]});
+  if(choice === "mail" && mail) location.href = mail;
+}
 WL.printReport = async () => {
   if(locked()) return WL.pay.open("pdf");
+  if(WL.inApp) return noFilesHere();
+  const y = window.scrollY;
   WL.printing = true; WL.closeDrawer(); WL.render();
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   const was = document.title; document.title = `${S().client || "WealthLens"} · ${fmt.date(WL.today())}`;
-  try{ window.print(); } finally { document.title = was; WL.printing = false; WL.render(); }
+  try{ window.print(); } finally { document.title = was; WL.printing = false; WL.render(); window.scrollTo(0, y); }   // назад — туда, где был человек
 };
 WL.excel = async () => {
   if(locked()) return WL.pay.open("excel");
+  if(WL.inApp) return noFilesHere();
   let X;
   try{ X = await WL.loadXLSX(); }catch(e){ WL.toast(t("Не удалось загрузить модуль Excel. Проверьте связь и попробуйте ещё раз.", "Could not load the Excel module. Check the connection and try again.")); return; }
   const m = M(), s = S(), r = WL.reviewNow() || {}, base = m.base, mk = m.mkt && m.mkt.coverage > 0 ? m.mkt : null;

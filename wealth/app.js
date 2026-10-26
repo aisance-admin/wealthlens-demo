@@ -524,7 +524,6 @@ document.addEventListener("click", async e => {
     try{ await navigator.clipboard.writeText(u.href); ok = true; }catch(e){}
     return WL.toast(ok ? t(`Ссылка скопирована — вставьте её в ${WL.ios ? "Safari" : "Chrome"}`, `Link copied — paste it into ${WL.ios ? "Safari" : "Chrome"}`)
       : t("Не удалось скопировать: откройте меню вверху → открыть в браузере.", "Could not copy: open the menu at the top → open in browser.")); }
-  if(d.iabPdf !== undefined) return WL.printReport();
   if(d.iabClose !== undefined){ WL.state.iabSaved = true; WL.save(); return WL.render(); }
   if(d.review !== undefined) return requestReview(true);
   if(d.reread) return reread(d.reread);
