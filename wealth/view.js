@@ -36,10 +36,13 @@ const FREE_ROWS = 5;
 const OWN = () => WL.ios ? "Safari" : "Chrome";
 function iabNote(){
   if(!WL.inApp) return "";
+  // главное действие — уйти в обычный браузер до загрузки выписок (там отчёт сохранится, файлы пачкой, PDF и Excel);
+  // не сработало — меню браузера или скопировать ссылку
   return `<div class="iab no-print"><p><b>${esc(t(`Вы в браузере ${WL.inApp}`, `You are in the ${WL.inApp} browser`))}</b>
-    ${esc(t(`Откройте сайт в ${OWN()}: там отчёт сохранится, а файлы выбираются сразу пачкой. Меню «${WL.ios ? "⋯" : "⋮"}» вверху → открыть в браузере. Здесь — по одному файлу, следующий через «+ Файлы».`,
-      `Open the site in ${OWN()}: the report is kept there and you can pick several files at once. Menu “${WL.ios ? "⋯" : "⋮"}” at the top → open in browser. Here — one file at a time, the next one via “+ Files”.`))}</p>
-    <button class="btn small" type="button" data-copy-link>${t("Скопировать ссылку", "Copy link")}</button></div>`;
+    ${esc(t(`В ${OWN()} отчёт сохранится, файлы выбираются пачкой, работают PDF и Excel. Здесь — по одному файлу, следующий через «+ Файлы».`,
+      `In ${OWN()} the report is kept, you can pick several files at once, and PDF and Excel work. Here — one file at a time, the next one via “+ Files”.`))}</p>
+    <div class="ia"><button class="btn primary small" type="button" data-escape>${t(`Открыть в ${OWN()}`, `Open in ${OWN()}`)}</button>
+    <button class="link" type="button" data-copy-link>${t("Скопировать ссылку", "Copy link")}</button></div></div>`;
 }
 // письмо в поддержку с номером отчёта: откроем отчёт в другом браузере без повторной оплаты
 const supportMail = () => { const mail = String(window.WL_SUPPORT_EMAIL || ""); if(!mail) return "";

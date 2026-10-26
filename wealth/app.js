@@ -428,6 +428,30 @@ async function removeFile(id){
   await WL.rebuild(); reviewSoon();
 }
 
+/* ── Из встроенного браузера соцсети — в обычный ─────────────────────── */
+// Адрес, который уносим с собой: подарочный код и метки рекламы (в новом браузере своё хранилище — без них подарок и
+// атрибуция кампании потерялись бы), плюс iab — откуда пришли.
+function carryUrl(){
+  const u = new URL(location.href), code = WL.pay.promo(), a = WL.attribution ? WL.attribution() : {};
+  if(code && !u.searchParams.has("promo")) u.searchParams.set("promo", code);
+  for(const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content"]) if(a[k] && !u.searchParams.has(k)) u.searchParams.set(k, a[k]);
+  u.hash = ""; return u;
+}
+// Ссылка, которую встроенный браузер отдаёт системе: iPhone — схема x-safari-https (не документирована Apple, работает на
+// iOS 15, 17, 18; на 16 — нет), Android — intent в Chrome с запасным адресом. Не открылось — подсказка про меню браузера.
+WL.escapeUrl = () => {
+  const u = carryUrl(); if(WL.inApp) u.searchParams.set("iab", WL.inApp.toLowerCase());
+  const rest = u.host + u.pathname + u.search;
+  return WL.ios ? "x-safari-https://" + rest : `intent://${rest}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(u.href)};end`;
+};
+WL.go = href => { location.href = href; };                   // проверка подменяет, чтобы увидеть адрес
+function escapeInApp(){
+  if(WL.track) WL.track("In-App Escape", {app: WL.inApp || "", os: WL.ios ? "ios" : "android"});
+  WL.go(WL.escapeUrl());
+  setTimeout(() => { if(!document.hidden) WL.toast(t(`Если ${WL.ios ? "Safari" : "Chrome"} не открылся: меню «${WL.ios ? "⋯" : "⋮"}» вверху → «Открыть в браузере»`,
+    `If ${WL.ios ? "Safari" : "Chrome"} didn't open: menu “${WL.ios ? "⋯" : "⋮"}” at the top → “Open in browser”`)); }, 1500);
+}
+
 /* ── Панель сверху ──────────────────────────────────────────────────── */
 WL.renderBar = () => {
   const lock = WL.pay.locked(), s = WL.state;
@@ -519,8 +543,9 @@ document.addEventListener("click", async e => {
   if(el.matches("tr.pr")) return WL.openPos(el.dataset.pos);
   if(d.buy) return WL.pay.open(d.buy);
   if(d.restore !== undefined) return WL.pay.restore(el);
+  if(d.escape !== undefined) return escapeInApp();
   if(d.copyLink !== undefined){ let ok = false;
-    const u = new URL(location.href), code = WL.pay.promo(); if(code && !u.searchParams.has("promo")) u.searchParams.set("promo", code);   // подарочный код — с собой
+    const u = carryUrl();
     try{ await navigator.clipboard.writeText(u.href); ok = true; }catch(e){}
     return WL.toast(ok ? t(`Ссылка скопирована — вставьте её в ${WL.ios ? "Safari" : "Chrome"}`, `Link copied — paste it into ${WL.ios ? "Safari" : "Chrome"}`)
       : t("Не удалось скопировать: откройте меню вверху → открыть в браузере.", "Could not copy: open the menu at the top → open in browser.")); }
@@ -584,6 +609,9 @@ setInterval(() => { if((WL.reading || WL.reviewing) && WL.tickWait) WL.tickWait(
   if(!WL.reading && WL.state.files.some(f => f.status === "queued")){ WL.toast(t("Продолжаем чтение выписок", "Resuming reading your statements")); runQueue(); }
   if(WL.chatReturn) await WL.chatReturn();
   if(WL.model && !WL.state.demo && (!WL.reviewNow() || WL.state.review.error || (WL.state.review.lang && WL.state.review.lang !== WL.lang))) requestReview(!!(WL.state.review && WL.state.review.lang !== WL.lang));
-  if(WL.track) WL.track("ViewContent", Object.assign({content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"}, WL.inApp ? {in_app: WL.inApp} : {}));
+  const from = new URL(location.href).searchParams.get("iab");
+  if(from){ const u = new URL(location.href); u.searchParams.delete("iab"); history.replaceState(null, "", u.pathname + u.search + u.hash); }
+  if(WL.track) WL.track("ViewContent", Object.assign({content_name: WL.state.demo ? "demo_report" : WL.state.docs.length ? "report" : "upload"},
+    WL.inApp ? {in_app: WL.inApp} : {}, from ? {from_in_app: from.slice(0, 20)} : {}));
 })();
 })();
