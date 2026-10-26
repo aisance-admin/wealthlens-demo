@@ -213,8 +213,11 @@ function notice(force){
   document.body.appendChild(b);
   setTimeout(() => b.classList.add("in"), force ? 0 : 900);
 }
+/* Пиксель, тег Google и Mixpanel — сразу, а не по DOMContentLoaded (он ждёт ещё и модуль PDF.js): иначе событие, отправленное
+   раньше, не дошло бы до пикселя и Google Ads — например покупка после возврата со Stripe, когда проверка оплаты отвечает быстро.
+   Уведомлению о cookies нужен body — оно по DOMContentLoaded. */
+if(allowed()){ if(PIXEL) loadPixel(); if(GADS) loadGtag(); if(MP) loadMixpanel(); }
 function init(){
-  if(allowed()){ if(PIXEL) loadPixel(); if(GADS) loadGtag(); if(MP) loadMixpanel(); }
   WL.track("Page View", {page: PAGE});
   notice(false);
 }
