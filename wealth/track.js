@@ -135,8 +135,29 @@ const insertId = id => String(id || "").replace(/[^A-Za-z0-9]/g, "").slice(-36);
 /* Конверсии Google Ads: те же шаги, у покупки — номер оплаты (Google не посчитает её дважды). */
 const GADS_MAP = {Purchase: "purchase", "Chat Pack Purchased": "purchase", InitiateCheckout: "checkout"};
 const gadsKey = (name, p) => GADS_MAP[name] || ((name === "Preview Ready" || name === "Report Ready") && p.locked === true ? "preview" : null);
+/* Шаги воронки без cookies — обезличенный счётчик на сервере (api/index.py, stat_hit): шаг, кампания и объявление из меток
+   рекламы, без номера посетителя (Mixpanel и пиксель видят только тех, кто разрешил cookies). Каждый шаг — раз за загрузку
+   страницы. Не считаются: локальный стенд и браузеры проверок (navigator.webdriver), когда сервер боевой (проверки с заглушкой
+   сервера считаются — в заглушку), и робот проверки объявлений Meta (место показа Facebook_Right_Column, заходы из дата-центров
+   Meta 26–27.10.2026). */
+const STAT = {ViewContent: "open", "Files Added": "files", "Preview Ready": "preview", "Paywall Opened": "paywall", InitiateCheckout: "checkout", Purchase: "purchase"};
+const statDone = {};
+function stat(name, p){
+  const s = STAT[name] || (name === "Report Ready" && p.locked === true ? "preview" : "");
+  if(!s || statDone[s]) return;
+  statDone[s] = 1;
+  const a = WL.attributionLast ? WL.attributionLast() : {};
+  if(a.utm_term === "Facebook_Right_Column") return;
+  const body = JSON.stringify({s, c: String(a.utm_campaign || "").toLowerCase().slice(0, 40), a: String(a.utm_content || "").slice(0, 20)});
+  Promise.resolve(WL.apiReady).then(base => {
+    base = base || "https://api.euroaff.eu";
+    if((LOCAL || navigator.webdriver) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(base)) return;
+    try{ navigator.sendBeacon(base + "/t", new Blob([body], {type: "text/plain"})); }catch(e){}
+  });
+}
 WL.track = function(name, params, opts = {}){
   const p = Object.assign({}, params || {});
+  stat(name, p);
   try{ const px = pixelEvent(name, p); if(px && allowed() && window.fbq) window.fbq(px[0], px[1], pixelParams(name, p), opts.id ? {eventID: String(opts.id)} : undefined); }catch(e){}
   try{ const k = gadsKey(name, p), q = pixelParams(name, p);
     if(k && GADS && GADS[k] && gtOn && allowed() && window.gtag) window.gtag("event", "conversion", Object.assign({send_to: GADS.id + "/" + GADS[k]},
