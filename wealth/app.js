@@ -445,6 +445,37 @@ WL.escapeUrl = () => {
   return WL.ios ? "x-safari-https://" + rest : `intent://${rest}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(u.href)};end`;
 };
 WL.go = href => { location.href = href; };                   // проверка подменяет, чтобы увидеть адрес
+/* «Выписок нет под рукой» (29.10.2026): из рекламы приходят с телефона, а выписки — на компьютере. Человек оставляет почту — сервер
+   сразу шлёт ссылку и через двое суток одно напоминание (api/index.py, lead_new). Кнопка видна, только если сервер умеет слать письма. */
+WL.leadsOn = false;
+Promise.resolve(WL.apiReady).then(base => fetch((base || "https://api.euroaff.eu") + "/client-config")).then(r => r.json())
+  .then(j => { WL.leadsOn = !!(j && j.leads); if(WL.leadsOn && !WL.state.docs.length && !WL.state.demo) WL.render(); }).catch(() => {});
+async function askLater(){
+  const priv = WL.pay.ON_SITE ? ` <a href="${WL.EN ? "/en" : ""}/legal/privacy/" target="_blank" rel="noopener">${t("Как храним адрес", "How we store it")}</a>` : "";
+  let msg = "";
+  for(;;){
+    const {choice, value} = await WL.dialog({title: t("Пришлём ссылку на почту", "We'll email you the link"),
+      body: `${msg ? `<p class="err">${msg}</p>` : ""}<p>${t("Откройте её, когда выписки будут под рукой — на компьютере или телефоне. Пришлём ссылку сейчас и одно напоминание через два дня, больше ничего.",
+        "Open it when your statements are at hand — on a computer or phone. We send the link now and one reminder in two days, nothing else.")}${priv}</p>`,
+      input: {type: "email", placeholder: t("ваша@почта.com", "you@email.com")},
+      buttons: [{id: "send", label: t("Прислать ссылку", "Email me the link"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}]});
+    if(choice !== "send") return;
+    const email = String(value || "").trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)){ msg = t("Проверьте адрес почты.", "Check the email address."); continue; }
+    const a = WL.attributionLast ? WL.attributionLast() : {};
+    let r = null;
+    try{ r = await WL.api("/lead", {email, lang: WL.EN ? "en" : "ru", c: String(a.utm_campaign || "").toLowerCase().slice(0, 40), a: String(a.utm_content || "").slice(0, 20)}, {timeout: 30000}); }catch(e){}
+    if(r && r.ok){
+      if(WL.track) WL.track("Lead", {again: !!r.again});
+      return WL.toast(r.again ? t("Ссылку уже отправляли на этот адрес — проверьте почту и «Спам».", "We've already sent the link to this address — check your inbox and spam.")
+        : t("Готово — ссылка в почте. Если не видно, загляните в «Спам».", "Done — the link is in your inbox. If you can't see it, check spam."));
+    }
+    msg = r && r.error === "email" ? t("Проверьте адрес почты.", "Check the email address.")
+      : r && r.error === "limit" ? t("Слишком много попыток — попробуйте через час.", "Too many attempts — try again in an hour.")
+      : t("Не получилось отправить — попробуйте ещё раз.", "Couldn't send it — please try again.");
+  }
+}
+
 function escapeInApp(){
   if(WL.track) WL.track("In-App Escape", {app: WL.inApp || "", os: WL.ios ? "ios" : "android"});
   WL.go(WL.escapeUrl());
@@ -544,6 +575,7 @@ document.addEventListener("click", async e => {
   if(d.buy) return WL.pay.open(d.buy);
   if(d.restore !== undefined) return WL.pay.restore(el);
   if(d.escape !== undefined) return escapeInApp();
+  if(d.later !== undefined) return askLater();
   if(d.copyLink !== undefined){ let ok = false;
     const u = carryUrl();
     try{ await navigator.clipboard.writeText(u.href); ok = true; }catch(e){}
