@@ -77,7 +77,7 @@ function upload(){
           "Statement in an email? Download the attachment — it appears in Downloads. A paper one — just take a photo.")}</p>`
         : `<p class="hint">${t("или перетащите их сюда · PDF, JPG, PNG, Excel, CSV", "or drag them here · PDF, JPG, PNG, Excel, CSV")}</p>`}
       <a class="demo-link" href="?demo=1${WL.EN ? "&lang=en" : ""}">${t("Посмотреть пример отчёта", "See a sample report")}</a>
-      ${WL.leadsOn ? `<button class="link later" type="button" data-later>${t("Выписок нет под рукой? Пришлём ссылку на почту", "Statements not at hand? We'll email you the link")}</button>` : ""}
+      ${WL.leadsOn ? `<button class="link later" type="button" data-later>${t("Выписок нет под рукой? Отправьте ссылку себе на почту", "Statements not at hand? Email yourself the link")}</button>` : ""}
     </div>
     <ul class="trust-row">${[t("Без логинов и доступа к счетам", "No logins or account access"),
       t("Страницы удаляем сразу после чтения", "Pages are deleted right after reading"), t("Отчёт — только в вашем браузере", "The report stays in your browser")]

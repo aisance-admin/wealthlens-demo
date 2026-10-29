@@ -445,20 +445,34 @@ WL.escapeUrl = () => {
   return WL.ios ? "x-safari-https://" + rest : `intent://${rest}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(u.href)};end`;
 };
 WL.go = href => { location.href = href; };                   // проверка подменяет, чтобы увидеть адрес
-/* «Выписок нет под рукой» (29.10.2026): из рекламы приходят с телефона, а выписки — на компьютере. Человек оставляет почту — сервер
-   сразу шлёт ссылку и через двое суток одно напоминание (api/index.py, lead_new). Кнопка видна, только если сервер умеет слать письма. */
-WL.leadsOn = false;
+/* «Выписок нет под рукой» (29.10.2026, Роман: «с почтой только пока»): из рекламы приходят с телефона, а выписки — на компьютере.
+   Человек оставляет почту: сервер хранит адрес (api/index.py, lead_new), а здесь открывается его почтовое приложение с готовым письмом
+   самому себе — ссылка с меткой кампании. Если сервер сам шлёт письма (lead_mail) — письмо уходит от нас, своё приложение не открываем. */
+WL.leadsOn = false; WL.leadMail = false;
 Promise.resolve(WL.apiReady).then(base => fetch((base || "https://api.euroaff.eu") + "/client-config")).then(r => r.json())
-  .then(j => { WL.leadsOn = !!(j && j.leads); if(WL.leadsOn && !WL.state.docs.length && !WL.state.demo) WL.render(); }).catch(() => {});
+  .then(j => { WL.leadsOn = !!(j && j.leads); WL.leadMail = !!(j && j.lead_mail); if(WL.leadsOn && !WL.state.docs.length && !WL.state.demo) WL.render(); }).catch(() => {});
+function selfMail(email, a){
+  const q = new URLSearchParams({utm_source: "email", utm_medium: "self", utm_campaign: String(a.utm_campaign || "none").slice(0, 40)});
+  if(WL.EN) q.set("lang", "en");
+  const link = "https://wealth.euroaff.eu/app/?" + q.toString();
+  const subj = t("WealthLens — отчёт по всем моим банкам", "WealthLens — one report across all my banks");
+  const body = t(`Когда выписки будут под рукой — PDF, скан или Excel из каждого банка — открыть:\n${link}\n\nПредпросмотр бесплатно, полный отчёт — €49 один раз.`,
+    `When my statements are at hand — PDF, scan or Excel from each bank — open:\n${link}\n\nFree preview; the full report is €49 once.`);
+  return `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body)}`;
+}
 async function askLater(){
-  const priv = WL.pay.ON_SITE ? ` <a href="${WL.EN ? "/en" : ""}/legal/privacy/" target="_blank" rel="noopener">${t("Как храним адрес", "How we store it")}</a>` : "";
+  const priv = WL.pay.ON_SITE ? ` <a href="${WL.EN ? "/en" : ""}/legal/privacy/" target="_blank" rel="noopener">${t("Подробнее", "Details")}</a>` : "";
   let msg = "";
   for(;;){
-    const {choice, value} = await WL.dialog({title: t("Пришлём ссылку на почту", "We'll email you the link"),
-      body: `${msg ? `<p class="err">${msg}</p>` : ""}<p>${t("Откройте её, когда выписки будут под рукой — на компьютере или телефоне. Пришлём ссылку сейчас и одно напоминание через два дня, больше ничего.",
-        "Open it when your statements are at hand — on a computer or phone. We send the link now and one reminder in two days, nothing else.")}${priv}</p>`,
+    const {choice, value} = await WL.dialog({title: t("Отправить ссылку себе на почту", "Email yourself the link"),
+      body: `${msg ? `<p class="err">${msg}</p>` : ""}<p>${WL.leadMail
+        ? t("Пришлём ссылку — откройте её, когда выписки будут под рукой.", "We'll email you the link — open it when your statements are at hand.")
+        : t("Откроется ваша почта с готовым письмом себе — останется нажать «Отправить». Откройте ссылку, когда выписки будут под рукой.",
+            "Your mail app opens with a ready email to yourself — just tap Send. Open the link when your statements are at hand.")}</p>
+        <p class="small">${t("Адрес сохраним, чтобы один раз написать вам об отчёте. Рассылок не будет.", "We keep the address to write to you once about your report. No newsletters.")}${priv}</p>`,
       input: {type: "email", placeholder: t("ваша@почта.com", "you@email.com")},
-      buttons: [{id: "send", label: t("Прислать ссылку", "Email me the link"), primary: true}, {id: "cancel", label: t("Отмена", "Cancel")}]});
+      buttons: [{id: "send", label: WL.leadMail ? t("Прислать ссылку", "Email me the link") : t("Отправить ссылку себе", "Send myself the link"), primary: true},
+        {id: "cancel", label: t("Отмена", "Cancel")}]});
     if(choice !== "send") return;
     const email = String(value || "").trim();
     if(!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)){ msg = t("Проверьте адрес почты.", "Check the email address."); continue; }
@@ -467,12 +481,13 @@ async function askLater(){
     try{ r = await WL.api("/lead", {email, lang: WL.EN ? "en" : "ru", c: String(a.utm_campaign || "").toLowerCase().slice(0, 40), a: String(a.utm_content || "").slice(0, 20)}, {timeout: 30000}); }catch(e){}
     if(r && r.ok){
       if(WL.track) WL.track("Lead", {again: !!r.again});
-      return WL.toast(r.again ? t("Ссылку уже отправляли на этот адрес — проверьте почту и «Спам».", "We've already sent the link to this address — check your inbox and spam.")
-        : t("Готово — ссылка в почте. Если не видно, загляните в «Спам».", "Done — the link is in your inbox. If you can't see it, check spam."));
+      if(r.sent) return WL.toast(t("Готово — ссылка в почте. Если не видно, загляните в «Спам».", "Done — the link is in your inbox. If you can't see it, check spam."));
+      WL.go(selfMail(email, a));
+      return WL.toast(t("Отправьте письмо себе — и ссылка будет в почте.", "Send the email to yourself — and the link is in your inbox."));
     }
     msg = r && r.error === "email" ? t("Проверьте адрес почты.", "Check the email address.")
       : r && r.error === "limit" ? t("Слишком много попыток — попробуйте через час.", "Too many attempts — try again in an hour.")
-      : t("Не получилось отправить — попробуйте ещё раз.", "Couldn't send it — please try again.");
+      : t("Не получилось — попробуйте ещё раз.", "Something went wrong — please try again.");
   }
 }
 
